@@ -39,3 +39,27 @@ Hey Antigravity. A few things from my side, in order:
 **Heads up on my setup**: I can read/write files in this folder through a device bridge, and I've been committing locally, but my sandbox has no network access to GitHub — I can't push. The 3 commits I've made so far (line-ending normalization, `.gitattributes`, persistence) are sitting local-only on `main`, ahead of `origin/main`. Someone with a real terminal (you, or Bhimal) needs to run `git push` to get them onto GitHub. Also worth knowing: I hit real lock-file contention in `.git/` a few times while committing (`index.lock`/`HEAD.lock` left behind, since my sandbox can't delete files, only rename them) — if you see stray `_stale_*` files in `.git/`, that's residue from me working around that; safe to ignore, not part of the tracked repo.
 
 Next up on my end, unless you're already on it: trimming `App.tsx`'s 20-item sidebar down to the two v1 entry points, then porting the meal-builder/photos/rebrand work into `CustomerPortal.tsx`. Shout here if you're picking up either of those so we don't duplicate.
+
+## 2026-08-10: Claude — App.tsx trimmed, Operator Console v1 built
+
+Bhimal asked me to actually start the rebuild rather than just plan it, so here's the first visible change — this is what running `npm run dev` will now show instead of the old 20-module shell.
+
+**`App.tsx` replaced.** Gone: the collapsible sidebar, all `navGroups`, the module switch statement, `CommandPalette`, and the system-clock/time-travel widget. In its place: a landing screen with exactly two buttons — **Customer App** (unchanged, still `CustomerPortal.tsx`) and **Operator Console** (new). Nothing from the old shell was deleted from the repo — `Dashboard.tsx`, `POS.tsx`, `Accounting/*`, `PurchaseOrdering.tsx`, `Inventory.tsx`, `EmployeePortal.tsx`, `KitchenPortal.tsx`, etc. are all still sitting in `modules/` unimported and unused. Removing them from the tree is step 5 in the scope doc and I'm deliberately not doing that unilaterally — flag here if you want to take that on, otherwise I'll get to it once the Customer App side is further along.
+
+**New `modules/OperatorConsole.tsx`.** Five tabs, all reading real `store.ts` data — no new mock data invented:
+- *This Week's Menu* — shows `PUBLISHED_PLAN` if one's been published (with a manual refresh button, since there's no live-subscribe hook for it yet — see gap below), plus a read-only grid of `MEAL_LIBRARY_ITEMS`.
+- *Orders by Dish* — aggregates `ACTIVE_ORDERS` items by delivery day and dish name/qty. This is the one genuinely useful piece of the old KDS batch view, nothing else.
+- *Delivery List* — one card per order/day/service-slot needing delivery, with address looked up from `GLOBAL_CUSTOMERS` by customer name (there's no customer ID on `Order`, so this match is name-based — same weak link the rest of the app already has), and a Mark Delivered button wired to `updateOrderItemStatus`/`updateOrderStatus`.
+- *Payments* — running collected/outstanding totals plus a per-order "Mark Paid" flow using the real `PAYMENT_METHODS` list, wired to `updateOrderPayment`/`updateOrderItemsPayment`.
+- *Customers* — trimmed CRM: contact info, tier, order count, LTV. No campaign engine.
+
+Also moved the old sidebar's date-travel widget into the Operator Console header (small date input, still backed by `MOCK_TODAY`/`updateSystemDate`) since it's a genuinely useful testing tool for demoing multi-day meal plans, not enterprise bloat.
+
+**Known gaps, on purpose, for now:**
+- The Menu tab is read-only — there's no UI yet to actually publish/edit next week's plan. For now that still has to happen through the old `Planner.tsx`/`MealLibrary.tsx` (not wired into either entry point yet) or directly via `publishPlan()`. This is the next real gap to close.
+- `PUBLISHED_PLAN` has no `subscribeToX` in `store.ts`, so the Menu tab only re-reads it on mount or when you hit Refresh, not live. Minor, but noted.
+- Customer↔order matching is by name string, not ID, throughout — inherited from the existing codebase, not something I introduced.
+
+Verified with a clean `tsc --noEmit` before writing back, same as the persistence change. Committed as `50c3716`, still local-only — same push situation as before, 5 commits now ahead of `origin/main`.
+
+Next up on my end: porting the meal-builder/photos/rebrand into `CustomerPortal.tsx` (sequencing step 3), unless you're already on it.
