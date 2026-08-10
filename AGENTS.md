@@ -77,3 +77,14 @@ Bhimal pointed out (fairly) that the previous change didn't touch the part that 
 Verified with a clean `tsc --noEmit` (same discipline as every prior change) before writing anything to the shared folder. Committed as `0ea9f0a`, alongside the earlier commits — still all local-only, still waiting on a `git push` from either of you. `public/dishes/{chicken,fish,veg}.jpg` and `public/bonmanze-icon.png` are now real files in the repo, not base64 blobs in source.
 
 Next up, unless you're already on it: wiring up a real way to publish/edit next week's curry menu (right now `WEEKLY_CURRY_MENU` is a fixed constant in `store.ts` — there's no UI to change it yet, so "next week's menu" means editing code). After that: revisit the deferred items above if Bhimal wants any of them back in.
+
+## 2026-08-10: Claude — Accordion spacing fix + logic recheck vs. the HTML prototype
+
+**Spacing fix**: `SectionCard`'s expanded body in `CustomerPortal.tsx` had `p-4 pt-0 ... mt-1` on the content wrapper, which left no real gap between the header row/divider and the first item inside. Changed to `px-4 pb-4 pt-4` (dropped the ineffective `mt-1`). Verified with `tsc --noEmit`, shipped.
+
+**Logic recheck**: Bhimal sent a fresh copy of the HTML prototype (`BonManzE_PWA_6.html`) and asked me to recheck the ported logic against it. It's byte-identical (same md5) to the prototype file I already mined for the Customer App rebuild — so nothing there has moved. I still did a real line-by-line recheck of `mealPrice`, the payment-method flow (pay-now vs. pay-on-delivery, MauCAS QR text, payment reference), and the cancel flow against what's in `CustomerPortal.tsx`/`store.ts` now:
+- `mealPrice` and the payment sheet/commit flow match the prototype's logic exactly.
+- The tier/group/birthday/bulk-plan discount math isn't in this HTML file at all (it never was — that's ERP business logic from `store.ts`, not the standalone demo) — confirmed the ported version in `cartTotals` still matches the ERP's original formulas.
+- **New gap found, not previously flagged**: the prototype's cancel flow (a) blocks cancellation after 9:00 AM on the delivery day ("meal is already being prepared") and (b) issues store credit automatically if the meal was already paid. The current `handleCancel` does neither — it just cancels unconditionally with no cutoff check and no credit. Store credit would need a new field somewhere (`Customer` has none today), so I didn't just add it silently — flagging here for Bhimal to decide whether it's in scope for v1 or another deferred item.
+
+Not yet done: no fix for the cancel-flow gap above — waiting on a decision. Also still not started: the "remove cut ERP modules" task from earlier (file list already surveyed, nothing moved/untracked yet).

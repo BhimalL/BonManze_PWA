@@ -933,7 +933,7 @@ const SectionCard: React.FC<{
         {isOpen ? <ChevronUp className="size-4 text-slate-400" /> : <ChevronDown className="size-4 text-slate-400" />}
       </div>
     </button>
-    {isOpen && <div className="p-4 pt-0 border-t border-[#F0EADD] mt-1">{children}</div>}
+    {isOpen && <div className="px-4 pb-4 pt-4 border-t border-[#F0EADD]">{children}</div>}
   </div>
 );
 
