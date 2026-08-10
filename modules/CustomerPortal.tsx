@@ -19,6 +19,8 @@ import {
   Smartphone,
   Wallet,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Edit3,
   Trash2,
   Copy,
@@ -139,7 +141,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [copied, setCopied] = useState(false);
 
   const [builder, setBuilder] = useState<{
-    day: WeekDay; step: 1 | 2 | 3; sel: MealSelection; editIndex: number | null;
+    day: WeekDay; openSection: 1 | 2 | 3; sel: MealSelection; editIndex: number | null;
   } | null>(null);
 
   const [payTarget, setPayTarget] = useState<{
@@ -178,7 +180,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const existing = editIndex !== null ? cart[day.date]?.[editIndex] : null;
     setBuilder({
       day,
-      step: 1,
+      openSection: 1,
       editIndex,
       sel: existing ? { ...existing } : emptySelection(presetCurryId || WEEKLY_CURRY_MENU[day.key][0].id)
     });
@@ -189,8 +191,23 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     setBuilder(b => b ? { ...b, sel: { ...b.sel, ...patch } } : b);
   };
 
-  const stepReady = (b: NonNullable<typeof builder>) =>
-    b.step === 1 ? !!b.sel.curryId : b.step === 2 ? !!b.sel.baseId : (b.sel.dhalId !== '' && b.sel.saladId !== '');
+  // Picking a curry or base auto-collapses that section and opens the next
+  // one; every section stays visible (as a collapsed summary row) so the
+  // user can tap back into it, rather than being hidden behind a Next/Back
+  // paged wizard.
+  const selectCurry = (id: string) => setBuilder(b => b ? { ...b, sel: { ...b.sel, curryId: id }, openSection: 2 } : b);
+  const selectBase = (id: string) => setBuilder(b => b ? { ...b, sel: { ...b.sel, baseId: id }, openSection: 3 } : b);
+  const toggleSection = (n: 1 | 2 | 3) => setBuilder(b => b ? { ...b, openSection: n } : b);
+
+  const sectionComplete = (b: NonNullable<typeof builder>) => ({
+    1: !!b.sel.curryId,
+    2: !!b.sel.baseId,
+    3: b.sel.dhalId !== '' && b.sel.saladId !== ''
+  });
+  const builderReady = (b: NonNullable<typeof builder>) => {
+    const c = sectionComplete(b);
+    return c[1] && c[2] && c[3];
+  };
 
   const commitBuilder = () => {
     if (!builder) return;
@@ -719,9 +736,19 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       </nav>
 
       {/* --- MEAL BUILDER --- */}
-      {builder && (
-        <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-end sm:items-center justify-center">
-          <div className="bg-white w-full sm:max-w-lg sm:rounded-[32px] rounded-t-[32px] shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
+      {builder && (() => {
+        const complete = sectionComplete(builder);
+        const selectedCurry = WEEKLY_CURRY_MENU[builder.day.key].find(c => c.id === builder.sel.curryId);
+        const selectedBase = MEAL_BASES.find(b => b.id === builder.sel.baseId);
+        const extrasSummary = [
+          builder.sel.dhalId && builder.sel.dhalId !== 'none' ? MEAL_DHALS.find(x => x.id === builder.sel.dhalId)?.name : null,
+          builder.sel.saladId && builder.sel.saladId !== 'none' ? MEAL_SALADS.find(x => x.id === builder.sel.saladId)?.name : null,
+          builder.sel.beverageId !== 'none' ? MEAL_BEVERAGES.find(x => x.id === builder.sel.beverageId)?.name : null,
+          builder.sel.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === builder.sel.dessertId)?.name : null,
+        ].filter(Boolean).join(' · ');
+
+        return (
+          <div className="fixed inset-0 z-[9999] bg-white flex flex-col">
             <div className="relative h-48 shrink-0">
               <img src={dishPhotoFor(builder.sel.curryId)} className="w-full h-full object-cover" alt="Dish" />
               <button onClick={closeBuilder} className="absolute top-4 right-4 p-2 bg-white/90 rounded-full text-slate-700"><X className="size-4" /></button>
@@ -730,81 +757,82 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               </div>
             </div>
 
-            <div className="flex items-center justify-center gap-2 py-3 border-b border-[#E7E0D0] shrink-0">
-              {[1, 2, 3].map(n => (
-                <button key={n} onClick={() => setBuilder(b => b ? { ...b, step: n as 1 | 2 | 3 } : b)} className={`size-7 rounded-full text-xs font-black flex items-center justify-center ${builder.step === n ? 'bg-primary text-white' : 'bg-slate-100 text-slate-400'}`}>{n}</button>
-              ))}
-            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              <SectionCard
+                index={1} title="Choose your curry"
+                isOpen={builder.openSection === 1} isComplete={complete[1]}
+                summary={selectedCurry ? `${selectedCurry.emoji} ${selectedCurry.name}` : undefined}
+                onToggle={() => toggleSection(1)}
+              >
+                <div className="space-y-2">
+                  {WEEKLY_CURRY_MENU[builder.day.key].map(c => (
+                    <button key={c.id} onClick={() => selectCurry(c.id)} className={`w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition-all ${builder.sel.curryId === c.id ? 'border-primary bg-primary/5' : 'border-transparent bg-[#F4EFE4]'}`}>
+                      <span className="text-2xl">{c.emoji}</span>
+                      <div className="flex-1 text-left"><p className="text-sm font-bold text-slate-900">{c.name}</p><p className="text-[11px] text-slate-500">{c.desc}</p></div>
+                      <span className="text-xs font-black text-primary">Rs {c.price}</span>
+                    </button>
+                  ))}
+                </div>
+              </SectionCard>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {builder.step === 1 && (
-                <div>
-                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">Step 1 of 3 · Choose your curry</p>
-                  <div className="space-y-2">
-                    {WEEKLY_CURRY_MENU[builder.day.key].map(c => (
-                      <button key={c.id} onClick={() => setBuilderSel({ curryId: c.id })} className={`w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition-all ${builder.sel.curryId === c.id ? 'border-primary bg-primary/5' : 'border-transparent bg-[#F4EFE4]'}`}>
-                        <span className="text-2xl">{c.emoji}</span>
-                        <div className="flex-1 text-left"><p className="text-sm font-bold text-slate-900">{c.name}</p><p className="text-[11px] text-slate-500">{c.desc}</p></div>
-                        <span className="text-xs font-black text-primary">Rs {c.price}</span>
-                      </button>
-                    ))}
-                  </div>
+              <SectionCard
+                index={2} title="Choose your base"
+                isOpen={builder.openSection === 2} isComplete={complete[2]}
+                summary={selectedBase ? `${selectedBase.emoji} ${selectedBase.name}` : undefined}
+                onToggle={() => toggleSection(2)}
+              >
+                <div className="grid grid-cols-2 gap-2">
+                  {MEAL_BASES.map(b => (
+                    <button key={b.id} onClick={() => selectBase(b.id)} className={`p-4 rounded-2xl border-2 transition-all ${builder.sel.baseId === b.id ? 'border-primary bg-primary/5' : 'border-transparent bg-[#F4EFE4]'}`}>
+                      <p className="text-2xl mb-1">{b.emoji}</p>
+                      <p className="text-xs font-bold text-slate-900">{b.name}</p>
+                      <p className="text-[10px] text-slate-400 font-bold">{b.up ? `+Rs ${b.up}` : 'included'}</p>
+                    </button>
+                  ))}
                 </div>
-              )}
-              {builder.step === 2 && (
-                <div>
-                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">Step 2 of 3 · Choose your base</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {MEAL_BASES.map(b => (
-                      <button key={b.id} onClick={() => setBuilderSel({ baseId: b.id })} className={`p-4 rounded-2xl border-2 transition-all ${builder.sel.baseId === b.id ? 'border-primary bg-primary/5' : 'border-transparent bg-[#F4EFE4]'}`}>
-                        <p className="text-2xl mb-1">{b.emoji}</p>
-                        <p className="text-xs font-bold text-slate-900">{b.name}</p>
-                        <p className="text-[10px] text-slate-400 font-bold">{b.up ? `+Rs ${b.up}` : 'included'}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {builder.step === 3 && (
-                <div className="space-y-5">
-                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Step 3 of 3 · Make it yours</p>
+              </SectionCard>
+
+              <SectionCard
+                index={3} title="Make it yours"
+                isOpen={builder.openSection === 3} isComplete={complete[3]}
+                summary={complete[3] ? (extrasSummary || 'No extras') : undefined}
+                onToggle={() => toggleSection(3)}
+              >
+                <div className="space-y-3">
                   <ChipRow label="🫘 Dhal" options={MEAL_DHALS} selected={builder.sel.dhalId} onSelect={id => setBuilderSel({ dhalId: id })} noneLabel="No dhal" />
                   <ChipRow label="🥗 Salad" options={MEAL_SALADS} selected={builder.sel.saladId} onSelect={id => setBuilderSel({ saladId: id })} noneLabel="No salad" />
                   <ChipRow label="🥤 Beverage" options={MEAL_BEVERAGES} selected={builder.sel.beverageId} onSelect={id => setBuilderSel({ beverageId: id })} noneLabel="None" showPrice />
                   <ChipRow label="🍮 Dessert" options={MEAL_DESSERTS} selected={builder.sel.dessertId} onSelect={id => setBuilderSel({ dessertId: id })} noneLabel="None" showPrice />
-                  <div>
-                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">🎁 Who's this meal for? (optional)</p>
+                  <div className="rounded-2xl border border-[#E7E0D0] bg-[#FBF8F1] p-4">
+                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">🧑 Who's this meal for? (optional)</p>
                     <input
                       value={builder.sel.note}
                       onChange={e => setBuilderSel({ note: e.target.value })}
                       maxLength={40}
                       placeholder="e.g. Priya"
-                      className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20"
+                      className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-white"
                     />
                   </div>
                 </div>
-              )}
+              </SectionCard>
             </div>
 
-            <div className="p-4 border-t border-[#E7E0D0] flex items-center gap-3 shrink-0">
-              {builder.step > 1 && (
-                <button onClick={() => setBuilder(b => b ? { ...b, step: (b.step - 1) as 1 | 2 } : b)} className="px-5 py-3 rounded-xl bg-slate-100 text-slate-500 text-xs font-black uppercase">Back</button>
-              )}
+            <div className="p-4 border-t border-[#E7E0D0] flex items-center gap-3 shrink-0 bg-white">
               <div className="flex-1 text-right pr-3">
                 <span className="text-[10px] font-bold text-slate-400 uppercase">Total </span>
                 <span className="text-base font-black text-slate-900">Rs {mealPrice(builder.sel, builder.day.key)}</span>
               </div>
               <button
-                disabled={!stepReady(builder)}
-                onClick={() => builder.step < 3 ? setBuilder(b => b ? { ...b, step: (b.step + 1) as 2 | 3 } : b) : commitBuilder()}
+                disabled={!builderReady(builder)}
+                onClick={commitBuilder}
                 className="px-6 py-3 rounded-xl bg-primary text-white text-xs font-black uppercase shadow-lg shadow-primary/20 disabled:opacity-40"
               >
-                {builder.step < 3 ? 'Next →' : (builder.editIndex !== null ? 'Save changes' : 'Add to order')}
+                {builder.editIndex !== null ? 'Save changes' : 'Add to order'}
               </button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* --- PAYMENT SHEET --- */}
       {payTarget && (
@@ -883,6 +911,32 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   );
 };
 
+const SectionCard: React.FC<{
+  index: number;
+  title: string;
+  isOpen: boolean;
+  isComplete: boolean;
+  summary?: string;
+  onToggle: () => void;
+  children: React.ReactNode;
+}> = ({ index, title, isOpen, isComplete, summary, onToggle, children }) => (
+  <div className="rounded-2xl border border-[#E7E0D0] bg-white overflow-hidden">
+    <button onClick={onToggle} className="w-full flex items-center justify-between gap-3 p-4 text-left">
+      <div className="flex items-center gap-3 min-w-0">
+        <span className={`size-7 rounded-full text-xs font-black flex items-center justify-center shrink-0 ${isComplete ? 'bg-primary text-white' : 'bg-slate-100 text-slate-400'}`}>
+          {isComplete && !isOpen ? <Check className="size-3.5" /> : index}
+        </span>
+        <span className="text-sm font-black text-slate-900 truncate">{title}</span>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {!isOpen && summary && <span className="text-xs font-bold text-primary truncate max-w-[150px]">{summary}</span>}
+        {isOpen ? <ChevronUp className="size-4 text-slate-400" /> : <ChevronDown className="size-4 text-slate-400" />}
+      </div>
+    </button>
+    {isOpen && <div className="p-4 pt-0 border-t border-[#F0EADD] mt-1">{children}</div>}
+  </div>
+);
+
 const ChipRow: React.FC<{
   label: string;
   options: { id: string; emoji: string; name: string; price?: number }[];
@@ -891,7 +945,7 @@ const ChipRow: React.FC<{
   noneLabel: string;
   showPrice?: boolean;
 }> = ({ label, options, selected, onSelect, noneLabel, showPrice }) => (
-  <div>
+  <div className="rounded-2xl border border-[#E7E0D0] bg-[#FBF8F1] p-4">
     <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">{label}</p>
     <div className="flex flex-wrap gap-2">
       {options.map(o => (
