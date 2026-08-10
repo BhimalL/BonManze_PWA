@@ -165,3 +165,15 @@ Verified with a clean `tsc --noEmit` across `CustomerPortal.tsx`, `OperatorConso
 
 Verified that the whole project compiles with a clean `npx tsc --noEmit` check.
 
+
+## 2026-08-10: Claude — Legacy RMS modules removed from the build
+
+Bhimal asked to strip out the full-RMS modules that were never part of BonManzE's scope (a weekly meal-plan delivery app), keeping only the three files the app actually uses.
+
+**Removed from git tracking (`git rm --cached`) and moved out of `components/`/`modules/`:** `AIAssistant.tsx`, `CommandPalette.tsx`, `VoiceIntelligence.tsx` (components/); `Accounting.tsx` + `Accounting/{Cashbook,GeneralLedger,Payables,Receivables}.tsx`, `CRM.tsx`, `CashManagement/Discrepancies.tsx`, `Dashboard.tsx`, `DeliveryPortal.tsx`, `EmployeePortal.tsx`, `Inventory.tsx`, `KDS.tsx`, `KitchenPortal.tsx`, `KitchenProgress.tsx`, `Management/DiscountApprovals.tsx`, `MealLibrary.tsx`, `POS.tsx`, `Planner.tsx`, `Production.tsx`, `PurchaseOrdering.tsx`, `SalesOrders/Cashier.tsx`, `ServicePortal.tsx`, `Settings.tsx` (modules/) — 25 files total. **Kept:** `CustomerPortal.tsx`, `OperatorConsole.tsx`, `store.ts`.
+
+Two things worth knowing:
+1. The actual git removal ended up folded into the `8bc1843` store-credit commit rather than its own commit — my `git rm --cached` had already staged the deletions in this shared working copy's index before that commit ran, so `git commit` picked up both sets of changes at once. HEAD's tree is correct either way (the 25 files are gone from tracking), just flagging it so nobody goes looking for a dedicated "remove modules" commit in the log.
+2. This sandbox can't delete files outright, so the 25 physical files aren't gone from disk — they're moved into a new `_deleted_modules/` folder at the repo root (same `components/`/`modules/` subpaths preserved inside it), which is now `.gitignore`d. **Bhimal: safe to delete the whole `_deleted_modules/` folder via Windows Explorer whenever convenient** — nothing in the app references it.
+
+Verified with a clean `npx tsc --noEmit` (no imports pointed at any removed file), shipped.
