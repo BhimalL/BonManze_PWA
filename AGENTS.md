@@ -225,3 +225,25 @@ Bhimal's call: "Operator Console" read like leftover call-center/ERP language fo
 No behavior changed, purely the name. The old `OperatorConsole.tsx` is untracked and moved into `_deleted_modules/modules/` (same reason as the earlier module cleanup — this sandbox can't delete files outright). Safe to remove from `_deleted_modules/` along with the rest whenever convenient.
 
 Verified with a clean `npx tsc --noEmit`, shipped.
+
+## 2026-08-10: Claude — Operations full redesign (menu editing, today-scoping, payments grouping, customer financials)
+
+Bhimal's ask: take Operations as far as Home got — review it end to end and rebuild. Findings and fixes:
+
+**The real bug: nothing was scoped to "today."** Operations has always had a date control at the top explicitly labeled as driving "today" for the rest of the app, but Orders by Dish, Delivery List, and Payments never actually filtered by it — they showed every order ever placed, forever. Harmless with a handful of test orders, but the Delivery List in particular would eventually become an undifferentiated pile of every future week's delivery mixed in with today's. Fixed:
+- **Orders by Dish** and **Delivery List** are now scoped to the current week (`weekDateKeys`, derived from the date control) — these two tabs answer "what do I cook/deliver," not "show me history."
+- **Delivery List** additionally defaults to *today specifically* (a day-chip row — Mon–Fri, tap to peek at another day — `activeDeliveryDay`), since delivery is a same-day concern, not a week-ahead one.
+- **Orders by Dish** shows the whole week (useful for shopping/prep-ahead) but puts today's card first with a "Cook today" badge, since that's the urgent one.
+- **Payments** deliberately stays unscoped — an unpaid meal from three days ago is still owed — but is now grouped by delivery date, oldest-first, which is what actually makes the claimed-payment-reference feature (added a few rounds ago) useful: scanning a date-ordered list against a bank statement. Paid items collapse into a "N paid" history toggle instead of cluttering the main view.
+
+**Menu tab is now actually editable.** The old version had a comment admitting "editing next week's curries here is the next piece of work, not built yet." Built it: tap a pencil on any curry to edit its name, description, or price inline, Save/Cancel. This needed `WEEKLY_CURRY_MENU` in `store.ts` to become a real mutable store value (`const` → `let`, plus `subscribeToWeeklyMenu`/`updateCurryOption`, same pattern as `LOYALTY_TIERS`/`CUSTOMER_GROUPS`) instead of a hardcoded constant — and `CustomerPortal.tsx` now subscribes to it too (`weeklyMenu` state) rather than importing the static value, so a price edit shows up on the Customer App immediately, not after a reload. `mealPrice`/`mealSummaryLabel` moved from module-level pure functions into the component (closing over `weeklyMenu`) specifically so none of their ~10 existing call sites needed to change.
+
+**Customers tab now shows points and store credit**, matching what Profile/Home already surface — previously the only place in the whole app to check a customer's balances was the code itself.
+
+**Dead code removed.** `drops`/`paymentDrops` had a branch building drop cards for non-`'Meal Plan'` orders — leftover from the RMS scaffold, unreachable since the Customer App only ever creates `'Meal Plan'` orders. Removed, along with the now-always-true `isMealPlan` field.
+
+**Also added:** dish photos on Orders-by-Dish rows and Delivery cards, for the same reason Home got them — it was the one screen left with zero food photography.
+
+**Near-miss worth recording:** while checking the Payments tab's handling of refunded items, I discovered my local canonical copy of `store.ts` had drifted from this repo's actual `store.ts` — specifically, it was missing the entire `cancelOrderItem` store-credit refund logic from `8bc1843`, because I'd been editing a copy that predated that commit and never diffed it against the live file before this round. Caught it before shipping by staging and diffing the live file first; no data was lost, but it's the second time this exact failure mode has almost happened (the first was `CustomerPortal.tsx` a few rounds back). Going forward: diff any file against the live device copy before editing it, not just before the ones already burned once.
+
+Verified with a clean `npx tsc --noEmit` on both the local build and the live copy, shipped.

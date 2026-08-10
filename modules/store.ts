@@ -243,7 +243,11 @@ export interface CurryOption {
 export const WEEKDAY_KEYS = ['MON', 'TUE', 'WED', 'THU', 'FRI'] as const;
 export type WeekdayKey = typeof WEEKDAY_KEYS[number];
 
-export const WEEKLY_CURRY_MENU: Record<WeekdayKey, CurryOption[]> = {
+// `let`, not `const` — Operations needs to edit this week's curries (name,
+// description, price), so it follows the same mutable-store pattern as
+// LOYALTY_TIERS/CUSTOMER_GROUPS below: a module-level binding plus a
+// listener set, rather than local component state.
+export let WEEKLY_CURRY_MENU: Record<WeekdayKey, CurryOption[]> = {
   MON: [
     { id: 'veg', emoji: '🥦', name: 'Veg Curry', desc: 'Creole spices · Vegan', price: 130 },
     { id: 'chk', emoji: '🍗', name: 'Chicken Curry', desc: 'Home-style Mauritian', price: 150 },
@@ -269,6 +273,27 @@ export const WEEKLY_CURRY_MENU: Record<WeekdayKey, CurryOption[]> = {
     { id: 'chk', emoji: '🍗', name: 'Chicken Curry', desc: 'Extra herbs · Friday special', price: 150 },
     { id: 'pan', emoji: '🧀', name: 'Paneer Curry', desc: 'Spinach & spice', price: 160 },
   ],
+};
+
+const weeklyMenuListeners = new Set<(menu: Record<WeekdayKey, CurryOption[]>) => void>();
+
+export const subscribeToWeeklyMenu = (listener: (menu: Record<WeekdayKey, CurryOption[]>) => void) => {
+  weeklyMenuListeners.add(listener);
+  listener({ ...WEEKLY_CURRY_MENU });
+  return () => { weeklyMenuListeners.delete(listener); };
+};
+
+// Edits one curry option's name/description/price for a given weekday —
+// scoped to editing what's already on the menu, not adding/removing curry
+// slots (that would touch dishPhotoFor's id-based photo family mapping and
+// the builder's assumptions about fixed option counts, a bigger change than
+// "the price went up this week").
+export const updateCurryOption = (day: WeekdayKey, curryId: string, updates: Partial<Pick<CurryOption, 'name' | 'desc' | 'price' | 'emoji'>>) => {
+  WEEKLY_CURRY_MENU = {
+    ...WEEKLY_CURRY_MENU,
+    [day]: WEEKLY_CURRY_MENU[day].map(c => c.id === curryId ? { ...c, ...updates } : c)
+  };
+  weeklyMenuListeners.forEach(l => l({ ...WEEKLY_CURRY_MENU }));
 };
 
 export interface AddOnOption { id: string; emoji: string; name: string; price?: number; up?: number; }

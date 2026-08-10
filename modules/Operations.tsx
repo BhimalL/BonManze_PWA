@@ -15,12 +15,15 @@ import {
   Mail,
   Star,
   MapPin,
-  Clock
+  Clock,
+  Edit3,
+  Check,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { Order, OrderItem, Customer, PaymentMethod } from '../types';
 import {
   subscribeToOrders,
-  updateOrderStatus,
   updateOrderItemStatus,
   updateOrderPayment,
   updateOrderItemsPayment,
@@ -28,9 +31,13 @@ import {
   subscribeToPaymentMethods,
   subscribeToSystemDate,
   updateSystemDate,
+  subscribeToWeeklyMenu,
+  updateCurryOption,
   MOCK_TODAY,
   WEEKDAY_KEYS,
+  WeekdayKey,
   WEEKLY_CURRY_MENU,
+  CurryOption,
   dishPhotoFor,
   formatCurrency,
   MEAL_PLAN_PAYMENT_METHOD_NAMES
@@ -66,7 +73,6 @@ interface DropTask {
   items: OrderItem[];
   total: number;
   paymentStatus: 'Paid' | 'Pending' | 'Refunded';
-  isMealPlan: boolean;
   // What the customer told the app when they picked a payment method —
   // a claim, not a confirmed payment. Lets Operations match a Juice/MauCAS
   // transfer against a bank/wallet statement before confirming.
@@ -74,7 +80,9 @@ interface DropTask {
   claimedReference?: string;
 }
 
-const getThisWeekDays = (systemDateStr: string) => {
+interface OpsWeekDay { key: WeekdayKey; date: string; label: string; short: string; }
+
+const getThisWeekDays = (systemDateStr: string): OpsWeekDay[] => {
   const [y, m, d] = systemDateStr.split('-').map(Number);
   const base = new Date(y, (m || 1) - 1, d || 1);
   const dow = base.getDay();
@@ -85,7 +93,12 @@ const getThisWeekDays = (systemDateStr: string) => {
     const dt = new Date(monday);
     dt.setDate(monday.getDate() + i);
     const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-    return { key, date: iso, label: dt.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) };
+    return {
+      key,
+      date: iso,
+      label: dt.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }),
+      short: dt.toLocaleDateString('en-US', { weekday: 'short' })
+    };
   });
 };
 
@@ -95,17 +108,32 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [systemDate, setSystemDate] = useState(MOCK_TODAY);
+  const [weeklyMenu, setWeeklyMenu] = useState(WEEKLY_CURRY_MENU);
   const [paymentDrop, setPaymentDrop] = useState<DropTask | null>(null);
+
+  // Which curry is being edited inline on the Menu tab, plus its draft
+  // values — Save calls updateCurryOption, Cancel just clears this.
+  const [editingCurry, setEditingCurry] = useState<{ day: WeekdayKey; curryId: string } | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', desc: '', price: '' });
+
+  // Delivery List defaults to today; this overrides that when Bhimal taps
+  // another day's chip to peek ahead. null = "follow today".
+  const [deliveryDayOverride, setDeliveryDayOverride] = useState<WeekdayKey | null>(null);
+  const [showPaidHistory, setShowPaidHistory] = useState(false);
 
   useEffect(() => {
     const u1 = subscribeToOrders(setOrders);
     const u2 = subscribeToCustomers(setCustomers);
     const u3 = subscribeToPaymentMethods(setPaymentMethods);
     const u4 = subscribeToSystemDate(setSystemDate);
-    return () => { u1(); u2(); u3(); u4(); };
+    const u5 = subscribeToWeeklyMenu(setWeeklyMenu);
+    return () => { u1(); u2(); u3(); u4(); u5(); };
   }, []);
 
   const weekDays = useMemo(() => getThisWeekDays(systemDate), [systemDate]);
+  const weekDateKeys = useMemo(() => new Set(weekDays.map(d => d.date)), [weekDays]);
+  const todayKey = useMemo(() => weekDays.find(d => d.date === systemDate)?.key ?? null, [weekDays, systemDate]);
+  const activeDeliveryDay = deliveryDayOverride ?? todayKey ?? weekDays[0].key;
 
   // Non-cancelled order lines, flattened for aggregation across tabs.
   const lines = useMemo(() => {
@@ -119,90 +147,104 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     return out;
   }, [orders]);
 
-  // --- Orders by Dish ---
+  // --- Orders by Dish — scoped to the current week only. This tab answers
+  // "what do I need to cook," not "show me every order ever placed"; without
+  // this scope it would silently accumulate every past and future week's
+  // orders into one undifferentiated list. Tracks a representative itemId
+  // per dish so the row can show a real photo, not just a name.
   const dishesByDay = useMemo(() => {
-    const days: Record<string, Record<string, { qty: number; revenue: number }>> = {};
+    const days: Record<string, Record<string, { qty: number; revenue: number; itemId: string }>> = {};
     lines.forEach(({ item }) => {
-      const day = item.deliveryDate || 'Unscheduled';
+      const day = item.deliveryDate || '';
+      if (!weekDateKeys.has(day)) return;
       if (!days[day]) days[day] = {};
-      if (!days[day][item.name]) days[day][item.name] = { qty: 0, revenue: 0 };
+      if (!days[day][item.name]) days[day][item.name] = { qty: 0, revenue: 0, itemId: item.itemId };
       days[day][item.name].qty += item.qty;
       days[day][item.name].revenue += item.qty * item.price;
     });
     return days;
-  }, [lines]);
+  }, [lines, weekDateKeys]);
 
-  const sortedDays = useMemo(() => {
-    return Object.keys(dishesByDay).sort((a, b) => {
-      if (a === 'Unscheduled') return 1;
-      if (b === 'Unscheduled') return -1;
-      return a.localeCompare(b);
-    });
-  }, [dishesByDay]);
+  // Today's card leads the list — the most operationally urgent day belongs
+  // first, not buried in Monday-to-Friday order.
+  const orderedWeekDays = useMemo(() => {
+    const idx = weekDays.findIndex(d => d.key === todayKey);
+    if (idx <= 0) return weekDays;
+    return [weekDays[idx], ...weekDays.filter((_, i) => i !== idx)];
+  }, [weekDays, todayKey]);
 
-  // --- Delivery List (one card per order/day/slot "drop") ---
+  // --- Delivery List (one card per order/day/slot "drop"). Every order the
+  // Customer App creates is type 'Meal Plan' — the non-meal-plan branch this
+  // used to have (for Dine-In/Takeout/Delivery orders) was leftover from the
+  // RMS scaffold and could never actually be hit, since nothing in this app
+  // creates that shape of order anymore. Also scoped to the current week —
+  // Delivery is a daily concern, not a backlog of every future week's order.
   const drops = useMemo(() => {
     const map: Record<string, DropTask> = {};
     orders.forEach(o => {
-      if (o.type === 'Meal Plan') {
-        o.items.forEach(item => {
-          if (item.status === 'Cancelled' || item.status === 'Completed') return;
-          const key = `${o.id}-${item.deliveryDate || ''}-${item.serviceSlot || ''}`;
-          if (!map[key]) {
-            map[key] = {
-              key, orderId: o.id, customerName: o.customerName,
-              date: item.deliveryDate, slot: item.serviceSlot,
-              items: [], total: 0, paymentStatus: 'Paid', isMealPlan: true
-            };
-          }
-          map[key].items.push(item);
-          map[key].total += item.qty * item.price;
-          if (item.paymentStatus === 'Pending') map[key].paymentStatus = 'Pending';
-        });
-      } else if (o.status !== 'Completed' && o.status !== 'Cancelled') {
-        map[o.id] = {
-          key: o.id, orderId: o.id, customerName: o.customerName,
-          date: undefined, slot: undefined,
-          items: o.items, total: o.total, paymentStatus: o.paymentStatus, isMealPlan: false
-        };
-      }
+      if (o.type !== 'Meal Plan') return;
+      o.items.forEach(item => {
+        if (item.status === 'Cancelled' || item.status === 'Completed') return;
+        const date = item.deliveryDate || '';
+        if (!weekDateKeys.has(date)) return;
+        const key = `${o.id}-${date}-${item.serviceSlot || ''}`;
+        if (!map[key]) {
+          map[key] = { key, orderId: o.id, customerName: o.customerName, date, slot: item.serviceSlot, items: [], total: 0, paymentStatus: 'Paid' };
+        }
+        map[key].items.push(item);
+        map[key].total += item.qty * item.price;
+        if (item.paymentStatus === 'Pending') map[key].paymentStatus = 'Pending';
+      });
     });
     return Object.values(map).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  }, [orders]);
+  }, [orders, weekDateKeys]);
 
-  // --- Payments: same drop shape, but every open balance regardless of delivery status ---
+  const filteredDrops = useMemo(
+    () => drops.filter(d => d.date === weekDays.find(w => w.key === activeDeliveryDay)?.date),
+    [drops, activeDeliveryDay, weekDays]
+  );
+
+  // --- Payments: every open balance regardless of delivery date — an unpaid
+  // meal from three days ago is still owed, so unlike Orders/Delivery this
+  // intentionally isn't scoped to the current week. Same dead-branch removal
+  // as drops above.
   const paymentDrops = useMemo(() => {
     const map: Record<string, DropTask> = {};
     orders.forEach(o => {
-      if (o.type === 'Meal Plan') {
-        o.items.forEach(item => {
-          if (item.status === 'Cancelled') return;
-          const key = `${o.id}-${item.deliveryDate || ''}-${item.serviceSlot || ''}`;
-          if (!map[key]) {
-            map[key] = {
-              key, orderId: o.id, customerName: o.customerName,
-              date: item.deliveryDate, slot: item.serviceSlot,
-              items: [], total: 0, paymentStatus: 'Paid', isMealPlan: true
-            };
-          }
-          map[key].items.push(item);
-          map[key].total += item.qty * item.price;
-          if (item.paymentStatus === 'Pending') map[key].paymentStatus = 'Pending';
-          if (item.paymentStatus !== 'Paid' && item.paymentMethodName && !map[key].claimedMethod) {
-            map[key].claimedMethod = item.paymentMethodName;
-            map[key].claimedReference = item.paymentReference;
-          }
-        });
-      } else {
-        map[o.id] = {
-          key: o.id, orderId: o.id, customerName: o.customerName,
-          date: undefined, slot: undefined,
-          items: o.items, total: o.total, paymentStatus: o.paymentStatus, isMealPlan: false
-        };
-      }
+      if (o.type !== 'Meal Plan') return;
+      o.items.forEach(item => {
+        if (item.status === 'Cancelled') return;
+        const key = `${o.id}-${item.deliveryDate || ''}-${item.serviceSlot || ''}`;
+        if (!map[key]) {
+          map[key] = { key, orderId: o.id, customerName: o.customerName, date: item.deliveryDate, slot: item.serviceSlot, items: [], total: 0, paymentStatus: 'Paid' };
+        }
+        map[key].items.push(item);
+        map[key].total += item.qty * item.price;
+        if (item.paymentStatus === 'Pending') map[key].paymentStatus = 'Pending';
+        if (item.paymentStatus !== 'Paid' && item.paymentMethodName && !map[key].claimedMethod) {
+          map[key].claimedMethod = item.paymentMethodName;
+          map[key].claimedReference = item.paymentReference;
+        }
+      });
     });
-    return Object.values(map).sort((a, b) => (a.paymentStatus === 'Pending' ? -1 : 1));
+    return Object.values(map);
   }, [orders]);
+
+  // Unpaid grouped by delivery date, oldest (most overdue) first — grouping
+  // by date is what actually makes the claimed-reference feature useful: you
+  // can scan down a date-ordered list and match it against a bank statement
+  // in the same order the statement lists transactions.
+  const unpaidByDate = useMemo(() => {
+    const map: Record<string, DropTask[]> = {};
+    paymentDrops.filter(d => d.paymentStatus === 'Pending').forEach(d => {
+      const key = d.date || 'Unscheduled';
+      if (!map[key]) map[key] = [];
+      map[key].push(d);
+    });
+    return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [paymentDrops]);
+
+  const paidDrops = useMemo(() => paymentDrops.filter(d => d.paymentStatus === 'Paid'), [paymentDrops]);
 
   const paymentSummary = useMemo(() => {
     let collected = 0, outstanding = 0;
@@ -216,20 +258,29 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const getCustomer = (name: string) => customers.find(c => c.name === name);
 
   const handleMarkDelivered = (drop: DropTask) => {
-    if (drop.isMealPlan) {
-      drop.items.forEach(i => updateOrderItemStatus(drop.orderId, i.itemId, drop.date || '', drop.slot || '', 'Completed'));
-    } else {
-      updateOrderStatus(drop.orderId, 'Completed');
-    }
+    drop.items.forEach(i => updateOrderItemStatus(drop.orderId, i.itemId, drop.date || '', drop.slot || '', 'Completed'));
   };
 
   const markPaid = (drop: DropTask, method: PaymentMethod) => {
-    if (drop.isMealPlan) {
-      updateOrderItemsPayment(drop.orderId, drop.date || '', drop.slot, method.type, method.name);
-    } else {
-      updateOrderPayment(drop.orderId, 'Paid', method.type, method.name);
-    }
+    updateOrderItemsPayment(drop.orderId, drop.date || '', drop.slot, method.type, method.name);
     setPaymentDrop(null);
+  };
+
+  const startEditCurry = (day: WeekdayKey, curry: CurryOption) => {
+    setEditingCurry({ day, curryId: curry.id });
+    setEditForm({ name: curry.name, desc: curry.desc, price: String(curry.price) });
+  };
+
+  const saveCurryEdit = () => {
+    if (!editingCurry) return;
+    const existing = weeklyMenu[editingCurry.day].find(c => c.id === editingCurry.curryId);
+    const parsedPrice = parseInt(editForm.price, 10);
+    updateCurryOption(editingCurry.day, editingCurry.curryId, {
+      name: editForm.name.trim() || existing?.name || '',
+      desc: editForm.desc.trim(),
+      price: isNaN(parsedPrice) ? (existing?.price || 0) : parsedPrice
+    });
+    setEditingCurry(null);
   };
 
   return (
@@ -250,7 +301,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             type="date"
             value={systemDate}
             onChange={(e) => updateSystemDate(e.target.value)}
-            title="Test / demo date — advances what counts as 'today' for delivery filtering elsewhere in the app"
+            title="Sets what counts as 'today' across BonManzE — drives the cutoff on the Customer App and which day Orders/Delivery highlight here."
             className="bg-transparent outline-none font-mono"
           />
         </div>
@@ -281,21 +332,58 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <div key={d.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                     <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{d.label}</p>
                     <div className="space-y-2">
-                      {WEEKLY_CURRY_MENU[d.key].map(c => (
-                        <div key={c.id} className="flex items-center gap-2">
-                          <img src={dishPhotoFor(c.id)} alt={c.name} className="size-9 rounded-lg object-cover shrink-0" />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs font-bold text-slate-800 truncate">{c.emoji} {c.name}</p>
+                      {weeklyMenu[d.key].map(c => {
+                        const isEditing = editingCurry?.day === d.key && editingCurry.curryId === c.id;
+                        if (isEditing) {
+                          return (
+                            <div key={c.id} className="p-3 bg-white rounded-xl border-2 border-primary/30 space-y-2">
+                              <input
+                                value={editForm.name}
+                                onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
+                                placeholder="Name"
+                                className="w-full text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
+                              />
+                              <input
+                                value={editForm.desc}
+                                onChange={e => setEditForm(f => ({ ...f, desc: e.target.value }))}
+                                placeholder="Description"
+                                className="w-full text-[11px] px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
+                              />
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold text-slate-400">Rs</span>
+                                <input
+                                  type="number"
+                                  value={editForm.price}
+                                  onChange={e => setEditForm(f => ({ ...f, price: e.target.value }))}
+                                  className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
+                                />
+                                <div className="flex-1" />
+                                <button onClick={saveCurryEdit} className="p-1.5 bg-primary text-white rounded-lg"><Check className="size-3.5" /></button>
+                                <button onClick={() => setEditingCurry(null)} className="p-1.5 bg-slate-100 text-slate-400 rounded-lg"><X className="size-3.5" /></button>
+                              </div>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div key={c.id} className="flex items-center gap-2">
+                            <img src={dishPhotoFor(c.id)} alt={c.name} className="size-9 rounded-lg object-cover shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-bold text-slate-800 truncate">{c.emoji} {c.name}</p>
+                              <p className="text-[10px] text-slate-400 truncate">{c.desc}</p>
+                            </div>
+                            <span className="text-[10px] font-black text-slate-400 shrink-0">{formatCurrency(c.price)}</span>
+                            <button onClick={() => startEditCurry(d.key, c)} className="p-1 text-slate-300 hover:text-primary shrink-0">
+                              <Edit3 className="size-3.5" />
+                            </button>
                           </div>
-                          <span className="text-[10px] font-black text-slate-400 shrink-0">{formatCurrency(c.price)}</span>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
               </div>
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-4">
-                Fixed weekly menu for now — editing next week's curries here is the next piece of work, not built yet.
+                Tap the pencil to edit a curry's name, description, or price — changes apply immediately on the Customer App.
               </p>
             </div>
           </div>
@@ -303,55 +391,79 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
         {tab === 'orders' && (
           <div className="space-y-4">
-            {sortedDays.length === 0 ? (
-              <EmptyState icon={<ClipboardList className="size-10" />} label="No orders yet" />
-            ) : sortedDays.map(day => (
-              <div key={day} className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-                <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{formatDay(day)}</p>
-                <div className="divide-y divide-slate-100">
-                  {Object.entries(dishesByDay[day]).map(([name, agg]) => {
-                    const { qty, revenue } = agg as { qty: number; revenue: number };
-                    return (
-                      <div key={name} className="flex items-center justify-between py-2.5">
-                        <span className="text-sm font-bold text-slate-700">{name}</span>
-                        <div className="flex items-center gap-6">
-                          <span className="text-xs font-black text-slate-900">{qty}x</span>
-                          <span className="text-xs font-bold text-slate-400 w-24 text-right">{formatCurrency(revenue)}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
+            {orderedWeekDays.map(d => {
+              const dishes = dishesByDay[d.date];
+              const isToday = d.key === todayKey;
+              return (
+                <div key={d.key} className={`bg-white rounded-3xl shadow-sm p-6 ${isToday ? 'border-2 border-primary/40' : 'border border-slate-200'}`}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <p className="text-[10px] font-black uppercase text-primary tracking-widest">{d.label}</p>
+                    {isToday && <span className="px-2 py-0.5 rounded bg-primary text-white text-[9px] font-black uppercase tracking-widest">Cook today</span>}
+                  </div>
+                  {!dishes || Object.keys(dishes).length === 0 ? (
+                    <p className="text-xs text-slate-400 font-bold">No orders yet for this day.</p>
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {Object.entries(dishes).map(([name, agg]) => {
+                        const { qty, revenue, itemId } = agg as { qty: number; revenue: number; itemId: string };
+                        return (
+                          <div key={name} className="flex items-center gap-3 py-2.5">
+                            <img src={dishPhotoFor(itemId)} alt={name} className="size-9 rounded-lg object-cover shrink-0" />
+                            <span className="text-sm font-bold text-slate-700 flex-1 min-w-0 truncate">{name}</span>
+                            <span className="text-xs font-black text-slate-900 shrink-0">{qty}x</span>
+                            <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
         {tab === 'delivery' && (
           <div className="space-y-4">
-            {drops.length === 0 ? (
-              <EmptyState icon={<Truck className="size-10" />} label="No pending deliveries" />
-            ) : drops.map(drop => {
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {weekDays.map(d => (
+                <button
+                  key={d.key}
+                  onClick={() => setDeliveryDayOverride(d.key)}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+                    activeDeliveryDay === d.key ? 'bg-primary text-white shadow-lg shadow-primary/20' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {d.short}{d.key === todayKey ? ' · Today' : ''}
+                </button>
+              ))}
+            </div>
+            {filteredDrops.length === 0 ? (
+              <EmptyState icon={<Truck className="size-10" />} label={`No deliveries ${activeDeliveryDay === todayKey ? 'today' : 'that day'}`} />
+            ) : filteredDrops.map(drop => {
               const customer = getCustomer(drop.customerName);
               const address = customer?.addresses?.[0];
               return (
                 <div key={drop.key} className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
-                      {drop.slot && <span className="px-2 py-0.5 rounded bg-primary/10 text-primary text-[10px] font-black uppercase tracking-widest">{drop.slot}</span>}
-                      {drop.date && <span className="text-[10px] font-bold text-slate-400">{formatDay(drop.date)}</span>}
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter ${drop.paymentStatus === 'Pending' ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'}`}>
-                        {drop.paymentStatus === 'Pending' ? 'Unpaid' : 'Paid'}
-                      </span>
+                  <div className="flex items-start gap-3 min-w-0">
+                    <img src={dishPhotoFor(drop.items[0]?.itemId || '')} className="size-11 rounded-xl object-cover shrink-0 hidden sm:block" alt="" />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
+                        {drop.slot && <span className="px-2 py-0.5 rounded bg-primary/10 text-primary text-[10px] font-black uppercase tracking-widest">{drop.slot}</span>}
+                        {drop.date && <span className="text-[10px] font-bold text-slate-400">{formatDay(drop.date)}</span>}
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter ${drop.paymentStatus === 'Pending' ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'}`}>
+                          {drop.paymentStatus === 'Pending' ? 'Unpaid' : 'Paid'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 font-medium mb-1">{drop.items.map(i => `${i.qty}x ${i.name}`).join(', ')}</p>
+                      {address && (
+                        <p className="flex items-center gap-1.5 text-[11px] text-slate-400 font-bold">
+                          <MapPin className="size-3" /> {address.street}, {address.city}
+                        </p>
+                      )}
+                      <p className="text-sm font-black text-primary mt-1">{formatCurrency(drop.total)}</p>
                     </div>
-                    <p className="text-xs text-slate-500 font-medium mb-1">{drop.items.map(i => `${i.qty}x ${i.name}`).join(', ')}</p>
-                    {address && (
-                      <p className="flex items-center gap-1.5 text-[11px] text-slate-400 font-bold">
-                        <MapPin className="size-3" /> {address.street}, {address.city}
-                      </p>
-                    )}
-                    <p className="text-sm font-black text-primary mt-1">{formatCurrency(drop.total)}</p>
                   </div>
                   <button
                     onClick={() => handleMarkDelivered(drop)}
@@ -378,37 +490,67 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
             </div>
 
-            <div className="space-y-3">
-              {paymentDrops.length === 0 ? (
-                <EmptyState icon={<Wallet className="size-10" />} label="No orders yet" />
-              ) : paymentDrops.map(drop => (
-                <div key={drop.key} className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
-                      {drop.date && <span className="text-[10px] font-bold text-slate-400">{formatDay(drop.date)}{drop.slot ? ` · ${drop.slot}` : ''}</span>}
+            {unpaidByDate.length === 0 ? (
+              <EmptyState icon={<Wallet className="size-10" />} label="Nothing outstanding" />
+            ) : (
+              <div className="space-y-5">
+                {unpaidByDate.map(([date, dateDrops]) => (
+                  <div key={date}>
+                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">{formatDay(date)}</p>
+                    <div className="space-y-3">
+                      {dateDrops.map(drop => (
+                        <div key={drop.key} className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
+                              {drop.slot && <span className="text-[10px] font-bold text-slate-400">{drop.slot}</span>}
+                            </div>
+                            <p className="text-xs text-slate-500 font-medium">{drop.items.map(i => `${i.qty}x ${i.name}`).join(', ')}</p>
+                            <p className="text-sm font-black text-primary mt-1">{formatCurrency(drop.total)}</p>
+                            {drop.claimedMethod && (
+                              <p className="text-[11px] text-warning font-bold mt-1">
+                                Customer says: {drop.claimedMethod}{drop.claimedReference ? ` · ${drop.claimedReference}` : ''}
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => setPaymentDrop(drop)}
+                            className="shrink-0 px-6 py-3 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-warning/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2"
+                          >
+                            <Banknote className="size-4" /> Mark Paid
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                    <p className="text-xs text-slate-500 font-medium">{drop.items.map(i => `${i.qty}x ${i.name}`).join(', ')}</p>
-                    <p className="text-sm font-black text-primary mt-1">{formatCurrency(drop.total)}</p>
-                    {drop.paymentStatus === 'Pending' && drop.claimedMethod && (
-                      <p className="text-[11px] text-warning font-bold mt-1">
-                        Customer says: {drop.claimedMethod}{drop.claimedReference ? ` · ${drop.claimedReference}` : ''}
-                      </p>
-                    )}
                   </div>
-                  {drop.paymentStatus === 'Pending' ? (
-                    <button
-                      onClick={() => setPaymentDrop(drop)}
-                      className="shrink-0 px-6 py-3 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-warning/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2"
-                    >
-                      <Banknote className="size-4" /> Mark Paid
-                    </button>
-                  ) : (
+                ))}
+              </div>
+            )}
+
+            <button
+              onClick={() => setShowPaidHistory(s => !s)}
+              className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-500"
+            >
+              <span>{paidDrops.length} paid</span>
+              {showPaidHistory ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+            </button>
+            {showPaidHistory && (
+              <div className="space-y-3">
+                {paidDrops.map(drop => (
+                  <div key={drop.key} className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
+                        {drop.date && <span className="text-[10px] font-bold text-slate-400">{formatDay(drop.date)}{drop.slot ? ` · ${drop.slot}` : ''}</span>}
+                      </div>
+                      <p className="text-xs text-slate-500 font-medium">{drop.items.map(i => `${i.qty}x ${i.name}`).join(', ')}</p>
+                      <p className="text-sm font-black text-primary mt-1">{formatCurrency(drop.total)}</p>
+                    </div>
                     <span className="shrink-0 px-4 py-2 bg-success/10 text-success rounded-xl text-[10px] font-black uppercase tracking-widest">Paid</span>
-                  )}
-                </div>
-              ))}
-            </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -435,7 +577,17 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     <p className="flex items-center gap-2"><Phone className="size-3.5 text-slate-300" /> {c.phone}</p>
                     <p className="flex items-center gap-2"><Mail className="size-3.5 text-slate-300" /> {c.email}</p>
                   </div>
-                  <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between text-[10px] font-black uppercase tracking-widest">
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-center">
+                    <div className="bg-slate-50 rounded-xl p-2">
+                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Points</p>
+                      <p className="text-sm font-black text-slate-900">{c.points}</p>
+                    </div>
+                    <div className="bg-slate-50 rounded-xl p-2">
+                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Credit</p>
+                      <p className="text-sm font-black text-success">{formatCurrency(c.storeCredit || 0)}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-[10px] font-black uppercase tracking-widest">
                     <span className="text-slate-400">{orderCount} order{orderCount === 1 ? '' : 's'}</span>
                     <span className="text-slate-900">{formatCurrency(c.ltv)}</span>
                   </div>

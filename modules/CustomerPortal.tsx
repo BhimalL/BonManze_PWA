@@ -47,6 +47,7 @@ import {
   subscribeToPaymentMethods,
   subscribeToOrders,
   subscribeToSystemDate,
+  subscribeToWeeklyMenu,
   MOCK_TODAY,
   addOrder,
   cancelOrderItem,
@@ -106,20 +107,6 @@ const getThisWeekDays = (systemDateStr: string): WeekDay[] => {
     });
   });
   return out;
-};
-
-const mealPrice = (m: MealSelection, weekdayKey: WeekdayKey): number => {
-  const c = WEEKLY_CURRY_MENU[weekdayKey].find(x => x.id === m.curryId);
-  const b = MEAL_BASES.find(x => x.id === m.baseId);
-  const v = m.beverageId !== 'none' ? MEAL_BEVERAGES.find(x => x.id === m.beverageId) : null;
-  const d = m.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === m.dessertId) : null;
-  return (c?.price || 0) + (b?.up || 0) + (v?.price || 0) + (d?.price || 0);
-};
-
-const mealSummaryLabel = (m: MealSelection, weekdayKey: WeekdayKey): string => {
-  const c = WEEKLY_CURRY_MENU[weekdayKey].find(x => x.id === m.curryId);
-  const b = MEAL_BASES.find(x => x.id === m.baseId);
-  return `${c?.emoji || ''} ${c?.name || ''}${b ? ` · ${b.name}` : ''}`;
 };
 
 const mealNotesLine = (m: MealSelection): string => {
@@ -248,6 +235,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [ratings, setRatings] = useState<Record<string, { stars: number; comment: string }>>({});
   const [rateTarget, setRateTarget] = useState<{ orderId: string; itemId: string; label: string } | null>(null);
   const [rateStars, setRateStars] = useState(0);
+  // Operations can now edit this week's curries (name/desc/price) — subscribed
+  // rather than the static import, so an edit shows up here without a reload.
+  const [weeklyMenu, setWeeklyMenu] = useState(WEEKLY_CURRY_MENU);
 
   useEffect(() => {
     const u1 = subscribeToLoyaltyTiers(setLoyaltyTiers);
@@ -256,8 +246,26 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const u4 = subscribeToPaymentMethods(setPaymentMethods);
     const u5 = subscribeToOrders(setOrders);
     const u6 = subscribeToSystemDate(setSystemDate);
-    return () => { u1(); u2(); u3(); u4(); u5(); u6(); };
+    const u7 = subscribeToWeeklyMenu(setWeeklyMenu);
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); };
   }, []);
+
+  // Local, menu-aware versions of the two helpers that need to look up a
+  // curry by id — moved inside the component (rather than a `menu` param on
+  // every call site) so they can close over `weeklyMenu` and every existing
+  // call site (mealPrice(sel, day.key), etc.) stays unchanged.
+  const mealPrice = (m: MealSelection, weekdayKey: WeekdayKey): number => {
+    const c = weeklyMenu[weekdayKey].find(x => x.id === m.curryId);
+    const b = MEAL_BASES.find(x => x.id === m.baseId);
+    const v = m.beverageId !== 'none' ? MEAL_BEVERAGES.find(x => x.id === m.beverageId) : null;
+    const d = m.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === m.dessertId) : null;
+    return (c?.price || 0) + (b?.up || 0) + (v?.price || 0) + (d?.price || 0);
+  };
+  const mealSummaryLabel = (m: MealSelection, weekdayKey: WeekdayKey): string => {
+    const c = weeklyMenu[weekdayKey].find(x => x.id === m.curryId);
+    const b = MEAL_BASES.find(x => x.id === m.baseId);
+    return `${c?.emoji || ''} ${c?.name || ''}${b ? ` · ${b.name}` : ''}`;
+  };
 
   useEffect(() => {
     if (!toastMsg) return;
@@ -292,7 +300,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       openSection: 1,
       editIndex,
       editingConfirmed: null,
-      sel: existing ? { ...existing } : emptySelection(presetCurryId || WEEKLY_CURRY_MENU[day.key][0].id)
+      sel: existing ? { ...existing } : emptySelection(presetCurryId || weeklyMenu[day.key][0].id)
     });
   };
 
@@ -344,7 +352,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const { day, sel, editIndex, editingConfirmed } = builder;
 
     if (editingConfirmed) {
-      const c = WEEKLY_CURRY_MENU[day.key].find(x => x.id === sel.curryId);
+      const c = weeklyMenu[day.key].find(x => x.id === sel.curryId);
       editOrderItem(editingConfirmed.orderId, editingConfirmed.date, editingConfirmed.slot, {
         itemId: sel.curryId,
         name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
@@ -425,14 +433,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const total = netTotal + vat;
 
     return { subtotal, discount: totalDiscount, standardDiscount, birthdayDiscount, standardLabel, bulkDiscount, vat, total };
-  }, [cart, currentUser, loyaltyTiers, customerGroups, weekDays]);
+  }, [cart, currentUser, loyaltyTiers, customerGroups, weekDays, weeklyMenu]);
 
   const handleCheckout = () => {
     if (!currentUser || cartCount === 0) return;
     const items: OrderItem[] = [];
     weekDays.forEach(d => {
       (cart[d.date] || []).forEach((m, idx) => {
-        const c = WEEKLY_CURRY_MENU[d.key].find(x => x.id === m.curryId);
+        const c = weeklyMenu[d.key].find(x => x.id === m.curryId);
         items.push({
           itemId: m.curryId,
           name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
@@ -686,8 +694,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // actually looks like food. Picking [0] of each day's curry list rather
   // than flattening every option keeps the strip at 5 cards, not 15.
   const weekMenuPreview = useMemo(
-    () => weekDays.map(d => ({ day: d, primary: WEEKLY_CURRY_MENU[d.key][0], moreCount: WEEKLY_CURRY_MENU[d.key].length - 1 })),
-    [weekDays]
+    () => weekDays.map(d => ({ day: d, primary: weeklyMenu[d.key][0], moreCount: weeklyMenu[d.key].length - 1 })),
+    [weekDays, weeklyMenu]
   );
 
   // Thumbnail for the "My Orders" quick-action tile — the confirmed meal's
@@ -952,7 +960,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     )}
                   </div>
                   <div className="space-y-2 mb-3">
-                    {WEEKLY_CURRY_MENU[d.key].map(c => (
+                    {weeklyMenu[d.key].map(c => (
                       <button
                         key={c.id}
                         onClick={() => openBuilder(d, c.id)}
@@ -1240,7 +1248,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       {/* --- MEAL BUILDER --- */}
       {builder && (() => {
         const complete = sectionComplete(builder);
-        const selectedCurry = WEEKLY_CURRY_MENU[builder.day.key].find(c => c.id === builder.sel.curryId);
+        const selectedCurry = weeklyMenu[builder.day.key].find(c => c.id === builder.sel.curryId);
         const selectedBase = MEAL_BASES.find(b => b.id === builder.sel.baseId);
         const extrasList = [
           builder.sel.dhalId && builder.sel.dhalId !== 'none' ? MEAL_DHALS.find(x => x.id === builder.sel.dhalId)?.name : null,
@@ -1279,7 +1287,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 onToggle={() => toggleSection(1)}
               >
                 <div className="space-y-2">
-                  {WEEKLY_CURRY_MENU[builder.day.key].map(c => (
+                  {weeklyMenu[builder.day.key].map(c => (
                     <button key={c.id} onClick={() => selectCurry(c.id)} className={`w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition-all ${builder.sel.curryId === c.id ? 'border-primary bg-primary/5' : 'border-transparent bg-[#F4EFE4]'}`}>
                       <span className="text-2xl">{c.emoji}</span>
                       <div className="flex-1 text-left"><p className="text-sm font-bold text-slate-900">{c.name}</p><p className="text-[11px] text-slate-500">{c.desc}</p></div>
