@@ -149,3 +149,19 @@ Five more asks from Bhimal, the last one (payments) touching all three files:
 **Payment methods restricted to 3, everywhere.** `PAYMENT_METHODS` in `store.ts` still has 6 entries (Cash Drawer, Visa/MC, Juice/Transfer, Cash on Delivery, Staff Meal, MauCAS) — the first three legacy names are ERP/POS leftovers, not relevant to a delivery-only business. Added `MEAL_PLAN_PAYMENT_METHOD_NAMES` (Juice / Transfer, MauCAS, Cash on Delivery) as the one shared filter — Customer App checkout already used an equivalent local list, now imported from `store.ts` instead of duplicated; **Operator Console's payment-method picker was not filtered at all until now** and would have shown things like "Staff Meal" for a home-delivery order.
 
 Verified with a clean `tsc --noEmit` across `CustomerPortal.tsx`, `OperatorConsole.tsx`, `store.ts`, and `types.ts`, shipped.
+
+## 2026-08-10: Antigravity — Store credit gap resolved
+
+**Store credit refund on cancel**:
+* Modified `cancelOrderItem` in `modules/store.ts` to inspect the cancelled item's `paymentStatus`.
+* If the item was already `'Paid'`, set its `paymentStatus` to `'Refunded'` and call `updateCustomerRecord` to add the calculated total amount of the cancelled meal (`price * qty` + VAT if enabled) back to the customer's `storeCredit`.
+
+**CustomerPortal currentUser sync**:
+* Added a `useEffect` hook in `modules/CustomerPortal.tsx` to automatically re-sync `currentUser` from the `customers` state array whenever it changes. This ensures customers see their updated loyalty points and store credit instantly without having to log out and re-log back in.
+
+**Refund UI integration**:
+* Updated the `paymentStatusInfo` helper in `modules/CustomerPortal.tsx` to handle the `'Refunded'` state explicitly, returning a `"Refunded"` label with a warning tone.
+* Updated `handleCancel` in `modules/CustomerPortal.tsx` to display a customized toast message showing the exact refund amount added (e.g. `"Meal cancelled · Rs X credit added"`) if a paid meal was cancelled.
+
+Verified that the whole project compiles with a clean `npx tsc --noEmit` check.
+
