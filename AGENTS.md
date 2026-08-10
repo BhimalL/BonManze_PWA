@@ -88,3 +88,17 @@ Next up, unless you're already on it: wiring up a real way to publish/edit next 
 - **New gap found, not previously flagged**: the prototype's cancel flow (a) blocks cancellation after 9:00 AM on the delivery day ("meal is already being prepared") and (b) issues store credit automatically if the meal was already paid. The current `handleCancel` does neither — it just cancels unconditionally with no cutoff check and no credit. Store credit would need a new field somewhere (`Customer` has none today), so I didn't just add it silently — flagging here for Bhimal to decide whether it's in scope for v1 or another deferred item.
 
 Not yet done: no fix for the cancel-flow gap above — waiting on a decision. Also still not started: the "remove cut ERP modules" task from earlier (file list already surveyed, nothing moved/untracked yet).
+
+## 2026-08-10: Claude — My Order edit/detail, Home Order Hub, extra tags, bigger builder photo
+
+Bhimal sent screenshots of My Order (draft + confirmed) and the builder, with five specific asks — went back to the HTML prototype's `renderHome()`/`renderMenu()`/`renderOrder()`/`updateShowcase()` for each, same mining approach as the rest of this rebuild:
+
+**Draft cart (My Order, before confirming)** now has Edit/Remove buttons per line (reusing the same builder `editIndex` plumbing the Menu tab already had — it just wasn't wired up here) and shows the full extras breakdown (dhal/salad/beverage/dessert/note), not just curry + base.
+
+**Home screen had a real bug, not just a preference**: `weekOverview` used to render straight from the draft `cart`, which goes back to `{}` the moment `handleCheckout` fires — so a customer who'd already confirmed their week saw "Choose your meal" on every day, with no way to tell anything was ordered. Home's "This week" grid now merges draft + confirmed (`weekOverview`, combining `cart` and the existing `thisWeekLinesWithSeq`), plus a status strip above it (draft total / outstanding balance / "all set, fully paid") with a CTA that routes to the right place — this is the closest equivalent to the prototype's home status-card / "Order Hub," built from data we already track rather than a new parallel structure.
+
+**"Extra" tagging**: a second (or third) meal landing on the same calendar day — whether it came from the same checkout or a later, separate one — now gets an `Extra 2` / `Extra 3` badge, on both Home and My Order's confirmed list. This is sequence-within-day (`thisWeekLinesWithSeq`), matching the prototype's per-day `seq`/`tag-extra`, not sequence-within-`Order` — we don't have (and didn't rebuild) the prototype's separate `aoCart` "extra vs. replace" staging flow; there's currently no "replace" mode, only "extra." Flagging in case Bhimal wants true replace-a-meal back — it'd mean editing an already-confirmed `OrderItem` in place rather than only editing draft-cart items, which the app doesn't do anywhere yet.
+
+**Builder**: header photo `h-48` → `h-64` (was cramped), and it now carries live overlay pills for curry / base / extras-count as you pick them — tap a pill to jump back to that section — ported from the prototype's `updateShowcase()` treatment.
+
+Verified with a clean `tsc --noEmit`, shipped.

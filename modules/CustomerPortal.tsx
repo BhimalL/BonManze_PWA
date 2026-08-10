@@ -122,6 +122,23 @@ const mealNotesLine = (m: MealSelection): string => {
   return parts.join(' · ');
 };
 
+// Same as mealNotesLine but without the base (already shown alongside the
+// curry in mealSummaryLabel) — used where both are displayed together so
+// the base name isn't repeated twice on screen.
+const mealExtrasLabel = (m: MealSelection): string => {
+  const parts: string[] = [];
+  const dh = m.dhalId !== 'none' ? MEAL_DHALS.find(x => x.id === m.dhalId) : null;
+  if (dh) parts.push(dh.name);
+  const sl = m.saladId !== 'none' ? MEAL_SALADS.find(x => x.id === m.saladId) : null;
+  if (sl) parts.push(sl.name);
+  const bv = m.beverageId !== 'none' ? MEAL_BEVERAGES.find(x => x.id === m.beverageId) : null;
+  if (bv) parts.push(bv.name);
+  const ds = m.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === m.dessertId) : null;
+  if (ds) parts.push(ds.name);
+  if (m.note.trim()) parts.push(`for ${m.note.trim()}`);
+  return parts.join(' · ');
+};
+
 const CHECKOUT_METHOD_NAMES = ['Juice / Transfer', 'MauCAS', 'Cash on Delivery'];
 const isPayNowMethod = (name: string) => name.includes('Juice');
 
@@ -341,6 +358,34 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return out.sort((a, b) => (a.item.deliveryDate || '').localeCompare(b.item.deliveryDate || ''));
   }, [myOrders, weekDateKeys]);
 
+  // Additional meals (a second, later checkout for a day that already has a
+  // confirmed meal) land as their own Order behind the scenes, but the
+  // customer should still see them tagged "EXTRA" against the day they land
+  // on, same as the original prototype's per-day extra-meal tag — this is
+  // sequence-within-day, not sequence-within-order.
+  const thisWeekLinesWithSeq = useMemo(() => {
+    const counts: Record<string, number> = {};
+    return thisWeekLines.map(line => {
+      const key = line.item.deliveryDate || '';
+      const seq = counts[key] || 0;
+      counts[key] = seq + 1;
+      return { ...line, seq };
+    });
+  }, [thisWeekLines]);
+
+  // Home's weekly overview merges both draft (not-yet-confirmed) and
+  // confirmed meals per day — previously Home only ever showed the draft
+  // cart, so a fully confirmed week looked empty ("Choose your meal" on
+  // every day) even though the order existed.
+  const weekOverview = useMemo(
+    () => weekDays.map(d => ({
+      day: d,
+      confirmed: thisWeekLinesWithSeq.filter(l => l.item.deliveryDate === d.date),
+      draft: cart[d.date] || []
+    })),
+    [weekDays, thisWeekLinesWithSeq, cart]
+  );
+
   const pastLines: Line[] = useMemo(() => {
     const out: Line[] = [];
     myOrders.forEach(o => o.items.forEach(item => {
@@ -484,31 +529,62 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <p className="text-xs opacity-80 mt-1">{culturePhrase.en}</p>
             </div>
 
+            {(cartCount > 0 || thisWeekLinesWithSeq.length > 0) && (
+              <div className={`rounded-2xl p-4 flex items-center justify-between gap-3 ${outstandingTotal > 0 ? 'bg-warning/10' : thisWeekLinesWithSeq.length > 0 ? 'bg-primary/5' : 'bg-slate-100'}`}>
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-slate-900">
+                    {thisWeekLinesWithSeq.length === 0
+                      ? `${cartCount} meal${cartCount !== 1 ? 's' : ''} selected`
+                      : outstandingTotal > 0
+                        ? `${formatCurrency(outstandingTotal)} outstanding`
+                        : 'All set for this week'}
+                  </p>
+                  <p className="text-[11px] text-slate-500 font-medium truncate">
+                    {thisWeekLinesWithSeq.length === 0
+                      ? `${formatCurrency(cartTotals.total)} · not yet confirmed`
+                      : outstandingTotal > 0
+                        ? `across ${thisWeekLinesWithSeq.filter(l => l.item.paymentStatus === 'Pending').length} meal${thisWeekLinesWithSeq.filter(l => l.item.paymentStatus === 'Pending').length !== 1 ? 's' : ''}`
+                        : `${thisWeekLinesWithSeq.length} meal${thisWeekLinesWithSeq.length !== 1 ? 's' : ''} · fully paid`}
+                  </p>
+                </div>
+                <button onClick={() => setView('order')} className="text-[10px] font-black uppercase tracking-widest text-primary shrink-0">
+                  {thisWeekLinesWithSeq.length === 0 ? 'Review & confirm →' : outstandingTotal > 0 ? 'Pay now →' : 'My Order →'}
+                </button>
+              </div>
+            )}
+
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-base font-black text-slate-900">This week</h2>
                 <button onClick={() => setView('menu')} className="text-[11px] font-black uppercase tracking-widest text-primary">Browse menu →</button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {weekDays.map(d => {
-                  const meals = cart[d.date] || [];
-                  return (
-                    <div key={d.key} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
-                      <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-2">{d.label}</p>
-                      {meals.length === 0 ? (
-                        <button onClick={() => setView('menu')} className="w-full py-2 text-left text-xs font-bold text-slate-400 flex items-center gap-1.5">
-                          <Plus className="size-3.5" /> Choose your meal
-                        </button>
-                      ) : (
-                        <div className="space-y-1">
-                          {meals.map((m, i) => (
-                            <p key={i} className="text-xs font-bold text-slate-700">{mealSummaryLabel(m, d.key)}</p>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                {weekOverview.map(({ day: d, confirmed, draft }) => (
+                  <div key={d.key} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
+                    <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-2">{d.label}</p>
+                    {confirmed.length === 0 && draft.length === 0 ? (
+                      <button onClick={() => setView('menu')} className="w-full py-2 text-left text-xs font-bold text-slate-400 flex items-center gap-1.5">
+                        <Plus className="size-3.5" /> Choose your meal
+                      </button>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {confirmed.map((l, i) => (
+                          <div key={`c-${i}`} className="flex items-center gap-1.5">
+                            <p className="text-xs font-bold text-slate-700 flex-1 truncate">{l.item.name}</p>
+                            {l.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {l.seq + 1}</span>}
+                            <span className={`text-[9px] font-black uppercase shrink-0 ${l.item.paymentStatus === 'Paid' ? 'text-success' : 'text-danger'}`}>{l.item.paymentStatus === 'Paid' ? 'Paid' : 'Unpaid'}</span>
+                          </div>
+                        ))}
+                        {draft.map((m, i) => (
+                          <div key={`d-${i}`} className="flex items-center gap-1.5">
+                            <p className="text-xs font-bold text-slate-400 flex-1 truncate">{mealSummaryLabel(m, d.key)}</p>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase shrink-0">Draft</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -554,8 +630,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   {meals.length > 0 && (
                     <div className="space-y-1.5 pt-3 border-t border-[#E7E0D0]">
                       {meals.map((m, i) => (
-                        <div key={i} className="flex items-center justify-between text-xs">
-                          <span className="font-bold text-slate-700">{mealSummaryLabel(m, d.key)}</span>
+                        <div key={i} className="flex items-start justify-between gap-2 text-xs">
+                          <div className="min-w-0">
+                            <span className="font-bold text-slate-700 block">{mealSummaryLabel(m, d.key)}</span>
+                            {mealExtrasLabel(m) && <span className="text-[11px] text-slate-400 block">{mealExtrasLabel(m)}</span>}
+                          </div>
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="font-black text-primary">Rs {mealPrice(m, d.key)}</span>
                             <button onClick={() => openBuilder(d, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
@@ -578,11 +657,18 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
             {cartCount > 0 && (
               <div className="bg-white rounded-3xl border border-[#E7E0D0] p-5">
                 <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">Draft — not yet confirmed</p>
-                <div className="space-y-2 mb-4">
+                <div className="space-y-3 mb-4">
                   {weekDays.map(d => (cart[d.date] || []).map((m, i) => (
-                    <div key={`${d.key}-${i}`} className="flex justify-between text-xs">
-                      <span className="font-bold text-slate-700">{d.short} · {mealSummaryLabel(m, d.key)}</span>
-                      <span className="font-black text-slate-900">Rs {mealPrice(m, d.key)}</span>
+                    <div key={`${d.key}-${i}`} className="flex items-start justify-between gap-2 pb-3 border-b border-[#F0EADD] last:border-0 last:pb-0">
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-700">{d.short} · {mealSummaryLabel(m, d.key)}</p>
+                        {mealExtrasLabel(m) && <p className="text-[11px] text-slate-400 mt-0.5">{mealExtrasLabel(m)}</p>}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="font-black text-slate-900 text-xs">Rs {mealPrice(m, d.key)}</span>
+                        <button onClick={() => openBuilder(d, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
+                        <button onClick={() => removeCartMeal(d.date, i)} className="p-1.5 text-slate-400 hover:text-danger"><Trash2 className="size-3.5" /></button>
+                      </div>
                     </div>
                   )))}
                 </div>
@@ -600,7 +686,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               </div>
             )}
 
-            {thisWeekLines.length > 0 && (
+            {thisWeekLinesWithSeq.length > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Confirmed this week</p>
@@ -609,7 +695,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   )}
                 </div>
                 <div className="space-y-3">
-                  {thisWeekLines.map((line, idx) => {
+                  {thisWeekLinesWithSeq.map((line, idx) => {
                     const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
                     const isCompleted = line.item.status === 'Completed';
                     const isPaid = line.item.paymentStatus === 'Paid';
@@ -617,7 +703,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       <div key={idx} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
                         <div className="flex items-start justify-between gap-3 mb-2">
                           <div>
-                            <p className="text-[10px] font-black uppercase text-primary tracking-widest">{line.item.deliveryDay}</p>
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-[10px] font-black uppercase text-primary tracking-widest">{line.item.deliveryDay}</p>
+                              {line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase">Extra {line.seq + 1}</span>}
+                            </div>
                             <p className="text-sm font-bold text-slate-900">{line.item.name}</p>
                             {line.item.notes && <p className="text-[11px] text-slate-400">{line.item.notes}</p>}
                           </div>
@@ -740,20 +829,32 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         const complete = sectionComplete(builder);
         const selectedCurry = WEEKLY_CURRY_MENU[builder.day.key].find(c => c.id === builder.sel.curryId);
         const selectedBase = MEAL_BASES.find(b => b.id === builder.sel.baseId);
-        const extrasSummary = [
+        const extrasList = [
           builder.sel.dhalId && builder.sel.dhalId !== 'none' ? MEAL_DHALS.find(x => x.id === builder.sel.dhalId)?.name : null,
           builder.sel.saladId && builder.sel.saladId !== 'none' ? MEAL_SALADS.find(x => x.id === builder.sel.saladId)?.name : null,
           builder.sel.beverageId !== 'none' ? MEAL_BEVERAGES.find(x => x.id === builder.sel.beverageId)?.name : null,
           builder.sel.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === builder.sel.dessertId)?.name : null,
-        ].filter(Boolean).join(' · ');
+        ].filter(Boolean) as string[];
+        const extrasSummary = extrasList.join(' · ');
 
         return (
           <div className="fixed inset-0 z-[9999] bg-white flex flex-col">
-            <div className="relative h-48 shrink-0">
+            <div className="relative h-64 shrink-0">
               <img src={dishPhotoFor(builder.sel.curryId)} className="w-full h-full object-cover" alt="Dish" />
               <button onClick={closeBuilder} className="absolute top-4 right-4 p-2 bg-white/90 rounded-full text-slate-700"><X className="size-4" /></button>
-              <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/60 to-transparent">
-                <p className="text-white font-black text-sm">{builder.editIndex !== null ? `Edit ${builder.day.label}` : `${builder.day.label} — customise`}</p>
+              <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/70 to-transparent">
+                <p className="text-white font-black text-sm mb-2">{builder.editIndex !== null ? `Edit ${builder.day.label}` : `${builder.day.label} — customise`}</p>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {selectedCurry && (
+                    <button onClick={() => toggleSection(1)} className="px-2.5 py-1 rounded-full bg-white/90 text-slate-900 text-[11px] font-bold">{selectedCurry.emoji} {selectedCurry.name}</button>
+                  )}
+                  <button onClick={() => toggleSection(2)} className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${selectedBase ? 'bg-white/90 text-slate-900' : 'bg-white/30 text-white'}`}>
+                    {selectedBase ? `${selectedBase.emoji} ${selectedBase.name}` : '🌾 Pick a base'}
+                  </button>
+                  {extrasList.length > 0 && (
+                    <button onClick={() => toggleSection(3)} className="px-2.5 py-1 rounded-full bg-white/90 text-slate-900 text-[11px] font-bold">✨ {extrasList.length} extra{extrasList.length > 1 ? 's' : ''}</button>
+                  )}
+                </div>
               </div>
             </div>
 
