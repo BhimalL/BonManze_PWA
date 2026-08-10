@@ -53,7 +53,8 @@ import {
   editOrderItem,
   submitPaymentClaim,
   MEAL_PLAN_PAYMENT_METHOD_NAMES,
-  formatCurrency
+  formatCurrency,
+  calculateTotal
 } from './store';
 
 // Same-day edits/cancels lock at 9:00 AM, same rule the original HTML
@@ -203,6 +204,7 @@ const isPayNowMethod = (name: string) => name.includes('Juice');
 const isUnclaimed = (item: OrderItem) => item.paymentStatus !== 'Paid' && !item.paymentMethodName;
 const isAwaitingConfirmation = (item: OrderItem) => item.paymentStatus !== 'Paid' && !!item.paymentMethodName;
 const paymentStatusInfo = (item: OrderItem): { label: string; tone: 'success' | 'warning' | 'danger' } => {
+  if (item.paymentStatus === 'Refunded') return { label: 'Refunded', tone: 'warning' };
   if (item.paymentStatus === 'Paid') return { label: 'Paid', tone: 'success' };
   if (item.paymentMethodName) return { label: 'Awaiting confirmation', tone: 'warning' };
   return { label: 'Unpaid', tone: 'danger' };
@@ -262,6 +264,19 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const t = setTimeout(() => setToastMsg(null), 3000);
     return () => clearTimeout(t);
   }, [toastMsg]);
+
+  // Keeps the logged-in customer's own record (points, storeCredit, etc.)
+  // in sync with the shared customers store whenever it changes — e.g. a
+  // cancelled paid meal adds store credit via updateCustomerRecord, and
+  // without this, Home/Profile would keep showing the pre-refund balance
+  // until the customer logged out and back in.
+  useEffect(() => {
+    if (!currentUser) return;
+    const updated = customers.find(c => c.id === currentUser.id);
+    if (updated && JSON.stringify(updated) !== JSON.stringify(currentUser)) {
+      setCurrentUser(updated);
+    }
+  }, [customers, currentUser]);
 
   const toast = (msg: string) => setToastMsg(msg);
 
@@ -593,8 +608,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   };
 
   const handleCancel = (line: Line) => {
+    const isPaid = line.item.paymentStatus === 'Paid';
+    const refundAmt = isPaid ? calculateTotal(line.item.price * line.item.qty) : 0;
     cancelOrderItem(line.order.id, line.item.deliveryDate || '', line.item.serviceSlot || 'Lunch', line.item.itemId);
-    toast('Meal cancelled');
+    toast(isPaid ? `Meal cancelled · Rs ${refundAmt.toFixed(0)} credit added` : 'Meal cancelled');
   };
 
   const openRating = (line: Line) => {
@@ -752,45 +769,42 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       <main className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6 pb-24">
         {view === 'home' && (
           <div className="space-y-6">
-            {/* Hero: today's actual delivery if there is one, otherwise the greeting */}
-            <div className="rounded-[28px] overflow-hidden shadow-lg shadow-primary/20">
-              {todaysArrivingLines.length > 0 ? (
-                <div className="relative h-40">
-                  <img src={dishPhotoFor(todaysArrivingLines[0].item.itemId)} className="w-full h-full object-cover" alt={todaysArrivingLines[0].item.name} />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
-                  <div className="absolute inset-0 p-5 flex flex-col justify-end text-white">
-                    <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1">Arriving today · 11:30–12:00</p>
-                    <p className="text-lg font-black leading-tight truncate">{todaysArrivingLines[0].item.name}</p>
-                    {todaysArrivingLines.length > 1 && (
-                      <p className="text-xs font-bold opacity-90 mt-0.5">+{todaysArrivingLines.length - 1} more meal{todaysArrivingLines.length - 1 !== 1 ? 's' : ''} today</p>
+            {/* Welcome hero — the customer's own name/avatar/tier is the first thing on the
+                page, not a generic banner; today's delivery (if any) folds in underneath
+                as a highlight rather than displacing the personal welcome entirely. */}
+            <div className="bg-primary rounded-[28px] p-6 text-white shadow-lg shadow-primary/20 relative overflow-hidden">
+              <button onClick={() => setView('profile')} className="absolute top-5 right-5 text-[10px] font-black uppercase tracking-widest text-white/70 hover:text-white">Profile →</button>
+              <div className="flex items-center gap-4">
+                <img src={currentUser.avatar} className="size-16 rounded-full border-2 border-white/30 shrink-0" alt={currentUser.name} />
+                <div className="min-w-0">
+                  <p className="text-[10px] font-bold uppercase tracking-widest opacity-70">Welcome back</p>
+                  <p className="text-xl font-black leading-tight truncate">{currentUser.firstName}!</p>
+                  <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                    {currentUser.tier && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/15 text-[10px] font-black uppercase shrink-0">
+                        <Star className="size-2.5" /> {currentUser.tier} Member
+                      </span>
+                    )}
+                    {!!currentUser.storeCredit && currentUser.storeCredit > 0 && (
+                      <span className="text-[10px] font-black text-white/90 shrink-0">{formatCurrency(currentUser.storeCredit)} credit</span>
                     )}
                   </div>
                 </div>
-              ) : (
-                <div className="bg-primary p-6 text-white">
-                  <p className="text-xs font-bold uppercase tracking-widest opacity-80 mb-1">Bonzour, {currentUser.firstName}!</p>
-                  <p className="text-lg font-black italic leading-snug">"{culturePhrase.cr}"</p>
-                  <p className="text-xs opacity-80 mt-1">{culturePhrase.en}</p>
+              </div>
+              <p className="text-sm font-black italic leading-snug mt-4">"{culturePhrase.cr}"</p>
+              <p className="text-xs opacity-80 mt-1">{culturePhrase.en}</p>
+              {todaysArrivingLines.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-white/15 flex items-center gap-3">
+                  <img src={dishPhotoFor(todaysArrivingLines[0].item.itemId)} className="size-11 rounded-xl object-cover shrink-0 border-2 border-white/25" alt={todaysArrivingLines[0].item.name} />
+                  <div className="min-w-0">
+                    <p className="text-[9px] font-black uppercase tracking-widest opacity-70">Arriving today · 11:30–12:00</p>
+                    <p className="text-xs font-bold truncate">
+                      {todaysArrivingLines[0].item.name}
+                      {todaysArrivingLines.length > 1 && ` +${todaysArrivingLines.length - 1} more`}
+                    </p>
+                  </div>
                 </div>
               )}
-            </div>
-
-            <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 flex items-center gap-3">
-              <img src={currentUser.avatar} className="size-12 rounded-full border-2 border-primary/20 shrink-0" alt={currentUser.name} />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-black text-slate-900 truncate">{currentUser.name}</p>
-                <div className="flex items-center gap-2 mt-1 flex-wrap">
-                  {currentUser.tier && (
-                    <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-black uppercase flex items-center gap-1 shrink-0">
-                      <Star className="size-2.5" /> {currentUser.tier}
-                    </span>
-                  )}
-                  {!!currentUser.storeCredit && currentUser.storeCredit > 0 && (
-                    <span className="text-[10px] font-bold text-success shrink-0">{formatCurrency(currentUser.storeCredit)} credit</span>
-                  )}
-                </div>
-              </div>
-              <button onClick={() => setView('profile')} className="text-[10px] font-black uppercase text-primary shrink-0">Profile →</button>
             </div>
 
             {/* Loyalty progress — points now build toward something visible, not just a badge */}
@@ -1125,12 +1139,33 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <p className="text-xs text-slate-400 font-medium">{currentUser.email}</p>
             </div>
 
+            {/* Points and store credit are real balances the customer should be able to
+                check here — previously shown nowhere except a small chip on Home. */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 text-center">
+                <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Points</p>
+                <p className="text-xl font-black text-slate-900">{currentUser.points}</p>
+              </div>
+              <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 text-center">
+                <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Store credit</p>
+                <p className="text-xl font-black text-success">{formatCurrency(currentUser.storeCredit || 0)}</p>
+              </div>
+            </div>
+
             {tierObj && (
               <div className="bg-primary rounded-3xl p-6 text-white shadow-lg shadow-primary/20">
                 <div className="flex items-center gap-2 mb-3">
                   <Star className="size-5" />
                   <p className="text-lg font-black">{tierObj.name} Member</p>
                 </div>
+                {loyaltyProgress?.next && (
+                  <div className="mb-4">
+                    <div className="h-2 rounded-full bg-white/15 overflow-hidden mb-1.5">
+                      <div className="h-full bg-white rounded-full transition-all" style={{ width: `${loyaltyProgress.pct}%` }} />
+                    </div>
+                    <p className="text-[11px] opacity-80 font-bold">{loyaltyProgress.remaining} pts to {loyaltyProgress.next.name}</p>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-3 text-xs font-bold">
                   <div className="bg-white/10 rounded-xl p-3"><p className="opacity-70 text-[10px] uppercase mb-1">Standard discount</p><p className="text-lg font-black">{tierObj.standardDiscount}%</p></div>
                   <div className="bg-white/10 rounded-xl p-3"><p className="opacity-70 text-[10px] uppercase mb-1">Birthday discount</p><p className="text-lg font-black">{tierObj.birthdayDiscount}%</p></div>

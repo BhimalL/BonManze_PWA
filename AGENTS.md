@@ -203,3 +203,13 @@ Bhimal's ask: review everything already built across the other tabs and use it t
 Removed the now-unused `weekOverview` memo (only consumer was the day grid this replaces).
 
 Verified with a clean `npx tsc --noEmit`, shipped.
+
+## 2026-08-10: Claude — Personal welcome hero, Profile shows points/credit, and a regression fix
+
+**Regression caught and fixed first.** While making this round's changes I noticed my last commit (`8ee1c0f`, the Home rebuild) had silently reverted three things Antigravity added in `8bc1843`: the `paymentStatusInfo` `'Refunded'` branch, the currentUser-resync `useEffect`, and the refund-amount cancel toast. Cause: I edit `CustomerPortal.tsx` from a local canonical copy in my own sandbox rather than the live file directly, and that copy hadn't been refreshed since before Antigravity's store-credit commit — so shipping it clobbered their changes even though I never touched that code. Re-applied all three (import of `calculateTotal`, the `Refunded` status label, the sync effect, the toast) — this commit includes that fix. Lesson for next time: diff against the live device file before shipping a change that's been sitting in a local copy across a gap, not just against what I remember changing.
+
+**Home's first card is now a personal "Welcome back."** Bhimal's ask: the very first thing on Home should make the customer feel recognized, not generic. Merged the old separate greeting-hero and profile-snapshot-row into one card — avatar, "Welcome back, {name}!", tier badge, store credit chip, the Creole phrase, and (if something's arriving today) a highlight strip with that dish's photo folded in underneath rather than displacing the personal greeting like last round's version did. A small "Profile →" link sits top-right.
+
+**Profile now shows points and store credit.** Neither was shown anywhere in the Profile tab before this — only as a small chip on Home, which just got trimmed down. Added a Points / Store Credit stat pair right under the avatar card, and the same loyalty progress bar (points to next tier) inside the tier card, so Profile is a complete picture of the account, not just discounts and perks.
+
+Verified with a clean `npx tsc --noEmit`, shipped.
