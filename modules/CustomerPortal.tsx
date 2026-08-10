@@ -53,7 +53,8 @@ import {
   editOrderItem,
   submitPaymentClaim,
   MEAL_PLAN_PAYMENT_METHOD_NAMES,
-  formatCurrency
+  formatCurrency,
+  calculateTotal
 } from './store';
 
 // Same-day edits/cancels lock at 9:00 AM, same rule the original HTML
@@ -203,6 +204,7 @@ const isPayNowMethod = (name: string) => name.includes('Juice');
 const isUnclaimed = (item: OrderItem) => item.paymentStatus !== 'Paid' && !item.paymentMethodName;
 const isAwaitingConfirmation = (item: OrderItem) => item.paymentStatus !== 'Paid' && !!item.paymentMethodName;
 const paymentStatusInfo = (item: OrderItem): { label: string; tone: 'success' | 'warning' | 'danger' } => {
+  if (item.paymentStatus === 'Refunded') return { label: 'Refunded', tone: 'warning' };
   if (item.paymentStatus === 'Paid') return { label: 'Paid', tone: 'success' };
   if (item.paymentMethodName) return { label: 'Awaiting confirmation', tone: 'warning' };
   return { label: 'Unpaid', tone: 'danger' };
@@ -258,6 +260,16 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const t = setTimeout(() => setToastMsg(null), 3000);
     return () => clearTimeout(t);
   }, [toastMsg]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const updated = customers.find(c => c.id === currentUser.id);
+    if (updated) {
+      if (JSON.stringify(updated) !== JSON.stringify(currentUser)) {
+        setCurrentUser(updated);
+      }
+    }
+  }, [customers, currentUser]);
 
   const toast = (msg: string) => setToastMsg(msg);
 
@@ -602,8 +614,16 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   };
 
   const handleCancel = (line: Line) => {
+    const isPaid = line.item.paymentStatus === 'Paid';
+    const refundAmt = isPaid ? calculateTotal(line.item.price * line.item.qty) : 0;
+    
     cancelOrderItem(line.order.id, line.item.deliveryDate || '', line.item.serviceSlot || 'Lunch', line.item.itemId);
-    toast('Meal cancelled');
+    
+    if (isPaid) {
+      toast(`Meal cancelled · Rs ${refundAmt.toFixed(0)} credit added`);
+    } else {
+      toast('Meal cancelled');
+    }
   };
 
   const openRating = (line: Line) => {

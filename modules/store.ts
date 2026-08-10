@@ -833,7 +833,24 @@ export const cancelOrderItem = (orderId: string, date: string, slot: string, ite
 
          if (candidateIdx !== -1) {
              const newItems = [...o.items];
-             newItems[candidateIdx] = { ...newItems[candidateIdx], status: 'Cancelled' as const };
+             const itemToCancel = newItems[candidateIdx];
+
+             if (itemToCancel.paymentStatus === 'Paid') {
+                 newItems[candidateIdx] = { 
+                     ...itemToCancel, 
+                     status: 'Cancelled' as const, 
+                     paymentStatus: 'Refunded' as const 
+                 };
+                 const refundAmt = calculateTotal(itemToCancel.price * itemToCancel.qty);
+                 const customer = GLOBAL_CUSTOMERS.find(c => c.name === o.customerName);
+                 if (customer) {
+                     updateCustomerRecord(customer.id, {
+                         storeCredit: (customer.storeCredit || 0) + refundAmt
+                     });
+                 }
+             } else {
+                 newItems[candidateIdx] = { ...itemToCancel, status: 'Cancelled' as const };
+             }
              
              // Recalculate total by summing only non-cancelled items
              const newTotal = newItems.reduce((acc, i) => {
