@@ -53,8 +53,7 @@ import {
   editOrderItem,
   submitPaymentClaim,
   MEAL_PLAN_PAYMENT_METHOD_NAMES,
-  formatCurrency,
-  calculateTotal
+  formatCurrency
 } from './store';
 
 // Same-day edits/cancels lock at 9:00 AM, same rule the original HTML
@@ -204,7 +203,6 @@ const isPayNowMethod = (name: string) => name.includes('Juice');
 const isUnclaimed = (item: OrderItem) => item.paymentStatus !== 'Paid' && !item.paymentMethodName;
 const isAwaitingConfirmation = (item: OrderItem) => item.paymentStatus !== 'Paid' && !!item.paymentMethodName;
 const paymentStatusInfo = (item: OrderItem): { label: string; tone: 'success' | 'warning' | 'danger' } => {
-  if (item.paymentStatus === 'Refunded') return { label: 'Refunded', tone: 'warning' };
   if (item.paymentStatus === 'Paid') return { label: 'Paid', tone: 'success' };
   if (item.paymentMethodName) return { label: 'Awaiting confirmation', tone: 'warning' };
   return { label: 'Unpaid', tone: 'danger' };
@@ -224,6 +222,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [cart, setCart] = useState<Record<string, MealSelection[]>>({});
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Home's "How BonManzE works" card starts collapsed — repeat customers
+  // don't need a permanent 4-line explainer taking up a full card every
+  // time they open the app, but first-timers can still tap it open.
+  const [guideOpen, setGuideOpen] = useState(false);
 
   const [builder, setBuilder] = useState<{
     day: WeekDay; openSection: 1 | 2 | 3; sel: MealSelection; editIndex: number | null;
@@ -260,16 +262,6 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const t = setTimeout(() => setToastMsg(null), 3000);
     return () => clearTimeout(t);
   }, [toastMsg]);
-
-  useEffect(() => {
-    if (!currentUser) return;
-    const updated = customers.find(c => c.id === currentUser.id);
-    if (updated) {
-      if (JSON.stringify(updated) !== JSON.stringify(currentUser)) {
-        setCurrentUser(updated);
-      }
-    }
-  }, [customers, currentUser]);
 
   const toast = (msg: string) => setToastMsg(msg);
 
@@ -507,19 +499,6 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return Array.from(map.values()).sort((a, b) => a.order.timestamp.localeCompare(b.order.timestamp));
   }, [thisWeekLinesWithSeq]);
 
-  // Home's weekly overview merges both draft (not-yet-confirmed) and
-  // confirmed meals per day — previously Home only ever showed the draft
-  // cart, so a fully confirmed week looked empty ("Choose your meal" on
-  // every day) even though the order existed.
-  const weekOverview = useMemo(
-    () => weekDays.map(d => ({
-      day: d,
-      confirmed: thisWeekLinesWithSeq.filter(l => l.item.deliveryDate === d.date),
-      draft: cart[d.date] || []
-    })),
-    [weekDays, thisWeekLinesWithSeq, cart]
-  );
-
   const pastLines: Line[] = useMemo(() => {
     const out: Line[] = [];
     myOrders.forEach(o => o.items.forEach(item => {
@@ -614,16 +593,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   };
 
   const handleCancel = (line: Line) => {
-    const isPaid = line.item.paymentStatus === 'Paid';
-    const refundAmt = isPaid ? calculateTotal(line.item.price * line.item.qty) : 0;
-    
     cancelOrderItem(line.order.id, line.item.deliveryDate || '', line.item.serviceSlot || 'Lunch', line.item.itemId);
-    
-    if (isPaid) {
-      toast(`Meal cancelled · Rs ${refundAmt.toFixed(0)} credit added`);
-    } else {
-      toast('Meal cancelled');
-    }
+    toast('Meal cancelled');
   };
 
   const openRating = (line: Line) => {
@@ -668,6 +639,52 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return { icon: '✅', tone: 'bg-primary/5', title: 'All set for this week', subtitle: `${thisWeekLinesWithSeq.length} meal${thisWeekLinesWithSeq.length !== 1 ? 's' : ''} · fully paid`, ctaLabel: null as string | null, action: null as (() => void) | null };
   }, [cartCount, thisWeekLinesWithSeq, outstandingTotal, awaitingConfirmationLines, needsRating, cartTotals]);
 
+  // Meals still 'Active' (not yet delivered, not cancelled) landing today —
+  // drives Home's hero: if lunch is actually en route today, that's more
+  // useful up top than a generic greeting.
+  const todaysArrivingLines = useMemo(
+    () => thisWeekLinesWithSeq.filter(l => l.item.deliveryDate === systemDate && l.item.status === 'Active'),
+    [thisWeekLinesWithSeq, systemDate]
+  );
+
+  // Points progress toward the next loyalty tier — the tier badge already
+  // existed, but a flat "Silver" label doesn't tell you anything is being
+  // worked toward. Tiers are sorted by threshold since LOYALTY_TIERS isn't
+  // guaranteed to already be in ascending order.
+  const loyaltyProgress = useMemo(() => {
+    if (!currentUser) return null;
+    const sorted = [...loyaltyTiers].sort((a, b) => a.pointsThreshold - b.pointsThreshold);
+    const idx = sorted.findIndex(t => t.name.toLowerCase() === (currentUser.tier || '').toLowerCase());
+    const current = idx >= 0 ? sorted[idx] : sorted[0];
+    if (!current) return null;
+    const next = idx >= 0 ? sorted[idx + 1] : sorted[1];
+    if (!next) return { next: null as typeof current | null, pct: 100, remaining: 0 };
+    const span = Math.max(1, next.pointsThreshold - current.pointsThreshold);
+    const into = Math.max(0, currentUser.points - current.pointsThreshold);
+    return { next, pct: Math.min(100, Math.round((into / span) * 100)), remaining: Math.max(0, next.pointsThreshold - currentUser.points) };
+  }, [currentUser, loyaltyTiers]);
+
+  // One representative dish per weekday for Home's photo strip — real
+  // dish photography instead of a text-only menu, so the app's front page
+  // actually looks like food. Picking [0] of each day's curry list rather
+  // than flattening every option keeps the strip at 5 cards, not 15.
+  const weekMenuPreview = useMemo(
+    () => weekDays.map(d => ({ day: d, primary: WEEKLY_CURRY_MENU[d.key][0], moreCount: WEEKLY_CURRY_MENU[d.key].length - 1 })),
+    [weekDays]
+  );
+
+  // Thumbnail for the "My Orders" quick-action tile — the confirmed meal's
+  // dish if there is one this week, else the first draft's, else none (the
+  // tile falls back to a plain bag icon).
+  const myOrdersThumbId = useMemo(() => {
+    if (thisWeekLinesWithSeq[0]) return thisWeekLinesWithSeq[0].item.itemId;
+    for (const d of weekDays) {
+      const first = (cart[d.date] || [])[0];
+      if (first) return first.curryId;
+    }
+    return null;
+  }, [thisWeekLinesWithSeq, cart, weekDays]);
+
   // --- LOGIN ---
   if (!currentUser) {
     return (
@@ -707,6 +724,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   }
 
   const tierObj = loyaltyTiers.find(t => t.name.toLowerCase() === currentUser.tier?.toLowerCase());
+  const referralCode = currentUser.referenceCode || 'BONMANZE-' + currentUser.id.toUpperCase();
+  const copyReferral = () => navigator.clipboard?.writeText(referralCode).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
 
   return (
     <div className="h-full w-full flex flex-col bg-[#FDFAF4] relative">
@@ -733,10 +752,27 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       <main className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6 pb-24">
         {view === 'home' && (
           <div className="space-y-6">
-            <div className="bg-primary rounded-[28px] p-6 text-white shadow-lg shadow-primary/20">
-              <p className="text-xs font-bold uppercase tracking-widest opacity-80 mb-1">Bonzour, {currentUser.firstName}!</p>
-              <p className="text-lg font-black italic leading-snug">"{culturePhrase.cr}"</p>
-              <p className="text-xs opacity-80 mt-1">{culturePhrase.en}</p>
+            {/* Hero: today's actual delivery if there is one, otherwise the greeting */}
+            <div className="rounded-[28px] overflow-hidden shadow-lg shadow-primary/20">
+              {todaysArrivingLines.length > 0 ? (
+                <div className="relative h-40">
+                  <img src={dishPhotoFor(todaysArrivingLines[0].item.itemId)} className="w-full h-full object-cover" alt={todaysArrivingLines[0].item.name} />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
+                  <div className="absolute inset-0 p-5 flex flex-col justify-end text-white">
+                    <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1">Arriving today · 11:30–12:00</p>
+                    <p className="text-lg font-black leading-tight truncate">{todaysArrivingLines[0].item.name}</p>
+                    {todaysArrivingLines.length > 1 && (
+                      <p className="text-xs font-bold opacity-90 mt-0.5">+{todaysArrivingLines.length - 1} more meal{todaysArrivingLines.length - 1 !== 1 ? 's' : ''} today</p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-primary p-6 text-white">
+                  <p className="text-xs font-bold uppercase tracking-widest opacity-80 mb-1">Bonzour, {currentUser.firstName}!</p>
+                  <p className="text-lg font-black italic leading-snug">"{culturePhrase.cr}"</p>
+                  <p className="text-xs opacity-80 mt-1">{culturePhrase.en}</p>
+                </div>
+              )}
             </div>
 
             <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 flex items-center gap-3">
@@ -749,7 +785,6 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       <Star className="size-2.5" /> {currentUser.tier}
                     </span>
                   )}
-                  {currentUser.points > 0 && <span className="text-[10px] font-bold text-slate-400 shrink-0">{currentUser.points} pts</span>}
                   {!!currentUser.storeCredit && currentUser.storeCredit > 0 && (
                     <span className="text-[10px] font-bold text-success shrink-0">{formatCurrency(currentUser.storeCredit)} credit</span>
                   )}
@@ -758,18 +793,25 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <button onClick={() => setView('profile')} className="text-[10px] font-black uppercase text-primary shrink-0">Profile →</button>
             </div>
 
-            <div className="bg-[#F4EFE4] rounded-2xl p-4">
-              <div className="flex items-center gap-2 mb-2.5">
-                <Clock className="size-3.5 text-slate-500" />
-                <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">How BonManzE works</p>
+            {/* Loyalty progress — points now build toward something visible, not just a badge */}
+            {loyaltyProgress && (
+              <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Loyalty</p>
+                  <span className="text-[11px] font-bold text-slate-400">{currentUser.points} pts</span>
+                </div>
+                {loyaltyProgress.next ? (
+                  <>
+                    <div className="h-2 rounded-full bg-slate-100 overflow-hidden mb-1.5">
+                      <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${loyaltyProgress.pct}%` }} />
+                    </div>
+                    <p className="text-[11px] text-slate-500 font-bold">{loyaltyProgress.remaining} pts to {loyaltyProgress.next.name}</p>
+                  </>
+                ) : (
+                  <p className="text-[11px] text-slate-500 font-bold">✨ You've reached the top tier</p>
+                )}
               </div>
-              <div className="space-y-1.5 text-xs text-slate-600 font-medium">
-                <p>1. Browse this week's curries and build your meal</p>
-                <p>2. Confirm your order by Sunday noon</p>
-                <p>3. Pay by Juice, MauCAS, or cash on delivery</p>
-                <p>4. Lunch arrives Mon–Fri, 11:30–12:00</p>
-              </div>
-            </div>
+            )}
 
             <div className={`rounded-2xl p-4 flex items-start gap-3 ${homeStatus.tone}`}>
               <div className="size-10 rounded-xl bg-white/70 flex items-center justify-center text-lg shrink-0">{homeStatus.icon}</div>
@@ -782,50 +824,100 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               </div>
             </div>
 
+            {/* Real dish photography — a scrollable strip instead of a text-only menu */}
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-base font-black text-slate-900">This week</h2>
-                <button onClick={() => setView('menu')} className="text-[11px] font-black uppercase tracking-widest text-primary">Browse menu →</button>
+                <h2 className="text-base font-black text-slate-900">This week's curries</h2>
+                <button onClick={() => setView('menu')} className="text-[11px] font-black uppercase tracking-widest text-primary">See all →</button>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {weekOverview.map(({ day: d, confirmed, draft }) => (
-                  <div key={d.key} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
-                    <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-2">{d.label}</p>
-                    {confirmed.length === 0 && draft.length === 0 ? (
-                      <button onClick={() => setView('menu')} className="w-full py-2 text-left text-xs font-bold text-slate-400 flex items-center gap-1.5">
-                        <Plus className="size-3.5" /> Choose your meal
-                      </button>
-                    ) : (
-                      <div className="space-y-1.5">
-                        {confirmed.map((l, i) => {
-                          const { person } = splitNotesTag(l.item.notes);
-                          const payInfo = paymentStatusInfo(l.item);
-                          return (
-                            <div key={`c-${i}`}>
-                              <p className="text-xs font-bold text-slate-700 truncate mb-1">{l.item.name}</p>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                {l.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {l.seq + 1}</span>}
-                                <StatusBadge label={payInfo.label} tone={payInfo.tone} />
-                                <StatusBadge label={l.item.status || ''} tone="slate" />
-                                {person && <PersonTag name={person} />}
-                              </div>
-                            </div>
-                          );
-                        })}
-                        {draft.map((m, i) => (
-                          <div key={`d-${i}`}>
-                            <div className="flex items-center gap-1.5">
-                              <p className="text-xs font-bold text-slate-400 flex-1 truncate">{mealSummaryLabel(m, d.key)}</p>
-                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase shrink-0">Draft</span>
-                            </div>
-                            {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
-                          </div>
-                        ))}
+              <div className="flex gap-3 overflow-x-auto custom-scrollbar pb-1 -mx-6 px-6 snap-x">
+                {weekMenuPreview.map(({ day: d, primary, moreCount }) => (
+                  <button key={d.key} onClick={() => openBuilder(d)} className="shrink-0 w-36 rounded-2xl overflow-hidden bg-white border border-[#E7E0D0] text-left snap-start">
+                    <div className="relative h-24">
+                      <img src={dishPhotoFor(primary.id)} className="w-full h-full object-cover" alt={primary.name} />
+                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-white/90 text-[9px] font-black uppercase text-slate-700">{d.short}</span>
+                    </div>
+                    <div className="p-3">
+                      <p className="text-xs font-bold text-slate-900 truncate">{primary.emoji} {primary.name}</p>
+                      <div className="flex items-center justify-between mt-1">
+                        <span className="text-[11px] font-black text-primary">Rs {primary.price}</span>
+                        {moreCount > 0 && <span className="text-[9px] font-bold text-slate-400 shrink-0">+{moreCount} more</span>}
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  </button>
                 ))}
               </div>
+            </div>
+
+            {/* Quick actions — My Orders lives here now (with a dish thumbnail) instead of a separate day-by-day grid */}
+            <div>
+              <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">Quick actions</p>
+              <div className="grid grid-cols-2 gap-3">
+                {outstandingTotal > 0 && (
+                  <button onClick={() => { setView('order'); openPayBalance(); }} className="bg-white rounded-2xl border border-[#E7E0D0] p-4 text-left flex items-center gap-3">
+                    <div className="size-10 rounded-xl bg-danger/10 text-danger flex items-center justify-center shrink-0"><Wallet className="size-5" /></div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-black text-slate-900">Pay now</p>
+                      <p className="text-[10px] text-slate-400 font-bold truncate">{formatCurrency(outstandingTotal)} outstanding</p>
+                    </div>
+                  </button>
+                )}
+                {needsRating && (
+                  <button onClick={() => { setView('order'); openRating(needsRating); }} className="bg-white rounded-2xl border border-[#E7E0D0] p-4 text-left flex items-center gap-3">
+                    <div className="size-10 rounded-xl bg-warning/10 text-warning flex items-center justify-center shrink-0"><Star className="size-5" /></div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-black text-slate-900">Rate last meal</p>
+                      <p className="text-[10px] text-slate-400 font-bold truncate">{needsRating.item.deliveryDay}</p>
+                    </div>
+                  </button>
+                )}
+                <button onClick={() => setView('order')} className="bg-white rounded-2xl border border-[#E7E0D0] p-4 text-left flex items-center gap-3">
+                  {myOrdersThumbId ? (
+                    <img src={dishPhotoFor(myOrdersThumbId)} className="size-10 rounded-xl object-cover shrink-0" alt="" />
+                  ) : (
+                    <div className="size-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0"><ShoppingBag className="size-5" /></div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-slate-900">My Orders</p>
+                    <p className="text-[10px] text-slate-400 font-bold truncate">
+                      {thisWeekLinesWithSeq.length > 0 ? `${thisWeekLinesWithSeq.length} meal${thisWeekLinesWithSeq.length !== 1 ? 's' : ''} this week` : cartCount > 0 ? `${cartCount} in draft` : 'No orders yet'}
+                    </p>
+                  </div>
+                </button>
+                <button onClick={() => setView('menu')} className="bg-white rounded-2xl border border-[#E7E0D0] p-4 text-left flex items-center gap-3">
+                  <div className="size-10 rounded-xl bg-accent/10 text-accent flex items-center justify-center shrink-0"><BookOpen className="size-5" /></div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-slate-900">Browse menu</p>
+                    <p className="text-[10px] text-slate-400 font-bold truncate">This week's curries</p>
+                  </div>
+                </button>
+                <button onClick={copyReferral} className="bg-white rounded-2xl border border-[#E7E0D0] p-4 text-left flex items-center gap-3">
+                  <div className="size-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0"><Gift className="size-5" /></div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-slate-900">Refer a friend</p>
+                    <p className="text-[10px] text-slate-400 font-bold truncate">{copied ? 'Code copied!' : referralCode}</p>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* Guide — collapsed by default; repeat customers don't need this every visit */}
+            <div className="bg-[#F4EFE4] rounded-2xl overflow-hidden">
+              <button onClick={() => setGuideOpen(o => !o)} className="w-full flex items-center justify-between gap-3 p-4 text-left">
+                <div className="flex items-center gap-2">
+                  <Clock className="size-3.5 text-slate-500" />
+                  <p className="text-[11px] font-black text-slate-600">New here? How BonManzE works</p>
+                </div>
+                {guideOpen ? <ChevronUp className="size-4 text-slate-400 shrink-0" /> : <ChevronDown className="size-4 text-slate-400 shrink-0" />}
+              </button>
+              {guideOpen && (
+                <div className="px-4 pb-4 pt-3 border-t border-[#E7E0D0] space-y-1.5 text-xs text-slate-600 font-medium">
+                  <p>1. Browse this week's curries and build your meal</p>
+                  <p>2. Confirm your order by Sunday noon</p>
+                  <p>3. Pay by Juice, MauCAS, or cash on delivery</p>
+                  <p>4. Lunch arrives Mon–Fri, 11:30–12:00</p>
+                </div>
+              )}
             </div>
           </div>
         )}

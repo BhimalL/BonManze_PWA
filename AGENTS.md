@@ -185,3 +185,21 @@ Verified with a clean `npx tsc --noEmit` (no imports pointed at any removed file
 
 Verified with a clean `npx tsc --noEmit` check.
 
+
+## 2026-08-10: Claude — Home page rebuilt around dish photos, loyalty progress, and a quick-action grid
+
+Bhimal's ask: review everything already built across the other tabs and use it to make Home feel like a modern, customer-centric food-app front page instead of a form. Previous Home was a static greeting → profile strip → permanent 4-line "how it works" card → status card → a 7-card day-by-day grid, all text.
+
+**Dynamic hero.** If a meal is `Active` and its `deliveryDate` is today, the hero becomes that dish's real photo (`dishPhotoFor`) with "Arriving today · 11:30–12:00" and a "+N more" count if there's more than one. Otherwise it falls back to the existing Creole-phrase greeting card. Nothing new in the data model — just reading `thisWeekLinesWithSeq` differently (new `todaysArrivingLines` memo).
+
+**Loyalty progress bar.** Replaced the flat "{tier} · {points} pts" text with a fill bar showing points earned toward the next tier's `pointsThreshold` (new `loyaltyProgress` memo — sorts `LOYALTY_TIERS` by threshold since it isn't guaranteed sorted, finds the customer's current tier, computes % into the next one). Top-tier customers see "you've reached the top tier" instead of a bar that would overflow.
+
+**"This week's curries" photo strip.** A horizontal scroll of 5 cards (one per weekday), each with that day's first curry's real photo, name, price, and a "+N more" tag if the day has other options — tapping opens the builder for that day. This is the first place Home has shown any food photography; previously all of it lived in the Menu tab and the builder.
+
+**Quick actions replace the day-by-day grid.** Bhimal's call: instead of a separate 7-card "This week" grid, fold that into one tile ("My Orders") inside a quick-action row. The tile shows a dish thumbnail (confirmed meal if there is one this week, else the first draft, else a plain bag icon) and a one-line count ("3 meals this week" / "2 in draft" / "No orders yet"), and taps through to My Order same as before. Alongside it: Browse menu and Refer a friend (copies the code right from Home, no detour to Profile) always show; Pay now (if `outstandingTotal > 0`) and Rate last meal (if there's an unrated completed meal) only show when there's actually something to do — same conditions the status card already uses, just as a persistent tile instead of only a banner.
+
+**Guide card collapses.** "How BonManzE works" is now a one-line collapsed row that expands on tap (`guideOpen` state, defaults closed) instead of a permanent full-height card — repeat customers don't need the 4-step explainer taking up scroll space every single visit.
+
+Removed the now-unused `weekOverview` memo (only consumer was the day grid this replaces).
+
+Verified with a clean `npx tsc --noEmit`, shipped.
