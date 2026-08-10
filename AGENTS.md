@@ -128,3 +128,24 @@ Editing a confirmed meal needed a real store mutator — added `editOrderItem(or
 **Home rebuilt.** Replaced the patched-together status strip with a single status card that always shows the one most useful next thing — mirrors the prototype's home status-card state machine (nothing ordered → browse; draft in progress → review & confirm; confirmed with a balance → pay now; fully paid but something's ratable → rate meal; otherwise → all set) — plus a week-at-a-glance emoji chip row above it. Dropped the redundant bottom "Review order" button now that the status card's own CTA covers that case, so Home has one clear next action instead of two competing ones. The day-by-day grid underneath (draft/confirmed per day, Extra tags, Draft/Paid/Unpaid badges) is unchanged from last round.
 
 Verified with a clean `tsc --noEmit`, shipped.
+
+## 2026-08-10: Claude — Day-grouped My Order, lock badge moved up, compact status row, Home v2, real 3-state payments
+
+Five more asks from Bhimal, the last one (payments) touching all three files:
+
+**My Order: grouped by day within each order.** Last round grouped by Order but left each order's meals as a flat list — now nested one level further: within an order card, meals are grouped by delivery day (an order can span more than one day if you checked out Monday's and Tuesday's meals together). The 🔒 locked indicator also moved from the bottom of each meal card to right next to the day/date header, since it applies to the whole day, not each meal individually.
+
+**One line for the tag row.** Extra tag, payment status, order status (Active/Completed/etc), and the person tag now render as one wrapping row of same-sized badges (new `StatusBadge` component) instead of two separate rows — same information, less vertical space per meal.
+
+**Home v2 — profile card + guide card, emoji row dropped.** Bhimal didn't like the curry-emoji row from last round, so it's gone. In its place: a profile snapshot (avatar, name, tier badge, loyalty points, store credit if any, a link into the Profile tab) and a short "How BonManzE works" card (browse → confirm by Sunday noon → pay by Juice/MauCAS/cash → delivered Mon–Fri 11:30–12:00). The status card and day-by-day grid from last round are unchanged underneath.
+
+**Payments: a real three-state lifecycle, not a customer-side toggle.** This is the biggest change. Previously, picking any payment method in the app immediately set `paymentStatus: 'Paid'` — even Cash on Delivery, before any cash had actually changed hands. Now:
+- Picking a method in the app only records a *claim* (`submitPaymentClaim` in `store.ts` — sets `paymentMethodName`/`paymentReference`, leaves `paymentStatus` untouched).
+- `paymentStatus` only ever becomes `'Paid'` when Operations confirms it via the Operator Console's existing Mark Paid flow (`updateOrderItemsPayment`/`updateOrderPayment` — unchanged).
+- The UI now shows three states instead of two: **Unpaid** (no method chosen yet) → **Awaiting confirmation** (method claimed, nothing confirmed) → **Paid** (Operations confirmed). New helpers `isUnclaimed`/`isAwaitingConfirmation`/`paymentStatusInfo` in `CustomerPortal.tsx` drive this everywhere it shows: My Order, Home, the order-group header's Pay button (which now only appears while something's still unclaimed).
+- Added a Juice/MauCAS reference flow: the app generates a `BMZ-PAY-XXXXXX` reference per payment attempt, shown with a copy button so the customer can quote it on their transfer; there's also an optional field for the customer to paste back their own bank/wallet transaction reference. Both get stored on the item as `paymentReference` — **new optional field on `OrderItem` in `types.ts`**, additive only, nothing existing reads or writes it differently.
+- Operator Console's Payments tab and "Collect Payment" modal now show what the customer claimed ("Customer says: Juice / Transfer · BMZ-PAY-482913...") so Operations has something to match against a statement, and the claimed method is highlighted in the picker.
+
+**Payment methods restricted to 3, everywhere.** `PAYMENT_METHODS` in `store.ts` still has 6 entries (Cash Drawer, Visa/MC, Juice/Transfer, Cash on Delivery, Staff Meal, MauCAS) — the first three legacy names are ERP/POS leftovers, not relevant to a delivery-only business. Added `MEAL_PLAN_PAYMENT_METHOD_NAMES` (Juice / Transfer, MauCAS, Cash on Delivery) as the one shared filter — Customer App checkout already used an equivalent local list, now imported from `store.ts` instead of duplicated; **Operator Console's payment-method picker was not filtered at all until now** and would have shown things like "Staff Meal" for a home-delivery order.
+
+Verified with a clean `tsc --noEmit` across `CustomerPortal.tsx`, `OperatorConsole.tsx`, `store.ts`, and `types.ts`, shipped.

@@ -62,6 +62,13 @@ export let PAYMENT_METHODS: PaymentMethod[] = [
   { id: '6', name: 'MauCAS', type: 'Digital', isActive: true, icon: '📲', applicableTo: ['Delivery', 'Meal Plan'] },
 ];
 
+// The Meal Plan side of the business (Customer App checkout + Operator
+// Console's payment collection) only ever offers these three — the rest of
+// PAYMENT_METHODS (Cash Drawer, Visa/MC, Staff Meal) are legacy dine-in/POS
+// entries left over from the cut ERP modules. Single source of truth so
+// both surfaces stay in sync instead of each hardcoding its own list.
+export const MEAL_PLAN_PAYMENT_METHOD_NAMES = ['Juice / Transfer', 'MauCAS', 'Cash on Delivery'];
+
 // --- INVENTORY MASTER DATA ---
 export interface InventoryItem {
   sku: string;
@@ -856,6 +863,27 @@ export const editOrderItem = (orderId: string, date: string, slot: string, updat
     newItems[idx] = { ...newItems[idx], ...updates };
     const newTotal = newItems.reduce((acc, i) => i.status === 'Cancelled' ? acc : acc + calculateTotal(i.price * i.qty), 0);
     return { ...o, items: newItems, total: newTotal };
+  });
+  notifyOrderListeners();
+};
+
+// The customer telling the app "I'll pay via Juice, here's my reference"
+// is a claim, not a confirmed payment — paymentStatus stays exactly as it
+// was (still 'Pending') and only paymentMethodName/paymentReference are
+// set, so the UI can show "awaiting confirmation" rather than "Paid" until
+// Operations actually checks the bank/wallet statement and calls
+// updateOrderItemsPayment/updateOrderPayment (which are unchanged, and
+// remain the only things that ever set paymentStatus to 'Paid').
+export const submitPaymentClaim = (orderId: string, date: string, slot: string | undefined, methodName: string, reference: string) => {
+  ACTIVE_ORDERS = ACTIVE_ORDERS.map(o => {
+    if (o.id !== orderId) return o;
+    const newItems = o.items.map(i => {
+      if (i.deliveryDate === date && i.serviceSlot === slot) {
+        return { ...i, paymentMethodName: methodName, paymentReference: reference };
+      }
+      return i;
+    });
+    return { ...o, items: newItems };
   });
   notifyOrderListeners();
 };

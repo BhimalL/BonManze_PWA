@@ -32,7 +32,8 @@ import {
   WEEKDAY_KEYS,
   WEEKLY_CURRY_MENU,
   dishPhotoFor,
-  formatCurrency
+  formatCurrency,
+  MEAL_PLAN_PAYMENT_METHOD_NAMES
 } from './store';
 
 interface OperatorConsoleProps {
@@ -66,6 +67,11 @@ interface DropTask {
   total: number;
   paymentStatus: 'Paid' | 'Pending' | 'Refunded';
   isMealPlan: boolean;
+  // What the customer told the app when they picked a payment method —
+  // a claim, not a confirmed payment. Lets Operations match a Juice/MauCAS
+  // transfer against a bank/wallet statement before confirming.
+  claimedMethod?: string;
+  claimedReference?: string;
 }
 
 const getThisWeekDays = (systemDateStr: string) => {
@@ -182,6 +188,10 @@ const OperatorConsole: React.FC<OperatorConsoleProps> = ({ onExit }) => {
           map[key].items.push(item);
           map[key].total += item.qty * item.price;
           if (item.paymentStatus === 'Pending') map[key].paymentStatus = 'Pending';
+          if (item.paymentStatus !== 'Paid' && item.paymentMethodName && !map[key].claimedMethod) {
+            map[key].claimedMethod = item.paymentMethodName;
+            map[key].claimedReference = item.paymentReference;
+          }
         });
       } else {
         map[o.id] = {
@@ -380,6 +390,11 @@ const OperatorConsole: React.FC<OperatorConsoleProps> = ({ onExit }) => {
                     </div>
                     <p className="text-xs text-slate-500 font-medium">{drop.items.map(i => `${i.qty}x ${i.name}`).join(', ')}</p>
                     <p className="text-sm font-black text-primary mt-1">{formatCurrency(drop.total)}</p>
+                    {drop.paymentStatus === 'Pending' && drop.claimedMethod && (
+                      <p className="text-[11px] text-warning font-bold mt-1">
+                        Customer says: {drop.claimedMethod}{drop.claimedReference ? ` · ${drop.claimedReference}` : ''}
+                      </p>
+                    )}
                   </div>
                   {drop.paymentStatus === 'Pending' ? (
                     <button
@@ -444,13 +459,19 @@ const OperatorConsole: React.FC<OperatorConsoleProps> = ({ onExit }) => {
               <div className="text-center">
                 <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">{paymentDrop.customerName}</p>
                 <p className="text-4xl font-black text-slate-900 tracking-tight">{formatCurrency(paymentDrop.total)}</p>
+                {paymentDrop.claimedMethod && (
+                  <div className="mt-3 inline-block bg-warning/10 text-warning rounded-xl px-4 py-2 text-xs font-bold">
+                    Customer says: {paymentDrop.claimedMethod}
+                    {paymentDrop.claimedReference && <><br /><span className="font-mono">{paymentDrop.claimedReference}</span></>}
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-3">
-                {paymentMethods.filter(m => m.isActive).map(m => (
+                {paymentMethods.filter(m => m.isActive && MEAL_PLAN_PAYMENT_METHOD_NAMES.includes(m.name)).map(m => (
                   <button
                     key={m.id}
                     onClick={() => markPaid(paymentDrop, m)}
-                    className="p-5 rounded-2xl border-2 border-slate-100 bg-white text-slate-500 hover:border-primary hover:text-primary transition-all flex flex-col items-center gap-2"
+                    className={`p-5 rounded-2xl border-2 bg-white transition-all flex flex-col items-center gap-2 ${paymentDrop.claimedMethod === m.name ? 'border-primary text-primary' : 'border-slate-100 text-slate-500 hover:border-primary hover:text-primary'}`}
                   >
                     <span className="text-2xl">{m.icon}</span>
                     <span className="text-[10px] font-black uppercase tracking-widest">{m.name}</span>

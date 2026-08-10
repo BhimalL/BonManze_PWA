@@ -51,7 +51,8 @@ import {
   addOrder,
   cancelOrderItem,
   editOrderItem,
-  updateOrderItemsPayment,
+  submitPaymentClaim,
+  MEAL_PLAN_PAYMENT_METHOD_NAMES,
   formatCurrency
 } from './store';
 
@@ -192,8 +193,20 @@ const reconstructSelection = (item: OrderItem): MealSelection => {
   };
 };
 
-const CHECKOUT_METHOD_NAMES = ['Juice / Transfer', 'MauCAS', 'Cash on Delivery'];
 const isPayNowMethod = (name: string) => name.includes('Juice');
+
+// Three payment states, not two: the customer telling the app how they'll
+// pay (paymentMethodName set) is a claim, not a confirmed receipt — only
+// Operations confirming it (via the Operator Console) sets paymentStatus to
+// 'Paid'. "Unclaimed" is the only state that still needs the customer to
+// act; "awaiting" just needs Operations to check their bank/wallet statement.
+const isUnclaimed = (item: OrderItem) => item.paymentStatus !== 'Paid' && !item.paymentMethodName;
+const isAwaitingConfirmation = (item: OrderItem) => item.paymentStatus !== 'Paid' && !!item.paymentMethodName;
+const paymentStatusInfo = (item: OrderItem): { label: string; tone: 'success' | 'warning' | 'danger' } => {
+  if (item.paymentStatus === 'Paid') return { label: 'Paid', tone: 'success' };
+  if (item.paymentMethodName) return { label: 'Awaiting confirmation', tone: 'warning' };
+  return { label: 'Unpaid', tone: 'danger' };
+};
 
 interface CustomerPortalProps { onLogout?: () => void; }
 
@@ -218,9 +231,13 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   } | null>(null);
 
   const [payTarget, setPayTarget] = useState<{
-    kind: 'item'; orderId: string; date: string; slot: string; amount: number; what: string;
-  } | { kind: 'balance'; items: { orderId: string; date: string; slot: string; amount: number }[]; amount: number; what: string; } | null>(null);
+    kind: 'item'; orderId: string; date: string; slot: string; amount: number; what: string; ref: string;
+  } | { kind: 'balance'; items: { orderId: string; date: string; slot: string; amount: number }[]; amount: number; what: string; ref: string; } | null>(null);
   const [payMethod, setPayMethod] = useState<PaymentMethod | null>(null);
+  // The customer's own transaction reference (from their Juice/MauCAS app),
+  // entered on top of the reference we generate — both get stored so
+  // Operations has whatever's most useful for matching against a statement.
+  const [customerRef, setCustomerRef] = useState('');
 
   const [ratings, setRatings] = useState<Record<string, { stars: number; comment: string }>>({});
   const [rateTarget, setRateTarget] = useState<{ orderId: string; itemId: string; label: string } | null>(null);
@@ -500,37 +517,54 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return out.sort((a, b) => (b.item.deliveryDate || '').localeCompare(a.item.deliveryDate || ''));
   }, [myOrders, weekDateKeys, systemDate]);
 
+  // "Outstanding" now means "still needs the customer to pick a payment
+  // method" — once they've claimed one, it moves to awaitingConfirmation
+  // below (still unpaid, but nothing left for the customer to do).
   const outstandingTotal = useMemo(
-    () => thisWeekLines.filter(l => l.item.paymentStatus === 'Pending').reduce((t, l) => t + l.item.qty * l.item.price, 0),
+    () => thisWeekLines.filter(l => isUnclaimed(l.item)).reduce((t, l) => t + l.item.qty * l.item.price, 0),
+    [thisWeekLines]
+  );
+
+  const awaitingConfirmationLines = useMemo(
+    () => thisWeekLines.filter(l => isAwaitingConfirmation(l.item)),
     [thisWeekLines]
   );
 
   const applicablePaymentMethods = useMemo(
-    () => paymentMethods.filter(m => m.isActive && CHECKOUT_METHOD_NAMES.includes(m.name)),
+    () => paymentMethods.filter(m => m.isActive && MEAL_PLAN_PAYMENT_METHOD_NAMES.includes(m.name)),
     [paymentMethods]
   );
 
+  // A fresh reference per payment attempt — shown to the customer to quote
+  // when they make the Juice/MauCAS transfer, and stored on the item(s) so
+  // Operations can match it against a bank/wallet statement later.
+  const generateRef = () => `BMZ-PAY-${Math.floor(Math.random() * 900000 + 100000)}`;
+
   const openPayItem = (line: Line) => {
     setPayMethod(null);
+    setCustomerRef('');
     setPayTarget({
       kind: 'item',
       orderId: line.order.id,
       date: line.item.deliveryDate || '',
       slot: line.item.serviceSlot || 'Lunch',
       amount: line.item.qty * line.item.price,
-      what: `${line.item.deliveryDay || ''} · ${line.item.name}`
+      what: `${line.item.deliveryDay || ''} · ${line.item.name}`,
+      ref: generateRef()
     });
   };
 
   const openPayBalance = () => {
-    const pending = thisWeekLines.filter(l => l.item.paymentStatus === 'Pending');
+    const pending = thisWeekLines.filter(l => isUnclaimed(l.item));
     if (!pending.length) return;
     setPayMethod(null);
+    setCustomerRef('');
     setPayTarget({
       kind: 'balance',
       items: pending.map(l => ({ orderId: l.order.id, date: l.item.deliveryDate || '', slot: l.item.serviceSlot || 'Lunch', amount: l.item.qty * l.item.price })),
-      amount: outstandingTotal,
-      what: `${pending.length} unpaid meal${pending.length !== 1 ? 's' : ''} · full balance`
+      amount: pending.reduce((t, l) => t + l.item.qty * l.item.price, 0),
+      what: `${pending.length} unpaid meal${pending.length !== 1 ? 's' : ''} · full balance`,
+      ref: generateRef()
     });
   };
 
@@ -538,28 +572,33 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // whole week (openPayBalance) or a single meal (openPayItem) — reuses the
   // same 'balance' payTarget shape, just scoped to one order's lines.
   const openPayOrder = (lines: (Line & { seq: number })[]) => {
-    const pending = lines.filter(l => l.item.paymentStatus === 'Pending');
+    const pending = lines.filter(l => isUnclaimed(l.item));
     if (!pending.length) return;
     setPayMethod(null);
+    setCustomerRef('');
     setPayTarget({
       kind: 'balance',
       items: pending.map(l => ({ orderId: l.order.id, date: l.item.deliveryDate || '', slot: l.item.serviceSlot || 'Lunch', amount: l.item.qty * l.item.price })),
       amount: pending.reduce((t, l) => t + l.item.qty * l.item.price, 0),
-      what: `${pending.length} unpaid meal${pending.length !== 1 ? 's' : ''} · this order`
+      what: `${pending.length} unpaid meal${pending.length !== 1 ? 's' : ''} · this order`,
+      ref: generateRef()
     });
   };
 
+  // Choosing a method here only records a claim — it never marks anything
+  // Paid. Only Operations confirming a payment (Operator Console) does that.
   const commitPayment = () => {
     if (!payTarget || !payMethod) return;
+    const finalRef = customerRef.trim() ? `${payTarget.ref} · their ref: ${customerRef.trim()}` : payTarget.ref;
     if (payTarget.kind === 'item') {
-      updateOrderItemsPayment(payTarget.orderId, payTarget.date, payTarget.slot, payMethod.type, payMethod.name);
+      submitPaymentClaim(payTarget.orderId, payTarget.date, payTarget.slot, payMethod.name, finalRef);
     } else {
-      payTarget.items.forEach(i => updateOrderItemsPayment(i.orderId, i.date, i.slot, payMethod.type, payMethod.name));
+      payTarget.items.forEach(i => submitPaymentClaim(i.orderId, i.date, i.slot, payMethod.name, finalRef));
     }
-    const settled = isPayNowMethod(payMethod.name);
-    toast(settled ? `Rs ${payTarget.amount} paid via ${payMethod.name}` : `${payMethod.name} selected — Rs ${payTarget.amount} due on delivery`);
+    toast(`${payMethod.name} selected · awaiting confirmation`);
     setPayTarget(null);
     setPayMethod(null);
+    setCustomerRef('');
   };
 
   const handleCancel = (line: Line) => {
@@ -589,15 +628,6 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     [thisWeekLinesWithSeq, ratings]
   );
 
-  const weekChips = useMemo(() => {
-    const chips: string[] = [];
-    weekOverview.forEach(({ day, confirmed, draft }) => {
-      confirmed.forEach(l => chips.push(WEEKLY_CURRY_MENU[day.key].find(x => x.id === l.item.itemId)?.emoji || '🍽️'));
-      draft.forEach(m => chips.push(WEEKLY_CURRY_MENU[day.key].find(x => x.id === m.curryId)?.emoji || '🍽️'));
-    });
-    return chips;
-  }, [weekOverview]);
-
   const homeStatus = useMemo(() => {
     if (cartCount === 0 && thisWeekLinesWithSeq.length === 0) {
       return { icon: '🍽️', tone: 'bg-slate-100', title: "This week's menu is ready", subtitle: 'Order by Sunday noon · Lunch Mon–Fri', ctaLabel: 'Browse the menu', action: () => setView('menu') };
@@ -606,14 +636,17 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       return { icon: '🍱', tone: 'bg-slate-100', title: `${cartCount} meal${cartCount !== 1 ? 's' : ''} selected`, subtitle: `${formatCurrency(cartTotals.total)} · not yet confirmed`, ctaLabel: 'Review & confirm', action: () => setView('order') };
     }
     if (outstandingTotal > 0) {
-      const n = thisWeekLinesWithSeq.filter(l => l.item.paymentStatus === 'Pending').length;
+      const n = thisWeekLinesWithSeq.filter(l => isUnclaimed(l.item)).length;
       return { icon: '💳', tone: 'bg-warning/10', title: `${formatCurrency(outstandingTotal)} outstanding`, subtitle: `across ${n} meal${n !== 1 ? 's' : ''}`, ctaLabel: 'Pay now', action: () => { setView('order'); openPayBalance(); } };
+    }
+    if (awaitingConfirmationLines.length > 0) {
+      return { icon: '⏳', tone: 'bg-warning/10', title: 'Payment awaiting confirmation', subtitle: `${awaitingConfirmationLines.length} meal${awaitingConfirmationLines.length !== 1 ? 's' : ''} · confirmed once the team checks it`, ctaLabel: 'View My Order', action: () => setView('order') };
     }
     if (needsRating) {
       return { icon: '⭐', tone: 'bg-primary/5', title: 'How was it?', subtitle: `Rate your ${needsRating.item.deliveryDay} meal`, ctaLabel: 'Rate meal', action: () => { setView('order'); openRating(needsRating); } };
     }
     return { icon: '✅', tone: 'bg-primary/5', title: 'All set for this week', subtitle: `${thisWeekLinesWithSeq.length} meal${thisWeekLinesWithSeq.length !== 1 ? 's' : ''} · fully paid`, ctaLabel: null as string | null, action: null as (() => void) | null };
-  }, [cartCount, thisWeekLinesWithSeq, outstandingTotal, needsRating, cartTotals]);
+  }, [cartCount, thisWeekLinesWithSeq, outstandingTotal, awaitingConfirmationLines, needsRating, cartTotals]);
 
   // --- LOGIN ---
   if (!currentUser) {
@@ -686,16 +719,37 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <p className="text-xs opacity-80 mt-1">{culturePhrase.en}</p>
             </div>
 
-            {weekChips.length > 0 && (
-              <div className="flex items-center gap-2 flex-wrap">
-                {weekChips.slice(0, 8).map((emoji, i) => (
-                  <span key={i} className="size-8 rounded-full bg-white border border-[#E7E0D0] flex items-center justify-center text-sm shrink-0">{emoji}</span>
-                ))}
-                {weekChips.length > 8 && (
-                  <span className="size-8 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center text-[10px] font-black shrink-0">+{weekChips.length - 8}</span>
-                )}
+            <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 flex items-center gap-3">
+              <img src={currentUser.avatar} className="size-12 rounded-full border-2 border-primary/20 shrink-0" alt={currentUser.name} />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-black text-slate-900 truncate">{currentUser.name}</p>
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  {currentUser.tier && (
+                    <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-black uppercase flex items-center gap-1 shrink-0">
+                      <Star className="size-2.5" /> {currentUser.tier}
+                    </span>
+                  )}
+                  {currentUser.points > 0 && <span className="text-[10px] font-bold text-slate-400 shrink-0">{currentUser.points} pts</span>}
+                  {!!currentUser.storeCredit && currentUser.storeCredit > 0 && (
+                    <span className="text-[10px] font-bold text-success shrink-0">{formatCurrency(currentUser.storeCredit)} credit</span>
+                  )}
+                </div>
               </div>
-            )}
+              <button onClick={() => setView('profile')} className="text-[10px] font-black uppercase text-primary shrink-0">Profile →</button>
+            </div>
+
+            <div className="bg-[#F4EFE4] rounded-2xl p-4">
+              <div className="flex items-center gap-2 mb-2.5">
+                <Clock className="size-3.5 text-slate-500" />
+                <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">How BonManzE works</p>
+              </div>
+              <div className="space-y-1.5 text-xs text-slate-600 font-medium">
+                <p>1. Browse this week's curries and build your meal</p>
+                <p>2. Confirm your order by Sunday noon</p>
+                <p>3. Pay by Juice, MauCAS, or cash on delivery</p>
+                <p>4. Lunch arrives Mon–Fri, 11:30–12:00</p>
+              </div>
+            </div>
 
             <div className={`rounded-2xl p-4 flex items-start gap-3 ${homeStatus.tone}`}>
               <div className="size-10 rounded-xl bg-white/70 flex items-center justify-center text-lg shrink-0">{homeStatus.icon}</div>
@@ -725,15 +779,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       <div className="space-y-1.5">
                         {confirmed.map((l, i) => {
                           const { person } = splitNotesTag(l.item.notes);
+                          const payInfo = paymentStatusInfo(l.item);
                           return (
                             <div key={`c-${i}`}>
-                              <div className="flex items-center gap-1.5">
-                                <p className="text-xs font-bold text-slate-700 flex-1 truncate">{l.item.name}</p>
+                              <p className="text-xs font-bold text-slate-700 truncate mb-1">{l.item.name}</p>
+                              <div className="flex items-center gap-1.5 flex-wrap">
                                 {l.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {l.seq + 1}</span>}
-                              </div>
-                              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[9px] font-black uppercase shrink-0">{l.item.status}</span>
-                                <span className={`text-[9px] font-black uppercase shrink-0 ${l.item.paymentStatus === 'Paid' ? 'text-success' : 'text-danger'}`}>{l.item.paymentStatus === 'Paid' ? 'Paid' : 'Unpaid'}</span>
+                                <StatusBadge label={payInfo.label} tone={payInfo.tone} />
+                                <StatusBadge label={l.item.status || ''} tone="slate" />
                                 {person && <PersonTag name={person} />}
                               </div>
                             </div>
@@ -860,7 +913,20 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 <div className="space-y-4">
                   {weekOrders.map(({ order, lines }, gi) => {
                     const orderPaid = lines.every(l => l.item.paymentStatus === 'Paid');
-                    const orderOutstanding = lines.filter(l => l.item.paymentStatus === 'Pending').reduce((t, l) => t + l.item.price, 0);
+                    const orderUnclaimed = lines.filter(l => isUnclaimed(l.item));
+                    const orderUnclaimedTotal = orderUnclaimed.reduce((t, l) => t + l.item.price, 0);
+
+                    // Meals within an order are still grouped by day — an
+                    // order can cover more than one delivery day (you can
+                    // check out Monday and Tuesday's meals together).
+                    const dayGroups: { date: string; label: string; items: typeof lines }[] = [];
+                    lines.forEach(line => {
+                      const date = line.item.deliveryDate || '';
+                      const last = dayGroups[dayGroups.length - 1];
+                      if (last && last.date === date) last.items.push(line);
+                      else dayGroups.push({ date, label: line.item.deliveryDay || '', items: [line] });
+                    });
+
                     return (
                       <div key={order.id} className="bg-white rounded-2xl border border-[#E7E0D0] overflow-hidden">
                         <div className="px-4 py-3 bg-[#F4EFE4] flex items-center justify-between gap-3">
@@ -870,48 +936,54 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                           </div>
                           {orderPaid ? (
                             <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success">Paid</span>
-                          ) : (
+                          ) : orderUnclaimed.length > 0 ? (
                             <button onClick={() => openPayOrder(lines)} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger">
-                              Pay order · {formatCurrency(orderOutstanding)}
+                              Pay order · {formatCurrency(orderUnclaimedTotal)}
                             </button>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-warning/10 text-warning">Awaiting confirmation</span>
                           )}
                         </div>
                         <div className="divide-y divide-[#F0EADD]">
-                          {lines.map((line, idx) => {
-                            const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
-                            const isCompleted = line.item.status === 'Completed';
-                            const isPaid = line.item.paymentStatus === 'Paid';
-                            const isActive = line.item.status === 'Active';
-                            const locked = isPastCutoff(line.item.deliveryDate || '', systemDate);
-                            const { detail, person } = splitNotesTag(line.item.notes);
+                          {dayGroups.map(group => {
+                            const locked = isPastCutoff(group.date, systemDate);
                             return (
-                              <div key={idx} className="p-4">
-                                <div className="flex items-start justify-between gap-3 mb-2">
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      <p className="text-[10px] font-black uppercase text-primary tracking-widest">{line.item.deliveryDay}</p>
-                                      {line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase">Extra {line.seq + 1}</span>}
-                                    </div>
-                                    <p className="text-sm font-bold text-slate-900">{line.item.name}</p>
-                                    {detail && <p className="text-[11px] text-slate-400">{detail}</p>}
-                                    {person && <div className="mt-1"><PersonTag name={person} /></div>}
-                                  </div>
-                                  <span className="text-sm font-black text-slate-900 shrink-0">Rs {line.item.price}</span>
+                              <div key={group.date} className="p-4">
+                                <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                                  <p className="text-[10px] font-black uppercase text-primary tracking-widest">{group.label}</p>
+                                  {locked && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase">🔒 Locked</span>}
                                 </div>
-                                <div className="flex items-center gap-2 mb-3">
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${isPaid ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>{isPaid ? 'Paid' : 'Unpaid'}</span>
-                                  <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px] font-black uppercase">{line.item.status}</span>
+                                <div className="space-y-3">
+                                  {group.items.map((line, idx) => {
+                                    const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
+                                    const isCompleted = line.item.status === 'Completed';
+                                    const isActive = line.item.status === 'Active';
+                                    const payInfo = paymentStatusInfo(line.item);
+                                    const { detail, person } = splitNotesTag(line.item.notes);
+                                    return (
+                                      <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
+                                        <div className="flex items-start justify-between gap-3 mb-1">
+                                          <p className="text-sm font-bold text-slate-900 min-w-0">{line.item.name}</p>
+                                          <span className="text-sm font-black text-slate-900 shrink-0">Rs {line.item.price}</span>
+                                        </div>
+                                        {detail && <p className="text-[11px] text-slate-400 mb-1.5">{detail}</p>}
+                                        <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                                          {line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {line.seq + 1}</span>}
+                                          <StatusBadge label={payInfo.label} tone={payInfo.tone} />
+                                          <StatusBadge label={line.item.status || ''} tone="slate" />
+                                          {person && <PersonTag name={person} />}
+                                        </div>
+                                        <div className="flex gap-2">
+                                          {isUnclaimed(line.item) && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
+                                          {isActive && !locked && <button onClick={() => openEditConfirmed(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest">Edit</button>}
+                                          {isActive && !locked && <button onClick={() => handleCancel(line)} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Cancel</button>}
+                                          {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
+                                          {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
-                                <div className="flex gap-2">
-                                  {!isPaid && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
-                                  {isActive && !locked && <button onClick={() => openEditConfirmed(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest">Edit</button>}
-                                  {isActive && !locked && <button onClick={() => handleCancel(line)} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Cancel</button>}
-                                  {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
-                                  {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
-                                </div>
-                                {isActive && locked && (
-                                  <p className="text-[11px] text-slate-400 mt-1">🔒 Locked — the 9:00 AM cutoff has passed</p>
-                                )}
                               </div>
                             );
                           })}
@@ -1135,7 +1207,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           <div className="bg-white rounded-[32px] w-full max-w-md shadow-2xl overflow-hidden">
             <div className="p-6 border-b border-[#E7E0D0] flex items-center justify-between">
               <h2 className="text-lg font-black text-slate-900">{payMethod ? payMethod.name : `Pay ${formatCurrency(payTarget.amount)}`}</h2>
-              <button onClick={() => { setPayTarget(null); setPayMethod(null); }} className="p-2 text-slate-400 hover:text-danger"><X className="size-5" /></button>
+              <button onClick={() => { setPayTarget(null); setPayMethod(null); setCustomerRef(''); }} className="p-2 text-slate-400 hover:text-danger"><X className="size-5" /></button>
             </div>
             <div className="p-6 space-y-4">
               <p className="text-xs text-slate-400 font-bold">{payTarget.what}</p>
@@ -1164,10 +1236,37 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       {payMethod.name === 'MauCAS' ? "Your driver will show the MauCAS QR code on their device — scan it with your banking app on delivery." : 'Have cash ready for the driver on delivery.'}
                     </p>
                   )}
+                  {payMethod.name !== 'Cash on Delivery' && (
+                    <>
+                      <div className="bg-[#F4EFE4] rounded-xl p-4 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Quote this reference</p>
+                          <p className="font-mono font-black text-slate-900 text-sm truncate">{payTarget.ref}</p>
+                        </div>
+                        <button
+                          onClick={() => navigator.clipboard?.writeText(payTarget.ref).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); })}
+                          className="p-2 text-primary hover:bg-white rounded-lg shrink-0"
+                        >
+                          {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+                        </button>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Got a reference back from {payMethod.name}? (optional)</label>
+                        <input
+                          value={customerRef}
+                          onChange={e => setCustomerRef(e.target.value)}
+                          maxLength={40}
+                          placeholder="e.g. the transaction ID from your banking app"
+                          className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1">Helps us match your payment faster.</p>
+                      </div>
+                    </>
+                  )}
                   <button onClick={commitPayment} className="w-full py-4 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-primary/20">
-                    {isPayNowMethod(payMethod.name) ? 'Approve payment' : `Confirm — ${payMethod.name}`}
+                    {isPayNowMethod(payMethod.name) ? "I've approved payment" : `Confirm — ${payMethod.name}`}
                   </button>
-                  <button onClick={() => setPayMethod(null)} className="w-full py-2 text-slate-400 text-xs font-bold">← Choose a different method</button>
+                  <button onClick={() => { setPayMethod(null); setCustomerRef(''); }} className="w-full py-2 text-slate-400 text-xs font-bold">← Choose a different method</button>
                 </div>
               )}
             </div>
@@ -1204,6 +1303,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       )}
     </div>
   );
+};
+
+// A small uniform badge for payment/order status — keeps the "one line of
+// tags" (extra / payment / status / person) actually the same shape and
+// size, rather than four differently-styled inline spans.
+const StatusBadge: React.FC<{ label: string; tone: 'success' | 'warning' | 'danger' | 'slate' }> = ({ label, tone }) => {
+  const cls = tone === 'success' ? 'bg-success/10 text-success' : tone === 'warning' ? 'bg-warning/10 text-warning' : tone === 'danger' ? 'bg-danger/10 text-danger' : 'bg-slate-100 text-slate-500';
+  return <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase shrink-0 ${cls}`}>{label}</span>;
 };
 
 // A small pill for "who this meal is for" — used everywhere a note shows up
