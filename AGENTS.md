@@ -177,3 +177,11 @@ Two things worth knowing:
 2. This sandbox can't delete files outright, so the 25 physical files aren't gone from disk — they're moved into a new `_deleted_modules/` folder at the repo root (same `components/`/`modules/` subpaths preserved inside it), which is now `.gitignore`d. **Bhimal: safe to delete the whole `_deleted_modules/` folder via Windows Explorer whenever convenient** — nothing in the app references it.
 
 Verified with a clean `npx tsc --noEmit` (no imports pointed at any removed file), shipped.
+
+## 2026-08-10: Antigravity — Exclude _deleted_modules in tsconfig.json
+
+* Added `_deleted_modules` to the `"exclude"` list in `tsconfig.json` to prevent type-checking errors for the moved modules, since `tsc` default behavior includes all files in the project root recursively.
+* Cleaned up empty legacy directories (`components/`, empty subfolders under `modules/`) from the local working copy.
+
+Verified with a clean `npx tsc --noEmit` check.
+
