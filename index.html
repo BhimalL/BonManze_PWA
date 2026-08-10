@@ -1,558 +1,80 @@
+
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="BonManzE">
-  <meta name="theme-color" id="theme-color-meta" content="#FAF6EE">
-  <link rel="manifest" href="/manifest.json">
-  
-  <title>BonManzE — Mauritian Lunch Deliveries</title>
-  
-  <!-- SEO & Description -->
-  <meta name="description" content="Authentic home-cooked Mauritian meals delivered fresh to your office. Customise curry, base, and sides daily.">
-  
-  <!-- Google Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Plus+Jakarta+Sans:wght@300..800&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
-
-  <link rel="stylesheet" href="/src/style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RMS Enterprise</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=Lexend:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Modern Minimalist Scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(15, 117, 111, 0.1);
+            border-radius: 10px;
+            transition: background 0.3s ease;
+        }
+        .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+            background: rgba(15, 117, 111, 0.3);
+        }
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        body {
+            overscroll-behavior-y: none;
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#0f756f',
+                        secondary: '#1d9ec9',
+                        accent: '#ED7D3A',
+                        background: '#f9fafa',
+                        'surface-dark': '#1a1d21',
+                        'success': '#2DA64A',
+                        'warning': '#E68A1A',
+                        'danger': '#e73508'
+                    },
+                    fontFamily: {
+                        sans: ['Manrope', 'sans-serif'],
+                        display: ['Lexend', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+<script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
+    "recharts": "https://esm.sh/recharts@^3.6.0",
+    "@google/genai": "https://esm.sh/@google/genai@^1.36.0",
+    "react-dom": "https://esm.sh/react-dom@^19.2.3"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
 </head>
-<body>
-
-<div class="app">
-  <!-- Header Bar -->
-  <header class="appbar">
-    <span class="brand-mark">🍛</span>
-    <div class="brand-text">
-      <h1>BonManzE</h1>
-      <div class="sub" id="bar-sub">Home-made Mauritian meals</div>
-    </div>
-    <div class="appbar-actions">
-      <button class="icon-btn" id="install-btn" style="display:none" onclick="doInstall()" title="Install App">⬇</button>
-      <button class="icon-btn" id="audio-toggle-btn" onclick="toggleAudio()" title="Sound On/Off">🔊</button>
-      <button class="icon-btn" onclick="openSheet('sh-demo')" title="Demo Control Tower">⚡</button>
-      <button class="icon-btn" onclick="openSheet('sh-notif')" title="Notifications">
-        🔔<span class="dot-badge" id="notif-badge" style="display:none">0</span>
-      </button>
-      <button class="icon-btn" onclick="toggleTheme()" title="Toggle Theme" id="theme-btn">☾</button>
-    </div>
-  </header>
-
-  <!-- Main Scrollable Content -->
-  <main id="app-main">
-    
-    <!-- ══════════ HOME VIEW ══════════ -->
-    <section class="page active" id="pg-home">
-      <div class="home-hero">
-        <span class="eyebrow" id="home-eyebrow">
-          <span class="eyebrow-dot"></span>4–8 August 2026
-        </span>
-        <h2 class="display" id="home-head">Authentic Mauritian<br>lunch delivered.</h2>
-        <p class="lede" id="home-lede">Order by Sunday noon · Hot deliveries Mon–Fri</p>
-        
-        <div class="chiprow">
-          <span class="tagchip"><span class="tc-ico">📸</span>Real Curry Photos</span>
-          <span class="tagchip"><span class="tc-ico">🌾</span>Choose Your Base</span>
-          <span class="tagchip"><span class="tc-ico">🧁</span>Sides &amp; Extras</span>
-        </div>
-        
-        <button class="cta" id="home-cta">Browse Week's Menu <span>→</span></button>
-      </div>
-
-      <!-- Attention Card (Status/Outstanding Balance) -->
-      <div id="home-summary"></div>
-      
-      <!-- Mauritian Food Quote / Cultural Card -->
-      <div class="card card-pad culture-card" style="margin-top: 16px;">
-        <div class="culture-header">
-          <span class="culture-badge">Creole phrase of the day</span>
-          <span class="culture-icon">🇲🇺</span>
-        </div>
-        <blockquote class="creole-quote">"Mari Bon! Ene bon manzhe rann leker kontan."</blockquote>
-        <p class="creole-translation">"Excellent! Good food makes the heart happy."</p>
-      </div>
-
-      <div style="height:24px"></div>
-    </section>
-
-    <!-- ══════════ MY ORDER VIEW ══════════ -->
-    <section class="page" id="pg-order">
-      <div style="height:4px"></div>
-      <div id="order-body"></div>
-      <div style="height:24px"></div>
-    </section>
-
-    <!-- ══════════ PROFILE VIEW ══════════ -->
-    <section class="page" id="pg-profile">
-      <div class="pro-hero">
-        <div class="pro-av">👤</div>
-        <h2>Bhimal L.</h2>
-        <div class="pro-badge-row">
-          <span class="badge" data-tone="warn" id="pro-badge">🥈 Silver Tier</span>
-        </div>
-      </div>
-      
-      <!-- Stats Dashboard Grid -->
-      <div class="stat-grid">
-        <div class="stat">
-          <b id="pro-points">85</b>
-          <span>Points</span>
-        </div>
-        <div class="stat">
-          <b>12</b>
-          <span>Orders</span>
-        </div>
-        <div class="stat">
-          <b id="pro-credit">Rs 0</b>
-          <span>Credit</span>
-        </div>
-        <div class="stat">
-          <b>3</b>
-          <span>Referrals</span>
-        </div>
-      </div>
-
-      <!-- Loyalty Goal Roadmap -->
-      <div class="loyalty-card">
-        <div class="loyalty-header">
-          <span>Tier Progress</span>
-          <span class="loyalty-perk">Gold at 100 points = 10% off</span>
-        </div>
-        <div class="bar"><i id="loyalty-bar" style="width:85%"></i></div>
-        <div class="loyalty-footer">
-          <span>85 pts</span>
-          <span id="loyalty-hint">🎁 15 points left to claim Gold rewards!</span>
-        </div>
-        <button class="btn primary block sm" id="scratch-win-btn" onclick="openScratchCard()" style="margin-top: 12px; display: none;">
-          🎉 Claim Gold Scratch Card!
-        </button>
-      </div>
-
-      <!-- Account Settings -->
-      <div class="section-title">Delivery Details</div>
-      <div class="drow"><span class="dl">Phone</span><span class="dv">+230 5712 9845</span></div>
-      <div class="drow"><span class="dl">Dietary</span><span class="dv">No restrictions</span></div>
-      <div class="drow"><span class="dl">Office Address</span><span class="dv">ABC Group, Block B, Ebene</span></div>
-
-      <!-- Culinary History Stats -->
-      <div class="section-title">Personal Favourites</div>
-      <div class="drow"><span class="dl">Preferred Curry</span><span class="dv">🐟 Fish Curry (Tamarind)</span></div>
-      <div class="drow"><span class="dl">Preferred Base</span><span class="dv">🌿 Quinoa</span></div>
-
-      <!-- Loyalty Referral System -->
-      <div class="section-title">Invite &amp; Earn Rs 50</div>
-      <div class="code-box" id="ref-codebox" onclick="copyReferralCode()">BHIMAL2026</div>
-      <div class="help" style="text-align:center">Tap to copy code · Your friend gets Rs 50, you earn Rs 50!</div>
-
-      <!-- App Configuration Details -->
-      <div class="section-title">Preferences</div>
-      <div class="drow">
-        <span class="dl">App Sounds</span>
-        <span class="dv">
-          <button class="btn soft sm" onclick="toggleAudio()" id="settings-audio-label">Enabled</button>
-        </span>
-      </div>
-      <div class="drow"><span class="dl">Offline Cache</span><span class="dv" id="pwa-sw-row">Checking...</span></div>
-      <div class="drow"><span class="dl">App Installation</span><span class="dv" id="pwa-install-row">Supported</span></div>
-      
-      <div style="margin-top:16px">
-        <button class="btn outline block" onclick="openSheet('sh-demo')">⚡ Open Control Tower</button>
-      </div>
-      <div style="height:24px"></div>
-    </section>
-  </main>
-
-  <!-- Sticky Dynamic Checkout/Pay Bar -->
-  <div class="paybar" id="paybar" style="display:none">
-    <div class="paybar-inner">
-      <div class="pl">
-        <div class="plbl" id="paybar-lbl">Week total</div>
-        <div class="pamt" id="paybar-amt">Rs 0</div>
-        <div class="pnote" id="paybar-note" style="display:none"></div>
-      </div>
-      <button class="btn primary" id="paybar-btn" onclick="paybarAction()">Checkout</button>
-    </div>
-  </div>
-
-  <!-- Bottom Navigation Tab Bar -->
-  <nav class="tabbar">
-    <button class="tab on" id="tab-home" onclick="go('home')">
-      <span class="ti">🏠</span>
-      <span>Home</span>
-    </button>
-    <button class="tab" id="tab-order" onclick="go('order')">
-      <span class="ti">🧾</span>
-      <span>My Order</span>
-      <span class="tab-badge" id="order-badge" style="display:none">0</span>
-    </button>
-    <button class="tab" id="tab-profile" onclick="go('profile')">
-      <span class="ti">👤</span>
-      <span>Profile</span>
-    </button>
-  </nav>
-</div>
-
-<!-- ══════════ MENU VIEW (Fullscreen Pushed Page) ══════════ -->
-<div class="fullpage" id="pg-menu">
-  <div class="fp-bar">
-    <button class="icon-btn" onclick="closeMenuPage()">←</button>
-    <div class="t">
-      <b id="menu-title">This week's menu</b>
-      <span id="menu-sub">Week of 4–8 August 2026</span>
-    </div>
-  </div>
-  <div class="fp-body">
-    <div class="banner" id="extra-banner" style="display:none">
-      <span style="font-size:19px">➕</span>
-      <div class="bt">
-        <b>Adding extra meals</b>
-        <span style="color:var(--muted)" id="extra-banner-sub">Pick a day below.</span>
-      </div>
-      <button class="btn danger sm" onclick="cancelAdditionalOrder()">Cancel</button>
-    </div>
-    
-    <div id="day-cards"></div>
-  </div>
-  
-  <div class="fp-foot" id="ao-tray" style="display:none">
-    <div style="flex:1">
-      <div style="font-size:11.5px;color:var(--muted);font-weight:600" id="ao-tray-lbl">Extra meals</div>
-      <div style="font-size:20px;font-weight:700;color:var(--primary);font-family:var(--serif)" id="ao-tray-amt">Rs 0</div>
-    </div>
-    <button class="btn warn" onclick="commitAdditionalToOrder()">Add to My Order</button>
-  </div>
-  
-  <div class="fp-foot" id="menu-tray" style="display:none">
-    <div style="flex:1">
-      <div style="font-size:11.5px;color:var(--muted);font-weight:600" id="menu-tray-lbl">Pick a day to get started</div>
-      <div style="font-size:20px;font-weight:700;color:var(--primary);font-family:var(--serif)" id="menu-tray-amt"></div>
-    </div>
-    <button class="btn primary" id="menu-tray-btn" onclick="finishMenuBrowsing()">My Order →</button>
-  </div>
-</div>
-
-<!-- ══════════ MEAL BUILDER WIZARD (Fullscreen Pushed Page) ══════════ -->
-<div class="fullpage" id="pg-build">
-  <div class="fp-bar">
-    <button class="icon-btn" onclick="closeBuild()">✕</button>
-    <div class="t">
-      <b id="build-title">Customise Meal</b>
-      <span id="build-sub">Monday</span>
-    </div>
-  </div>
-  
-  <!-- Wizard Steps Indicator -->
-  <div class="wizard-steps-container">
-    <div class="wizard-progress-bar"><div id="wizard-progress-fill" style="width: 33%"></div></div>
-    <div class="wizard-steps">
-      <div class="wiz-step active" id="wiz-step-1" onclick="jumpToWizardStep(1)">
-        <span class="step-num">1</span>
-        <span class="step-name">Curry</span>
-      </div>
-      <div class="wiz-step" id="wiz-step-2" onclick="jumpToWizardStep(2)">
-        <span class="step-num">2</span>
-        <span class="step-name">Base</span>
-      </div>
-      <div class="wiz-step" id="wiz-step-3" onclick="jumpToWizardStep(3)">
-        <span class="step-num">3</span>
-        <span class="step-name">Sides</span>
-      </div>
-    </div>
-  </div>
-
-  <div class="fp-body" id="build-body-container" style="padding-top: 8px;">
-    
-    <!-- Dynamic Curry Photograph Showcase Visualizer with overlays -->
-    <div class="dish-showcase-container">
-      <div class="dish-photo-frame">
-        <img id="dish-showcase-photo" src="/chicken_curry.jpg" alt="Curry Dish Preview">
-        <div class="dish-scrim"></div>
-        
-        <!-- Selection Overlays -->
-        <div class="dish-overlay-pills" id="dish-overlay-pills">
-          <span class="overlay-pill" id="pill-curry" onclick="jumpToWizardStep(1)">🍛 Chicken Curry</span>
-          <span class="overlay-pill" id="pill-base" onclick="jumpToWizardStep(2)">🌾 Quinoa Base</span>
-          <span class="overlay-pill" id="pill-dhal" onclick="jumpToWizardStep(3)">🫘 Dhal</span>
-          <span class="overlay-pill" id="pill-salad" onclick="jumpToWizardStep(3)">🥗 Salad</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Wizard Steps Panels -->
-    <div class="wizard-panels">
-      
-      <!-- STEP 1 PANEL: Curry Selection -->
-      <div class="wizard-panel active" id="panel-step-1">
-        <div class="section-title">Select Curry</div>
-        <div class="options-grid" id="curry-options-container"></div>
-      </div>
-
-      <!-- STEP 2 PANEL: Base Selection -->
-      <div class="wizard-panel" id="panel-step-2">
-        <div class="section-title">Select Base</div>
-        <div class="options-grid" id="base-options-container"></div>
-      </div>
-
-      <!-- STEP 3 PANEL: Sides & Extras -->
-      <div class="wizard-panel" id="panel-step-3">
-        <div class="section-title">Included Sides</div>
-        <div id="sides-dhal-container"></div>
-        <div id="sides-salad-container"></div>
-        
-        <div class="section-title">Optional Extras</div>
-        <div id="sides-beverage-container"></div>
-        <div id="sides-dessert-container"></div>
-
-        <div class="section-title">Recipient Name</div>
-        <div class="grp">
-          <input class="field" id="meal-note" maxlength="40" placeholder="e.g. Bhimal, or 'Block B reception'" oninput="updatePendingNote(this.value)">
-          <div class="help">We'll print this name on the label for easy sorting.</div>
-        </div>
-      </div>
-
-    </div>
-  </div>
-  
-  <!-- Wizard Bottom Navigation -->
-  <div class="fp-foot">
-    <div class="footer-price-block">
-      <div class="footer-price-label">Meal Total</div>
-      <div class="footer-price-val" id="build-total">Rs 0</div>
-    </div>
-    <div class="footer-btn-group">
-      <button class="btn soft" id="wiz-prev-btn" onclick="wizardPrev()">← Back</button>
-      <button class="btn primary" id="wiz-next-btn" onclick="wizardNext()">Next →</button>
-    </div>
-  </div>
-</div>
-
-<div class="scrim" id="scrim" onclick="closeSheet()"></div>
-
-<!-- ══════════ SHEETS / DIALOG MODALS ══════════ -->
-
-<!-- Payment Selection Sheet -->
-<div class="sheet" id="sh-pay">
-  <div class="sheet-grip"></div>
-  <div class="sheet-head">
-    <div class="st">
-      <b id="pay-title">Pay</b>
-      <span id="pay-sub"></span>
-    </div>
-    <button class="icon-btn" onclick="cancelPayNow()">✕</button>
-  </div>
-  <div class="sheet-body" id="pay-body"></div>
-  <div class="sheet-foot" id="pay-foot"></div>
-</div>
-
-<!-- Extra Meal Confirmation Sheet -->
-<div class="sheet" id="sh-extra">
-  <div class="sheet-grip"></div>
-  <div class="sheet-head">
-    <div class="st">
-      <b id="ex-title">This day already has a meal</b>
-      <span>Choose what to do</span>
-    </div>
-    <button class="icon-btn" onclick="closeSheet()">✕</button>
-  </div>
-  <div class="sheet-body" id="ex-body"></div>
-  <div class="sheet-foot">
-    <button class="btn warn block" onclick="chooseAdditionalMode('replace')">🔄 Replace my existing meal</button>
-    <button class="btn primary block" onclick="chooseAdditionalMode('extra')">➕ Add an extra meal</button>
-    <button class="btn outline block" onclick="closeSheet()">Cancel</button>
-  </div>
-</div>
-
-<!-- Skip Free Items Sheet -->
-<div class="sheet" id="sh-skip">
-  <div class="sheet-grip"></div>
-  <div class="sheet-head">
-    <div class="st">
-      <b id="skip-title">Skip free items?</b>
-      <span>They are included in the price</span>
-    </div>
-    <button class="icon-btn" onclick="backToBuild()">✕</button>
-  </div>
-  <div class="sheet-body" id="skip-body"></div>
-  <div class="sheet-foot">
-    <button class="btn primary block" onclick="backToBuild()">← Go back and add them</button>
-    <button class="btn danger block" onclick="closeSheet();commitMealToCart()">Yes, skip them</button>
-  </div>
-</div>
-
-<!-- Cancel Meal Sheet -->
-<div class="sheet" id="sh-cancel">
-  <div class="sheet-grip"></div>
-  <div class="sheet-head">
-    <div class="st">
-      <b id="cx-title">Cancel this meal?</b>
-      <span>Refunded as store credit</span>
-    </div>
-    <button class="icon-btn" onclick="closeSheet()">✕</button>
-  </div>
-  <div class="sheet-body" id="cx-body"></div>
-  <div class="sheet-foot">
-    <button class="btn primary block" onclick="closeSheet()">Keep this meal</button>
-    <button class="btn danger block" id="cx-btn">Yes, cancel it</button>
-  </div>
-</div>
-
-<!-- Delivery Confirmation Sheet -->
-<div class="sheet" id="sh-deliver">
-  <div class="sheet-grip"></div>
-  <div class="sheet-head">
-    <div class="st">
-      <b id="dv-title">Confirm Delivery</b>
-      <span id="dv-sub"></span>
-    </div>
-    <button class="icon-btn" onclick="closeSheet()">✕</button>
-  </div>
-  <div class="sheet-body" id="dv-body"></div>
-  <div class="sheet-foot"><button class="btn primary block" id="dv-btn">Yes, I received it</button></div>
-</div>
-
-<!-- Rate Meal Sheet -->
-<div class="sheet" id="sh-rate">
-  <div class="sheet-grip"></div>
-  <div class="sheet-head">
-    <div class="st">
-      <b>Rate your meal</b>
-      <span id="rt-sub"></span>
-    </div>
-    <button class="icon-btn" onclick="closeSheet()">✕</button>
-  </div>
-  <div class="sheet-body">
-    <div style="text-align:center;color:var(--muted);font-size:13px">How was it? Your rating goes straight to our kitchen.</div>
-    <div class="stars" id="star-row">
-      <span class="star" data-v="1">⭐</span>
-      <span class="star" data-v="2">⭐</span>
-      <span class="star" data-v="3">⭐</span>
-      <span class="star" data-v="4">⭐</span>
-      <span class="star" data-v="5">⭐</span>
-    </div>
-    <div id="star-lbl" style="text-align:center;color:var(--muted);font-size:13px;min-height:19px;font-weight:600"></div>
-    <textarea id="rate-note" class="field" placeholder="Write a comment (optional)…" style="height:84px;resize:none;margin-top:14px"></textarea>
-  </div>
-  <div class="sheet-foot"><button class="btn primary block" id="rate-btn" disabled>Submit Rating</button></div>
-</div>
-
-<!-- Receipt Sheet -->
-<div class="sheet" id="sh-receipt">
-  <div class="sheet-grip"></div>
-  <div class="sheet-head">
-    <div class="st">
-      <b>Receipt</b>
-      <span id="rc-sub"></span>
-    </div>
-    <button class="icon-btn" onclick="closeSheet()">✕</button>
-  </div>
-  <div class="sheet-body" id="rc-body"></div>
-  <div class="sheet-foot">
-    <button class="btn soft block" onclick="toast('📥 Receipt saved to your photos')">Save as Image</button>
-    <button class="btn outline block" onclick="toast('💬 Receipt sent to your WhatsApp')">Send via WhatsApp</button>
-  </div>
-</div>
-
-<!-- Discard Additional Order Sheet -->
-<div class="sheet" id="sh-discard">
-  <div class="sheet-grip"></div>
-  <div class="sheet-head">
-    <div class="st">
-      <b>Discard extra meals?</b>
-      <span>Your confirmed order is not affected</span>
-    </div>
-    <button class="icon-btn" onclick="closeSheet()">✕</button>
-  </div>
-  <div class="sheet-body" id="dc-body"></div>
-  <div class="sheet-foot">
-    <button class="btn primary block" onclick="closeSheet()">← Keep building</button>
-    <button class="btn danger block" onclick="discardAdditionalOrder()">Yes, discard</button>
-  </div>
-</div>
-
-<!-- Notifications Center Sheet -->
-<div class="sheet" id="sh-notif">
-  <div class="sheet-grip"></div>
-  <div class="sheet-head">
-    <div class="st">
-      <b>Notifications</b>
-      <span id="nf-sub">Order updates</span>
-    </div>
-    <button class="icon-btn" onclick="closeSheet()">✕</button>
-  </div>
-  <div class="sheet-body" id="nf-body"></div>
-</div>
-
-<!-- Scratch Card Gamification Sheet -->
-<div class="sheet" id="sh-scratch">
-  <div class="sheet-grip"></div>
-  <div class="sheet-head">
-    <div class="st">
-      <b>Scratch &amp; Win!</b>
-      <span>Gold loyalty tier reward</span>
-    </div>
-    <button class="icon-btn" onclick="closeSheet()">✕</button>
-  </div>
-  <div class="sheet-body" style="text-align: center;">
-    <p style="color:var(--muted);font-size:13.5px;margin-bottom:14px">Scratch the silver card below to reveal your secret reward!</p>
-    <div class="scratch-card-container">
-      <canvas id="scratch-canvas" width="280" height="150"></canvas>
-      <div id="scratch-reveal-back">
-        <h3 id="scratch-prize-title">Rs 50 Store Credit</h3>
-        <p id="scratch-prize-desc">Automatically credited to your balance!</p>
-      </div>
-    </div>
-  </div>
-  <div class="sheet-foot">
-    <button class="btn primary block" onclick="claimScratchReward()" id="scratch-claim-btn" disabled>Claim Reward</button>
-  </div>
-</div>
-
-<!-- Control Tower (Simulation Center) Sheet -->
-<div class="sheet" id="sh-demo">
-  <div class="sheet-grip"></div>
-  <div class="sheet-head">
-    <div class="st">
-      <b>Control Tower</b>
-      <span>Trigger backend events &amp; simulations</span>
-    </div>
-    <button class="icon-btn" onclick="closeSheet()">✕</button>
-  </div>
-  <div class="sheet-body">
-    <p style="color:var(--muted);font-size:13px;margin-bottom:16px">Simulate logistics and delivery milestone updates locally.</p>
-    
-    <button class="pick" onclick="closeSheet();runSimulation()">
-      <span class="pi">👨‍🍳</span>
-      <span class="pt">
-        <b>Run Delivery Simulation</b>
-        <span>Prepare ➔ Pack ➔ En Route ➔ Deliver with live logs</span>
-      </span>
-    </button>
-    
-    <button class="pick" onclick="closeSheet();runNextWeek()">
-      <span class="pi">📅</span>
-      <span class="pt">
-        <b>Send Next Week's Menu</b>
-        <span>Publishes menu with real photographs</span>
-      </span>
-    </button>
-    
-    <button class="pick" onclick="resetApp()">
-      <span class="pi">🔄</span>
-      <span class="pt">
-        <b>Reset Entire Application</b>
-        <span>Start from clean slate</span>
-      </span>
-    </button>
-  </div>
-</div>
-
-<div class="toast-wrap" id="toasts"></div>
-
-<!-- App script -->
-<script type="module" src="/src/main.js"></script>
+<body class="bg-background text-slate-900 font-sans antialiased">
+    <div id="root"></div>
+<script type="module" src="/index.tsx"></script>
 </body>
 </html>
