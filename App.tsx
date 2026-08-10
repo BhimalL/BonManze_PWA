@@ -2,9 +2,9 @@
 import React, { useState } from 'react';
 import { Store, UserCircle, LayoutGrid } from 'lucide-react';
 import CustomerPortal from './modules/CustomerPortal';
-import OperatorConsole from './modules/OperatorConsole';
+import Operations from './modules/Operations';
 
-type View = 'landing' | 'customer' | 'operator';
+type View = 'landing' | 'customer' | 'operations';
 
 const App: React.FC = () => {
   const [view, setView] = useState<View>('landing');
@@ -17,10 +17,10 @@ const App: React.FC = () => {
     );
   }
 
-  if (view === 'operator') {
+  if (view === 'operations') {
     return (
       <div className="h-screen w-screen overflow-hidden bg-slate-50">
-        <OperatorConsole onExit={() => setView('landing')} />
+        <Operations onExit={() => setView('landing')} />
       </div>
     );
   }
@@ -47,13 +47,13 @@ const App: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setView('operator')}
+            onClick={() => setView('operations')}
             className="p-8 bg-white rounded-[32px] border border-slate-200 shadow-sm hover:shadow-lg hover:border-primary/40 transition-all text-left group"
           >
             <div className="size-12 bg-primary/10 text-primary rounded-2xl flex items-center justify-center mb-4 group-hover:bg-primary group-hover:text-white transition-all">
               <LayoutGrid className="size-6" />
             </div>
-            <h2 className="text-lg font-black text-slate-900 mb-1">Operator Console</h2>
+            <h2 className="text-lg font-black text-slate-900 mb-1">Operations</h2>
             <p className="text-xs text-slate-500 font-medium">This week's menu, orders, deliveries, payments, customers.</p>
           </button>
         </div>

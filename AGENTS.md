@@ -213,3 +213,15 @@ Verified with a clean `npx tsc --noEmit`, shipped.
 **Profile now shows points and store credit.** Neither was shown anywhere in the Profile tab before this — only as a small chip on Home, which just got trimmed down. Added a Points / Store Credit stat pair right under the avatar card, and the same loyalty progress bar (points to next tier) inside the tier card, so Profile is a complete picture of the account, not just discounts and perks.
 
 Verified with a clean `npx tsc --noEmit`, shipped.
+
+## 2026-08-10: Claude — "Operator Console" renamed to "Operations"
+
+Bhimal's call: "Operator Console" read like leftover call-center/ERP language for what's really a one-person kitchen management screen. Renamed everywhere:
+
+- `modules/OperatorConsole.tsx` → `modules/Operations.tsx` (component `OperatorConsole` → `Operations`, props interface `OperatorConsoleProps` → `OperationsProps`)
+- `App.tsx`: import updated, `View` union's `'operator'` → `'operations'`, landing-page tile label "Operator Console" → "Operations"
+- The in-app header title (top of the console itself) → "Operations"
+
+No behavior changed, purely the name. The old `OperatorConsole.tsx` is untracked and moved into `_deleted_modules/modules/` (same reason as the earlier module cleanup — this sandbox can't delete files outright). Safe to remove from `_deleted_modules/` along with the rest whenever convenient.
+
+Verified with a clean `npx tsc --noEmit`, shipped.

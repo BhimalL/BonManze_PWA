@@ -36,7 +36,7 @@ import {
   MEAL_PLAN_PAYMENT_METHOD_NAMES
 } from './store';
 
-interface OperatorConsoleProps {
+interface OperationsProps {
   onExit: () => void;
 }
 
@@ -89,7 +89,7 @@ const getThisWeekDays = (systemDateStr: string) => {
   });
 };
 
-const OperatorConsole: React.FC<OperatorConsoleProps> = ({ onExit }) => {
+const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [tab, setTab] = useState<Tab>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -240,7 +240,7 @@ const OperatorConsole: React.FC<OperatorConsoleProps> = ({ onExit }) => {
             <ArrowLeft className="size-5" />
           </button>
           <div>
-            <h1 className="text-lg font-black text-slate-900 tracking-tight leading-none">Operator Console</h1>
+            <h1 className="text-lg font-black text-slate-900 tracking-tight leading-none">Operations</h1>
             <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">BonManzE</p>
           </div>
         </div>
@@ -493,4 +493,4 @@ const EmptyState = ({ icon, label }: { icon: React.ReactNode; label: string }) =
   </div>
 );
 
-export default OperatorConsole;
+export default Operations;
