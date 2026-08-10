@@ -123,8 +123,9 @@ const mealNotesLine = (m: MealSelection): string => {
 };
 
 // Same as mealNotesLine but without the base (already shown alongside the
-// curry in mealSummaryLabel) — used where both are displayed together so
-// the base name isn't repeated twice on screen.
+// curry in mealSummaryLabel) and without the "for X" note — the note gets
+// its own pill tag (PersonTag) wherever this is used, rather than being
+// buried in a wall of text.
 const mealExtrasLabel = (m: MealSelection): string => {
   const parts: string[] = [];
   const dh = m.dhalId !== 'none' ? MEAL_DHALS.find(x => x.id === m.dhalId) : null;
@@ -135,8 +136,21 @@ const mealExtrasLabel = (m: MealSelection): string => {
   if (bv) parts.push(bv.name);
   const ds = m.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === m.dessertId) : null;
   if (ds) parts.push(ds.name);
-  if (m.note.trim()) parts.push(`for ${m.note.trim()}`);
   return parts.join(' · ');
+};
+
+// Once a meal becomes a confirmed OrderItem, the "for X" note only survives
+// as the trailing segment of the flattened `notes` string (mealNotesLine
+// above) — OrderItem has no separate field for it. This pulls that segment
+// back out so it can render as its own tag instead of buried in prose.
+const splitNotesTag = (notes?: string): { detail: string; person: string | null } => {
+  if (!notes) return { detail: '', person: null };
+  const segments = notes.split(' · ');
+  const last = segments[segments.length - 1];
+  if (last && last.startsWith('for ')) {
+    return { detail: segments.slice(0, -1).join(' · '), person: last.slice(4) };
+  }
+  return { detail: notes, person: null };
 };
 
 const CHECKOUT_METHOD_NAMES = ['Juice / Transfer', 'MauCAS', 'Cash on Delivery'];
@@ -373,6 +387,20 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     });
   }, [thisWeekLines]);
 
+  // My Order groups by the actual Order a meal belongs to — a checkout is
+  // one order; going back later and checking out an extra meal creates a
+  // second, separate order — so the screen should show that as two visibly
+  // distinct groups, not one flat list of meal cards. Grouped chronologically
+  // by when each order was placed.
+  const weekOrders = useMemo(() => {
+    const map = new Map<string, { order: Order; lines: typeof thisWeekLinesWithSeq }>();
+    thisWeekLinesWithSeq.forEach(l => {
+      if (!map.has(l.order.id)) map.set(l.order.id, { order: l.order, lines: [] });
+      map.get(l.order.id)!.lines.push(l);
+    });
+    return Array.from(map.values()).sort((a, b) => a.order.timestamp.localeCompare(b.order.timestamp));
+  }, [thisWeekLinesWithSeq]);
+
   // Home's weekly overview merges both draft (not-yet-confirmed) and
   // confirmed meals per day — previously Home only ever showed the draft
   // cart, so a fully confirmed week looked empty ("Choose your meal" on
@@ -568,17 +596,29 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       </button>
                     ) : (
                       <div className="space-y-1.5">
-                        {confirmed.map((l, i) => (
-                          <div key={`c-${i}`} className="flex items-center gap-1.5">
-                            <p className="text-xs font-bold text-slate-700 flex-1 truncate">{l.item.name}</p>
-                            {l.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {l.seq + 1}</span>}
-                            <span className={`text-[9px] font-black uppercase shrink-0 ${l.item.paymentStatus === 'Paid' ? 'text-success' : 'text-danger'}`}>{l.item.paymentStatus === 'Paid' ? 'Paid' : 'Unpaid'}</span>
-                          </div>
-                        ))}
+                        {confirmed.map((l, i) => {
+                          const { person } = splitNotesTag(l.item.notes);
+                          return (
+                            <div key={`c-${i}`}>
+                              <div className="flex items-center gap-1.5">
+                                <p className="text-xs font-bold text-slate-700 flex-1 truncate">{l.item.name}</p>
+                                {l.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {l.seq + 1}</span>}
+                              </div>
+                              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[9px] font-black uppercase shrink-0">{l.item.status}</span>
+                                <span className={`text-[9px] font-black uppercase shrink-0 ${l.item.paymentStatus === 'Paid' ? 'text-success' : 'text-danger'}`}>{l.item.paymentStatus === 'Paid' ? 'Paid' : 'Unpaid'}</span>
+                                {person && <PersonTag name={person} />}
+                              </div>
+                            </div>
+                          );
+                        })}
                         {draft.map((m, i) => (
-                          <div key={`d-${i}`} className="flex items-center gap-1.5">
-                            <p className="text-xs font-bold text-slate-400 flex-1 truncate">{mealSummaryLabel(m, d.key)}</p>
-                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase shrink-0">Draft</span>
+                          <div key={`d-${i}`}>
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-xs font-bold text-slate-400 flex-1 truncate">{mealSummaryLabel(m, d.key)}</p>
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase shrink-0">Draft</span>
+                            </div>
+                            {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
                           </div>
                         ))}
                       </div>
@@ -634,6 +674,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                           <div className="min-w-0">
                             <span className="font-bold text-slate-700 block">{mealSummaryLabel(m, d.key)}</span>
                             {mealExtrasLabel(m) && <span className="text-[11px] text-slate-400 block">{mealExtrasLabel(m)}</span>}
+                            {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="font-black text-primary">Rs {mealPrice(m, d.key)}</span>
@@ -663,6 +704,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       <div className="min-w-0">
                         <p className="text-xs font-bold text-slate-700">{d.short} · {mealSummaryLabel(m, d.key)}</p>
                         {mealExtrasLabel(m) && <p className="text-[11px] text-slate-400 mt-0.5">{mealExtrasLabel(m)}</p>}
+                        {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <span className="font-black text-slate-900 text-xs">Rs {mealPrice(m, d.key)}</span>
@@ -686,7 +728,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               </div>
             )}
 
-            {thisWeekLinesWithSeq.length > 0 && (
+            {weekOrders.length > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Confirmed this week</p>
@@ -694,33 +736,54 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     <button onClick={openPayBalance} className="text-[10px] font-black uppercase tracking-widest text-primary">Pay balance · {formatCurrency(outstandingTotal)}</button>
                   )}
                 </div>
-                <div className="space-y-3">
-                  {thisWeekLinesWithSeq.map((line, idx) => {
-                    const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
-                    const isCompleted = line.item.status === 'Completed';
-                    const isPaid = line.item.paymentStatus === 'Paid';
+                <div className="space-y-4">
+                  {weekOrders.map(({ order, lines }, gi) => {
+                    const orderPaid = lines.every(l => l.item.paymentStatus === 'Paid');
+                    const orderOutstanding = lines.filter(l => l.item.paymentStatus === 'Pending').reduce((t, l) => t + l.item.price, 0);
                     return (
-                      <div key={idx} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
-                        <div className="flex items-start justify-between gap-3 mb-2">
-                          <div>
-                            <div className="flex items-center gap-1.5">
-                              <p className="text-[10px] font-black uppercase text-primary tracking-widest">{line.item.deliveryDay}</p>
-                              {line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase">Extra {line.seq + 1}</span>}
-                            </div>
-                            <p className="text-sm font-bold text-slate-900">{line.item.name}</p>
-                            {line.item.notes && <p className="text-[11px] text-slate-400">{line.item.notes}</p>}
+                      <div key={order.id} className="bg-white rounded-2xl border border-[#E7E0D0] overflow-hidden">
+                        <div className="px-4 py-3 bg-[#F4EFE4] flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">{gi === 0 ? 'Your order' : `Additional order ${gi + 1}`} · {lines.length} meal{lines.length !== 1 ? 's' : ''}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5">Placed {new Date(order.timestamp).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</p>
                           </div>
-                          <span className="text-sm font-black text-slate-900 shrink-0">Rs {line.item.price}</span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 ${orderPaid ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
+                            {orderPaid ? 'Paid' : `${formatCurrency(orderOutstanding)} due`}
+                          </span>
                         </div>
-                        <div className="flex items-center gap-2 mb-3">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${isPaid ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>{isPaid ? 'Paid' : 'Unpaid'}</span>
-                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px] font-black uppercase">{line.item.status}</span>
-                        </div>
-                        <div className="flex gap-2">
-                          {!isPaid && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
-                          {line.item.status === 'Active' && <button onClick={() => handleCancel(line)} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Cancel</button>}
-                          {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
-                          {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
+                        <div className="divide-y divide-[#F0EADD]">
+                          {lines.map((line, idx) => {
+                            const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
+                            const isCompleted = line.item.status === 'Completed';
+                            const isPaid = line.item.paymentStatus === 'Paid';
+                            const { detail, person } = splitNotesTag(line.item.notes);
+                            return (
+                              <div key={idx} className="p-4">
+                                <div className="flex items-start justify-between gap-3 mb-2">
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <p className="text-[10px] font-black uppercase text-primary tracking-widest">{line.item.deliveryDay}</p>
+                                      {line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase">Extra {line.seq + 1}</span>}
+                                    </div>
+                                    <p className="text-sm font-bold text-slate-900">{line.item.name}</p>
+                                    {detail && <p className="text-[11px] text-slate-400">{detail}</p>}
+                                    {person && <div className="mt-1"><PersonTag name={person} /></div>}
+                                  </div>
+                                  <span className="text-sm font-black text-slate-900 shrink-0">Rs {line.item.price}</span>
+                                </div>
+                                <div className="flex items-center gap-2 mb-3">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${isPaid ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>{isPaid ? 'Paid' : 'Unpaid'}</span>
+                                  <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px] font-black uppercase">{line.item.status}</span>
+                                </div>
+                                <div className="flex gap-2">
+                                  {!isPaid && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
+                                  {line.item.status === 'Active' && <button onClick={() => handleCancel(line)} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Cancel</button>}
+                                  {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
+                                  {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     );
@@ -1011,6 +1074,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     </div>
   );
 };
+
+// A small pill for "who this meal is for" — used everywhere a note shows up
+// (draft cart, Menu tab, My Order, Home) so it reads as a tag, not prose.
+const PersonTag: React.FC<{ name: string }> = ({ name }) => (
+  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent/10 text-accent text-[10px] font-bold shrink-0">
+    <UserIcon className="size-2.5" /> {name}
+  </span>
+);
 
 const SectionCard: React.FC<{
   index: number;

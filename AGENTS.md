@@ -102,3 +102,15 @@ Bhimal sent screenshots of My Order (draft + confirmed) and the builder, with fi
 **Builder**: header photo `h-48` → `h-64` (was cramped), and it now carries live overlay pills for curry / base / extras-count as you pick them — tap a pill to jump back to that section — ported from the prototype's `updateShowcase()` treatment.
 
 Verified with a clean `tsc --noEmit`, shipped.
+
+## 2026-08-10: Claude — My Order grouped by Order, person tags, Home status/tags
+
+Follow-up to the round above — Bhimal clarified two things weren't actually addressed yet:
+
+**My Order was still a flat list, not grouped by Order.** The "Extra" tag from the last round tagged multiple meals *on the same day*, but the ask was grouping by the actual `Order` record — a checkout is one order, going back later to add an extra meal creates a second, separate order, and the screen should show that as two visually distinct blocks. Added `weekOrders` (groups `thisWeekLinesWithSeq` by `order.id`, sorted by `order.timestamp`) and rebuilt the "Confirmed this week" section around it: each order is now its own card with a header (`Your order` / `Additional order 2` / …, meal count, placed-date, paid/due badge) containing its meals nested inside. The per-day "Extra N" tag is unchanged and still shows inside a group, since two meals for the same day can still land in the same order.
+
+**"for Priya" is now a tag, not prose.** `OrderItem.notes` is still the one flat string it's always been (still didn't want to touch shared types) — added `splitNotesTag()` to pull the trailing `for X` segment back out of that string at render time, and a small `PersonTag` pill component (person icon + name) used everywhere a note shows up: My Order (draft and confirmed), the Menu tab's meal list, and Home's per-day mini cards. `mealExtrasLabel` no longer folds the note into its text for the same reason.
+
+**Home mini cards now show order status.** They previously showed only a paid/unpaid dot; added the same status badge (Active/Completed/Preparing/etc.) used everywhere else, plus the person tag, so Home matches what My Order shows instead of a stripped-down subset.
+
+Verified with a clean `tsc --noEmit`, shipped.
