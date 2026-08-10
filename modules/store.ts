@@ -59,6 +59,7 @@ export let PAYMENT_METHODS: PaymentMethod[] = [
   { id: '3', name: 'Juice / Transfer', type: 'Digital', isActive: true, icon: '📱', applicableTo: ['Delivery', 'Meal Plan', 'Takeout'] },
   { id: '4', name: 'Cash on Delivery', type: 'Cash', isActive: true, icon: '🚚', applicableTo: ['Delivery', 'Meal Plan'] },
   { id: '5', name: 'Staff Meal', type: 'Voucher', isActive: true, icon: '🎫', applicableTo: ['Dine-In'] },
+  { id: '6', name: 'MauCAS', type: 'Digital', isActive: true, icon: '📲', applicableTo: ['Delivery', 'Meal Plan'] },
 ];
 
 // --- INVENTORY MASTER DATA ---
@@ -216,6 +217,101 @@ export const getDayMenu = (dateKey: string, service: string) => {
   // Fallback mock data if no plan is published for that day
   return MEAL_LIBRARY_ITEMS.filter(i => i.availability.includes('Meal Plan') && (i.category === 'Mains' || i.category === 'Starters')).slice(0, 4);
 };
+
+// --- BONMANZE WEEKLY CURRY MENU ---
+// This is the real product data: a home-made Mauritian lunch service, one
+// curry family a day, built with a 3-step curry -> base -> extras wizard.
+// It replaces MEAL_LIBRARY_ITEMS (a generic restaurant catalog left over
+// from the ERP scaffold) as the source of truth for what the Customer App
+// actually sells. MEAL_LIBRARY_ITEMS is left in place, unused by the
+// Customer App, in case anything else in the tree still reads it.
+export interface CurryOption {
+  id: string;
+  emoji: string;
+  name: string;
+  desc: string;
+  price: number;
+}
+
+export const WEEKDAY_KEYS = ['MON', 'TUE', 'WED', 'THU', 'FRI'] as const;
+export type WeekdayKey = typeof WEEKDAY_KEYS[number];
+
+export const WEEKLY_CURRY_MENU: Record<WeekdayKey, CurryOption[]> = {
+  MON: [
+    { id: 'veg', emoji: '🥦', name: 'Veg Curry', desc: 'Creole spices · Vegan', price: 130 },
+    { id: 'chk', emoji: '🍗', name: 'Chicken Curry', desc: 'Home-style Mauritian', price: 150 },
+    { id: 'fsh', emoji: '🐟', name: 'Fish Curry', desc: 'Fresh local fish · Ginger', price: 190 },
+  ],
+  TUE: [
+    { id: 'len', emoji: '🥦', name: 'Lentil Curry', desc: 'Vegan · Turmeric', price: 125 },
+    { id: 'chk', emoji: '🍗', name: 'Chicken Curry', desc: 'Spiced · Onion & tomato', price: 150 },
+    { id: 'prn', emoji: '🦐', name: 'Prawn Curry', desc: 'Coconut & lemongrass', price: 210 },
+  ],
+  WED: [
+    { id: 'veg', emoji: '🥦', name: 'Veg Curry', desc: 'Seasonal vegetables', price: 130 },
+    { id: 'beef', emoji: '🥩', name: 'Beef Curry', desc: 'Slow-cooked · Creole sauce', price: 220 },
+    { id: 'fsh', emoji: '🐟', name: 'Fish Curry', desc: 'Ginger & tomato', price: 190 },
+  ],
+  THU: [
+    { id: 'chk', emoji: '🍗', name: 'Chicken Curry', desc: 'Tandoori · Yoghurt marinade', price: 150 },
+    { id: 'shp', emoji: '🦐', name: 'Shrimp Curry', desc: 'Coconut cream · Mild', price: 205 },
+    { id: 'veg', emoji: '🥦', name: 'Veg Curry', desc: 'Aromatic masala', price: 130 },
+  ],
+  FRI: [
+    { id: 'fsh', emoji: '🐟', name: 'Fish Curry', desc: 'Tamarind · Friday special', price: 190 },
+    { id: 'chk', emoji: '🍗', name: 'Chicken Curry', desc: 'Extra herbs · Friday special', price: 150 },
+    { id: 'pan', emoji: '🧀', name: 'Paneer Curry', desc: 'Spinach & spice', price: 160 },
+  ],
+};
+
+export interface AddOnOption { id: string; emoji: string; name: string; price?: number; up?: number; }
+
+export const MEAL_BASES: AddOnOption[] = [
+  { id: 'wrice', emoji: '🍚', name: 'White Rice', up: 0 },
+  { id: 'brice', emoji: '🌾', name: 'Brown Rice', up: 15 },
+  { id: 'quin', emoji: '🌿', name: 'Quinoa', up: 25 },
+  { id: 'cous', emoji: '🫓', name: 'Couscous', up: 20 },
+  { id: 'caul', emoji: '🥦', name: 'Cauliflower Rice', up: 20 },
+];
+export const MEAL_DHALS: AddOnOption[] = [
+  { id: 'moong', emoji: '🟡', name: 'Yellow Dhal' },
+  { id: 'red', emoji: '🟤', name: 'Red Lentil Dhal' },
+];
+export const MEAL_SALADS: AddOnOption[] = [
+  { id: 'garden', emoji: '🥗', name: 'Garden Salad' },
+  { id: 'slaw', emoji: '🥙', name: 'Creole Slaw' },
+];
+export const MEAL_BEVERAGES: AddOnOption[] = [
+  { id: 'alouda', emoji: '🥤', name: 'Alouda', price: 35 },
+  { id: 'lemonade', emoji: '🍋', name: 'Lemonade', price: 30 },
+  { id: 'water', emoji: '💧', name: 'Mineral Water', price: 0 },
+];
+export const MEAL_DESSERTS: AddOnOption[] = [
+  { id: 'gateau', emoji: '🍡', name: 'Gateau Piment', price: 25 },
+  { id: 'fruits', emoji: '🍌', name: 'Fruit Salad', price: 30 },
+  { id: 'cake', emoji: '🎂', name: 'Coconut Cake', price: 0 },
+];
+
+// Real dish photography (three actual photos, licensed for this app),
+// grouped by protein family so the same three photos cover every curry on
+// the menu without a new photo shoot each time a day's curry changes.
+export const dishPhotoFor = (curryId: string): string => {
+  if (['fsh', 'prn', 'shp'].includes(curryId)) return '/dishes/fish.jpg';
+  if (['veg', 'len', 'pan'].includes(curryId)) return '/dishes/veg.jpg';
+  return '/dishes/chicken.jpg';
+};
+
+// A little Mauritian Creole flavour so the app feels rooted in place rather
+// than a generic delivery template.
+export const CREOLE_PHRASES: { cr: string; en: string }[] = [
+  { cr: 'Manzé bien pou viv bien.', en: 'Eat well to live well.' },
+  { cr: "Nou tou dan mem sak.", en: "We're all in this together." },
+  { cr: 'Lakaz vinn kot manze bon.', en: 'Home is wherever the food is good.' },
+  { cr: 'Partaz manze, partaz lamour.', en: 'Share food, share love.' },
+  { cr: 'Pa gagn traka, manze pare.', en: "Don't worry, lunch is sorted." },
+  { cr: 'Enn ti kari, enn gran plaisir.', en: 'One small curry, one big pleasure.' },
+  { cr: 'Bon manze, bon lazourné.', en: 'Good food, good day.' },
+];
 
 // --- CUSTOMER SYSTEM ---
 export let GLOBAL_CUSTOMERS: Customer[] = [

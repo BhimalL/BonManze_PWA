@@ -15,10 +15,9 @@ import {
   Mail,
   Star,
   MapPin,
-  RefreshCw,
   Clock
 } from 'lucide-react';
-import { Order, OrderItem, Customer, PaymentMethod, MenuItem } from '../types';
+import { Order, OrderItem, Customer, PaymentMethod } from '../types';
 import {
   subscribeToOrders,
   updateOrderStatus,
@@ -26,12 +25,13 @@ import {
   updateOrderPayment,
   updateOrderItemsPayment,
   subscribeToCustomers,
-  subscribeToMealLibrary,
   subscribeToPaymentMethods,
   subscribeToSystemDate,
   updateSystemDate,
   MOCK_TODAY,
-  PUBLISHED_PLAN,
+  WEEKDAY_KEYS,
+  WEEKLY_CURRY_MENU,
+  dishPhotoFor,
   formatCurrency
 } from './store';
 
@@ -68,24 +68,38 @@ interface DropTask {
   isMealPlan: boolean;
 }
 
+const getThisWeekDays = (systemDateStr: string) => {
+  const [y, m, d] = systemDateStr.split('-').map(Number);
+  const base = new Date(y, (m || 1) - 1, d || 1);
+  const dow = base.getDay();
+  const diffToMonday = dow === 0 ? 1 : (1 - dow);
+  const monday = new Date(base);
+  monday.setDate(base.getDate() + diffToMonday);
+  return WEEKDAY_KEYS.map((key, i) => {
+    const dt = new Date(monday);
+    dt.setDate(monday.getDate() + i);
+    const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    return { key, date: iso, label: dt.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) };
+  });
+};
+
 const OperatorConsole: React.FC<OperatorConsoleProps> = ({ onExit }) => {
   const [tab, setTab] = useState<Tab>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [meals, setMeals] = useState<MenuItem[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [systemDate, setSystemDate] = useState(MOCK_TODAY);
-  const [plan, setPlan] = useState<any>(PUBLISHED_PLAN);
   const [paymentDrop, setPaymentDrop] = useState<DropTask | null>(null);
 
   useEffect(() => {
     const u1 = subscribeToOrders(setOrders);
     const u2 = subscribeToCustomers(setCustomers);
-    const u3 = subscribeToMealLibrary(setMeals);
-    const u4 = subscribeToPaymentMethods(setPaymentMethods);
-    const u5 = subscribeToSystemDate(setSystemDate);
-    return () => { u1(); u2(); u3(); u4(); u5(); };
+    const u3 = subscribeToPaymentMethods(setPaymentMethods);
+    const u4 = subscribeToSystemDate(setSystemDate);
+    return () => { u1(); u2(); u3(); u4(); };
   }, []);
+
+  const weekDays = useMemo(() => getThisWeekDays(systemDate), [systemDate]);
 
   // Non-cancelled order lines, flattened for aggregation across tabs.
   const lines = useMemo(() => {
@@ -208,8 +222,6 @@ const OperatorConsole: React.FC<OperatorConsoleProps> = ({ onExit }) => {
     setPaymentDrop(null);
   };
 
-  const refreshPlan = () => setPlan(PUBLISHED_PLAN);
-
   return (
     <div className="h-full w-full overflow-y-auto custom-scrollbar bg-[#f8fafb]">
       <header className="sticky top-0 z-20 bg-white/90 backdrop-blur-md border-b border-slate-200 px-6 py-4 flex items-center justify-between">
@@ -253,54 +265,28 @@ const OperatorConsole: React.FC<OperatorConsoleProps> = ({ onExit }) => {
         {tab === 'menu' && (
           <div className="space-y-6">
             <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-base font-black text-slate-900">Published Weekly Plan</h2>
-                <button onClick={refreshPlan} className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-primary hover:opacity-70">
-                  <RefreshCw className="size-3" /> Refresh
-                </button>
-              </div>
-              {Object.keys(plan || {}).length === 0 ? (
-                <div className="py-10 text-center opacity-40">
-                  <BookOpen className="size-10 mx-auto mb-3" />
-                  <p className="text-xs font-bold uppercase tracking-widest">No plan published for this week yet</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {Object.keys(plan).sort().map(dateKey => (
-                    <div key={dateKey} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{formatDay(dateKey)}</p>
-                      {Object.keys(plan[dateKey]).map(service => (
-                        <div key={service} className="mb-3">
-                          <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">{service}</p>
-                          <ul className="space-y-1">
-                            {(plan[dateKey][service] as MenuItem[]).map((m, idx) => (
-                              <li key={idx} className="flex justify-between text-xs font-bold text-slate-700">
-                                <span>{m.name}</span>
-                                <span className="text-slate-400">{formatCurrency(m.price)}</span>
-                              </li>
-                            ))}
-                          </ul>
+              <h2 className="text-base font-black text-slate-900 mb-4">This Week's Curry Menu</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                {weekDays.map(d => (
+                  <div key={d.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                    <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{d.label}</p>
+                    <div className="space-y-2">
+                      {WEEKLY_CURRY_MENU[d.key].map(c => (
+                        <div key={c.id} className="flex items-center gap-2">
+                          <img src={dishPhotoFor(c.id)} alt={c.name} className="size-9 rounded-lg object-cover shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-bold text-slate-800 truncate">{c.emoji} {c.name}</p>
+                          </div>
+                          <span className="text-[10px] font-black text-slate-400 shrink-0">{formatCurrency(c.price)}</span>
                         </div>
                       ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-              <h2 className="text-base font-black text-slate-900 mb-4">Available Dishes</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {meals.filter(m => m.status === 'Active').map(m => (
-                  <div key={m.id} className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100">
-                    <img src={m.image} alt={m.name} className="size-12 rounded-xl object-cover shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-slate-900 truncate">{m.name}</p>
-                      <p className="text-[10px] text-slate-400 font-bold">{formatCurrency(m.price)}</p>
                     </div>
                   </div>
                 ))}
               </div>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-4">
+                Fixed weekly menu for now — editing next week's curries here is the next piece of work, not built yet.
+              </p>
             </div>
           </div>
         )}
