@@ -31,7 +31,19 @@ export const SYSTEM_CONFIG = {
   vatRate: 15,
   vatNumber: 'VAT12345678',
   bulkDiscountEnabled: true,
-  bulkDiscountRate: 5
+  bulkDiscountRate: 5,
+  // Business identity — editable from Operations so branding (and the
+  // invoice/receipt) doesn't require a code change to update. logoUrl is a
+  // plain image URL rather than an upload, since there's no backend/storage
+  // to hold an uploaded file; '' falls back to the default mark everywhere
+  // this is used.
+  businessName: 'BonManzE',
+  businessTagline: 'Homemade · Delivered fresh',
+  businessLogoUrl: '',
+  // Dinner is a second, independently toggleable offering that otherwise
+  // works exactly like Lunch — same weekly-menu pattern, same cart/checkout
+  // flow, same 9AM same-day cutoff. See WEEKLY_DINNER_MENU below.
+  dinnerEnabled: true
 };
 
 export const formatNumber = (value: number | undefined | null) => {
@@ -294,6 +306,54 @@ export const updateCurryOption = (day: WeekdayKey, curryId: string, updates: Par
     [day]: WEEKLY_CURRY_MENU[day].map(c => c.id === curryId ? { ...c, ...updates } : c)
   };
   weeklyMenuListeners.forEach(l => l({ ...WEEKLY_CURRY_MENU }));
+};
+
+// Dinner — a second offering, toggled on/off via SYSTEM_CONFIG.dinnerEnabled,
+// that otherwise mirrors WEEKLY_CURRY_MENU exactly: same shape, same
+// subscribe/update pattern, same curry ids (so dishPhotoFor's protein-family
+// photo mapping just works for these too, no new photos needed).
+export let WEEKLY_DINNER_MENU: Record<WeekdayKey, CurryOption[]> = {
+  MON: [
+    { id: 'beef', emoji: '🥩', name: 'Beef Curry', desc: 'Slow-cooked overnight · Rich gravy', price: 240 },
+    { id: 'chk', emoji: '🍗', name: 'Chicken Curry', desc: 'Butter & cream finish', price: 180 },
+    { id: 'pan', emoji: '🧀', name: 'Paneer Curry', desc: 'Cashew & tomato', price: 175 },
+  ],
+  TUE: [
+    { id: 'fsh', emoji: '🐟', name: 'Fish Curry', desc: 'Grilled first · Tamarind glaze', price: 220 },
+    { id: 'chk', emoji: '🍗', name: 'Chicken Curry', desc: 'Slow braise · Root vegetables', price: 180 },
+    { id: 'len', emoji: '🥦', name: 'Lentil Curry', desc: 'Five-lentil dal · Ghee tempered', price: 150 },
+  ],
+  WED: [
+    { id: 'prn', emoji: '🦐', name: 'Prawn Curry', desc: 'Garlic butter · Chilli', price: 250 },
+    { id: 'beef', emoji: '🥩', name: 'Beef Curry', desc: 'Red wine & clove', price: 240 },
+    { id: 'veg', emoji: '🥦', name: 'Veg Curry', desc: 'Roasted seasonal vegetables', price: 155 },
+  ],
+  THU: [
+    { id: 'shp', emoji: '🦐', name: 'Shrimp Curry', desc: 'Coconut cream · Curry leaf', price: 235 },
+    { id: 'chk', emoji: '🍗', name: 'Chicken Curry', desc: 'Char-grilled · Smoked masala', price: 180 },
+    { id: 'pan', emoji: '🧀', name: 'Paneer Curry', desc: 'Spinach & fenugreek', price: 175 },
+  ],
+  FRI: [
+    { id: 'fsh', emoji: '🐟', name: 'Fish Curry', desc: 'Weekend catch · Creole sauce', price: 220 },
+    { id: 'beef', emoji: '🥩', name: 'Beef Curry', desc: 'Friday special · Slow-braised', price: 250 },
+    { id: 'veg', emoji: '🥦', name: 'Veg Curry', desc: 'Mixed vegetable masala', price: 155 },
+  ],
+};
+
+const dinnerMenuListeners = new Set<(menu: Record<WeekdayKey, CurryOption[]>) => void>();
+
+export const subscribeToDinnerMenu = (listener: (menu: Record<WeekdayKey, CurryOption[]>) => void) => {
+  dinnerMenuListeners.add(listener);
+  listener({ ...WEEKLY_DINNER_MENU });
+  return () => { dinnerMenuListeners.delete(listener); };
+};
+
+export const updateDinnerCurryOption = (day: WeekdayKey, curryId: string, updates: Partial<Pick<CurryOption, 'name' | 'desc' | 'price' | 'emoji'>>) => {
+  WEEKLY_DINNER_MENU = {
+    ...WEEKLY_DINNER_MENU,
+    [day]: WEEKLY_DINNER_MENU[day].map(c => c.id === curryId ? { ...c, ...updates } : c)
+  };
+  dinnerMenuListeners.forEach(l => l({ ...WEEKLY_DINNER_MENU }));
 };
 
 export interface AddOnOption { id: string; emoji: string; name: string; price?: number; up?: number; }
@@ -1161,6 +1221,10 @@ export const updateSystemConfig = (updates: Partial<typeof SYSTEM_CONFIG>) => {
   if (updates.bulkDiscountEnabled !== undefined) SYSTEM_CONFIG.bulkDiscountEnabled = updates.bulkDiscountEnabled;
   if (updates.bulkDiscountRate !== undefined) SYSTEM_CONFIG.bulkDiscountRate = updates.bulkDiscountRate;
   if (updates.deadlinePolicy !== undefined) SYSTEM_CONFIG.deadlinePolicy = updates.deadlinePolicy;
+  if (updates.businessName !== undefined) SYSTEM_CONFIG.businessName = updates.businessName;
+  if (updates.businessTagline !== undefined) SYSTEM_CONFIG.businessTagline = updates.businessTagline;
+  if (updates.businessLogoUrl !== undefined) SYSTEM_CONFIG.businessLogoUrl = updates.businessLogoUrl;
+  if (updates.dinnerEnabled !== undefined) SYSTEM_CONFIG.dinnerEnabled = updates.dinnerEnabled;
   configListeners.forEach(l => l());
 };
 

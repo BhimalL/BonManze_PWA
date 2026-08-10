@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ArrowLeft,
   BookOpen,
@@ -33,6 +33,9 @@ import {
   updateSystemDate,
   subscribeToWeeklyMenu,
   updateCurryOption,
+  subscribeToDinnerMenu,
+  updateDinnerCurryOption,
+  WEEKLY_DINNER_MENU,
   MOCK_TODAY,
   WEEKDAY_KEYS,
   WeekdayKey,
@@ -40,7 +43,10 @@ import {
   CurryOption,
   dishPhotoFor,
   formatCurrency,
-  MEAL_PLAN_PAYMENT_METHOD_NAMES
+  MEAL_PLAN_PAYMENT_METHOD_NAMES,
+  SYSTEM_CONFIG,
+  subscribeToConfig,
+  updateSystemConfig
 } from './store';
 
 interface OperationsProps {
@@ -48,6 +54,10 @@ interface OperationsProps {
 }
 
 type Tab = 'menu' | 'orders' | 'delivery' | 'payments' | 'customers';
+
+// Which offering a curry-menu edit applies to — Dinner is a second,
+// independently toggleable offering that otherwise mirrors Lunch exactly.
+type Service = 'Lunch' | 'Dinner';
 
 const TABS: { id: Tab; label: string; icon: any }[] = [
   { id: 'menu', label: "This Week's Menu", icon: BookOpen },
@@ -109,17 +119,44 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [systemDate, setSystemDate] = useState(MOCK_TODAY);
   const [weeklyMenu, setWeeklyMenu] = useState(WEEKLY_CURRY_MENU);
+  const [dinnerMenu, setDinnerMenu] = useState(WEEKLY_DINNER_MENU);
   const [paymentDrop, setPaymentDrop] = useState<DropTask | null>(null);
 
   // Which curry is being edited inline on the Menu tab, plus its draft
-  // values — Save calls updateCurryOption, Cancel just clears this.
-  const [editingCurry, setEditingCurry] = useState<{ day: WeekdayKey; curryId: string } | null>(null);
+  // values — Save calls updateCurryOption/updateDinnerCurryOption depending
+  // on `service`, Cancel just clears this.
+  const [editingCurry, setEditingCurry] = useState<{ day: WeekdayKey; curryId: string; service: Service } | null>(null);
   const [editForm, setEditForm] = useState({ name: '', desc: '', price: '' });
+
+  // Dinner is a second, independently toggleable offering (same pattern as
+  // the VAT switch below) — customers never see this switch, only Bhimal
+  // does, here in Operations. Defaults to whatever SYSTEM_CONFIG currently
+  // holds and flips immediately on click, same as VAT's on/off toggle.
+  const [dinnerEnabled, setDinnerEnabledLocal] = useState(SYSTEM_CONFIG.dinnerEnabled);
 
   // Delivery List defaults to today; this overrides that when Bhimal taps
   // another day's chip to peek ahead. null = "follow today".
   const [deliveryDayOverride, setDeliveryDayOverride] = useState<WeekdayKey | null>(null);
   const [showPaidHistory, setShowPaidHistory] = useState(false);
+
+  // VAT can only legally be charged once BonManzE is actually VAT-registered
+  // with the MRA (Mauritius's registration threshold is MUR 3M/yr turnover,
+  // or voluntary registration below that) — so this needs to be a switch
+  // Bhimal can flip himself, not a hardcoded true buried in store.ts. Rate/
+  // VRN are edited as drafts and only pushed to the store on Save; the
+  // on/off switch itself commits immediately since it's a single toggle.
+  const [vatEnabled, setVatEnabledLocal] = useState(SYSTEM_CONFIG.vatEnabled);
+  const [vatRateInput, setVatRateInput] = useState(String(SYSTEM_CONFIG.vatRate));
+  const [vatNumberInput, setVatNumberInput] = useState(SYSTEM_CONFIG.vatNumber);
+
+  // Business identity — name/tagline/logo shown on the Customer App header,
+  // login screen, and the receipt/invoice. Edited as a draft, pushed to the
+  // store on Save, same pattern as the VAT details below.
+  const [brandForm, setBrandForm] = useState({
+    name: SYSTEM_CONFIG.businessName,
+    tagline: SYSTEM_CONFIG.businessTagline,
+    logoUrl: SYSTEM_CONFIG.businessLogoUrl
+  });
 
   useEffect(() => {
     const u1 = subscribeToOrders(setOrders);
@@ -127,8 +164,61 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     const u3 = subscribeToPaymentMethods(setPaymentMethods);
     const u4 = subscribeToSystemDate(setSystemDate);
     const u5 = subscribeToWeeklyMenu(setWeeklyMenu);
-    return () => { u1(); u2(); u3(); u4(); u5(); };
+    const u6 = subscribeToConfig(() => {
+      setVatEnabledLocal(SYSTEM_CONFIG.vatEnabled);
+      setVatRateInput(String(SYSTEM_CONFIG.vatRate));
+      setVatNumberInput(SYSTEM_CONFIG.vatNumber);
+      setBrandForm({ name: SYSTEM_CONFIG.businessName, tagline: SYSTEM_CONFIG.businessTagline, logoUrl: SYSTEM_CONFIG.businessLogoUrl });
+      setDinnerEnabledLocal(SYSTEM_CONFIG.dinnerEnabled);
+    });
+    const u7 = subscribeToDinnerMenu(setDinnerMenu);
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); };
   }, []);
+
+  const toggleVat = (next: boolean) => updateSystemConfig({ vatEnabled: next });
+  const toggleDinner = (next: boolean) => updateSystemConfig({ dinnerEnabled: next });
+  const saveVatDetails = () => {
+    const parsedRate = parseFloat(vatRateInput);
+    updateSystemConfig({
+      vatRate: isNaN(parsedRate) ? SYSTEM_CONFIG.vatRate : parsedRate,
+      vatNumber: vatNumberInput.trim()
+    });
+  };
+  const saveBranding = () => {
+    updateSystemConfig({
+      businessName: brandForm.name.trim() || SYSTEM_CONFIG.businessName,
+      businessTagline: brandForm.tagline.trim(),
+      businessLogoUrl: brandForm.logoUrl.trim()
+    });
+  };
+
+  // Logo upload — there's no backend/file storage in this app, so the
+  // chosen image is read into a base64 data URL and stored directly as
+  // businessLogoUrl, same as if a URL had been pasted in. Kept under 1.5MB
+  // so it doesn't bloat the saved app state.
+  const logoFileInputRef = useRef<HTMLInputElement>(null);
+  const [logoError, setLogoError] = useState('');
+  const handleLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setLogoError('Please choose an image file.');
+      return;
+    }
+    if (file.size > 1_500_000) {
+      setLogoError("That image is over 1.5MB — pick a smaller file.");
+      return;
+    }
+    setLogoError('');
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setBrandForm(f => ({ ...f, logoUrl: reader.result as string }));
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   const weekDays = useMemo(() => getThisWeekDays(systemDate), [systemDate]);
   const weekDateKeys = useMemo(() => new Set(weekDays.map(d => d.date)), [weekDays]);
@@ -152,15 +242,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // this scope it would silently accumulate every past and future week's
   // orders into one undifferentiated list. Tracks a representative itemId
   // per dish so the row can show a real photo, not just a name.
+  // Keyed by service + name (not just name) — Lunch and Dinner can each have
+  // a dish that happens to share a name, and they're cooked/delivered as
+  // separate batches, so they must never be summed together here.
   const dishesByDay = useMemo(() => {
-    const days: Record<string, Record<string, { qty: number; revenue: number; itemId: string }>> = {};
+    const days: Record<string, Record<string, { qty: number; revenue: number; itemId: string; name: string; service: Service }>> = {};
     lines.forEach(({ item }) => {
       const day = item.deliveryDate || '';
       if (!weekDateKeys.has(day)) return;
+      const service: Service = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
+      const key = `${service}::${item.name}`;
       if (!days[day]) days[day] = {};
-      if (!days[day][item.name]) days[day][item.name] = { qty: 0, revenue: 0, itemId: item.itemId };
-      days[day][item.name].qty += item.qty;
-      days[day][item.name].revenue += item.qty * item.price;
+      if (!days[day][key]) days[day][key] = { qty: 0, revenue: 0, itemId: item.itemId, name: item.name, service };
+      days[day][key].qty += item.qty;
+      days[day][key].revenue += item.qty * item.price;
     });
     return days;
   }, [lines, weekDateKeys]);
@@ -266,16 +361,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setPaymentDrop(null);
   };
 
-  const startEditCurry = (day: WeekdayKey, curry: CurryOption) => {
-    setEditingCurry({ day, curryId: curry.id });
+  const startEditCurry = (day: WeekdayKey, curry: CurryOption, service: Service = 'Lunch') => {
+    setEditingCurry({ day, curryId: curry.id, service });
     setEditForm({ name: curry.name, desc: curry.desc, price: String(curry.price) });
   };
 
   const saveCurryEdit = () => {
     if (!editingCurry) return;
-    const existing = weeklyMenu[editingCurry.day].find(c => c.id === editingCurry.curryId);
+    const menu = editingCurry.service === 'Dinner' ? dinnerMenu : weeklyMenu;
+    const update = editingCurry.service === 'Dinner' ? updateDinnerCurryOption : updateCurryOption;
+    const existing = menu[editingCurry.day].find(c => c.id === editingCurry.curryId);
     const parsedPrice = parseInt(editForm.price, 10);
-    updateCurryOption(editingCurry.day, editingCurry.curryId, {
+    update(editingCurry.day, editingCurry.curryId, {
       name: editForm.name.trim() || existing?.name || '',
       desc: editForm.desc.trim(),
       price: isNaN(parsedPrice) ? (existing?.price || 0) : parsedPrice
@@ -326,14 +423,32 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         {tab === 'menu' && (
           <div className="space-y-6">
             <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-              <h2 className="text-base font-black text-slate-900 mb-4">This Week's Curry Menu</h2>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">Dinner offering</h3>
+                  <p className="text-xs text-slate-400 font-medium mt-1 max-w-sm">
+                    Dinner works exactly like Lunch — its own weekly menu below, same 9:00 AM same-day cutoff on the Customer App. Turn it off to hide it from customers entirely.
+                  </p>
+                </div>
+                <button
+                  onClick={() => toggleDinner(!dinnerEnabled)}
+                  aria-label="Toggle Dinner offering"
+                  className={`shrink-0 relative w-12 h-7 rounded-full transition-colors ${dinnerEnabled ? 'bg-primary' : 'bg-slate-200'}`}
+                >
+                  <span className={`absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform ${dinnerEnabled ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+              <h2 className="text-base font-black text-slate-900 mb-4">This Week's Curry Menu — Lunch</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
                 {weekDays.map(d => (
                   <div key={d.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                     <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{d.label}</p>
                     <div className="space-y-2">
                       {weeklyMenu[d.key].map(c => {
-                        const isEditing = editingCurry?.day === d.key && editingCurry.curryId === c.id;
+                        const isEditing = editingCurry?.day === d.key && editingCurry.curryId === c.id && editingCurry.service === 'Lunch';
                         if (isEditing) {
                           return (
                             <div key={c.id} className="p-3 bg-white rounded-xl border-2 border-primary/30 space-y-2">
@@ -372,7 +487,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               <p className="text-[10px] text-slate-400 truncate">{c.desc}</p>
                             </div>
                             <span className="text-[10px] font-black text-slate-400 shrink-0">{formatCurrency(c.price)}</span>
-                            <button onClick={() => startEditCurry(d.key, c)} className="p-1 text-slate-300 hover:text-primary shrink-0">
+                            <button onClick={() => startEditCurry(d.key, c, 'Lunch')} className="p-1 text-slate-300 hover:text-primary shrink-0">
                               <Edit3 className="size-3.5" />
                             </button>
                           </div>
@@ -386,6 +501,70 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 Tap the pencil to edit a curry's name, description, or price — changes apply immediately on the Customer App.
               </p>
             </div>
+
+            {dinnerEnabled && (
+              <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                <h2 className="text-base font-black text-slate-900 mb-4">This Week's Curry Menu — Dinner</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                  {weekDays.map(d => (
+                    <div key={d.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                      <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{d.label}</p>
+                      <div className="space-y-2">
+                        {dinnerMenu[d.key].map(c => {
+                          const isEditing = editingCurry?.day === d.key && editingCurry.curryId === c.id && editingCurry.service === 'Dinner';
+                          if (isEditing) {
+                            return (
+                              <div key={c.id} className="p-3 bg-white rounded-xl border-2 border-primary/30 space-y-2">
+                                <input
+                                  value={editForm.name}
+                                  onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
+                                  placeholder="Name"
+                                  className="w-full text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
+                                />
+                                <input
+                                  value={editForm.desc}
+                                  onChange={e => setEditForm(f => ({ ...f, desc: e.target.value }))}
+                                  placeholder="Description"
+                                  className="w-full text-[11px] px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
+                                />
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] font-bold text-slate-400">Rs</span>
+                                  <input
+                                    type="number"
+                                    value={editForm.price}
+                                    onChange={e => setEditForm(f => ({ ...f, price: e.target.value }))}
+                                    className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
+                                  />
+                                  <div className="flex-1" />
+                                  <button onClick={saveCurryEdit} className="p-1.5 bg-primary text-white rounded-lg"><Check className="size-3.5" /></button>
+                                  <button onClick={() => setEditingCurry(null)} className="p-1.5 bg-slate-100 text-slate-400 rounded-lg"><X className="size-3.5" /></button>
+                                </div>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div key={c.id} className="flex items-center gap-2">
+                              <img src={dishPhotoFor(c.id)} alt={c.name} className="size-9 rounded-lg object-cover shrink-0" />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-bold text-slate-800 truncate">{c.emoji} {c.name}</p>
+                                <p className="text-[10px] text-slate-400 truncate">{c.desc}</p>
+                              </div>
+                              <span className="text-[10px] font-black text-slate-400 shrink-0">{formatCurrency(c.price)}</span>
+                              <button onClick={() => startEditCurry(d.key, c, 'Dinner')} className="p-1 text-slate-300 hover:text-primary shrink-0">
+                                <Edit3 className="size-3.5" />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-4">
+                  Tap the pencil to edit a curry's name, description, or price — changes apply immediately on the Customer App.
+                </p>
+              </div>
+            )}
           </div>
         )}
 
@@ -404,12 +583,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     <p className="text-xs text-slate-400 font-bold">No orders yet for this day.</p>
                   ) : (
                     <div className="divide-y divide-slate-100">
-                      {Object.entries(dishes).map(([name, agg]) => {
-                        const { qty, revenue, itemId } = agg as { qty: number; revenue: number; itemId: string };
+                      {Object.entries(dishes).map(([key, agg]) => {
+                        const { qty, revenue, itemId, name, service } = agg as { qty: number; revenue: number; itemId: string; name: string; service: Service };
                         return (
-                          <div key={name} className="flex items-center gap-3 py-2.5">
+                          <div key={key} className="flex items-center gap-3 py-2.5">
                             <img src={dishPhotoFor(itemId)} alt={name} className="size-9 rounded-lg object-cover shrink-0" />
                             <span className="text-sm font-bold text-slate-700 flex-1 min-w-0 truncate">{name}</span>
+                            {service === 'Dinner' && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Dinner</span>}
                             <span className="text-xs font-black text-slate-900 shrink-0">{qty}x</span>
                             <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
                           </div>
@@ -479,6 +659,113 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
         {tab === 'payments' && (
           <div className="space-y-6">
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+              <h3 className="text-sm font-black text-slate-900 mb-1">Business branding</h3>
+              <p className="text-xs text-slate-400 font-medium mb-4">Shown on the Customer App header, login screen, and every receipt/invoice.</p>
+              <div className="flex items-start gap-4">
+                <div className="shrink-0">
+                  {brandForm.logoUrl ? (
+                    <img src={brandForm.logoUrl} alt="Logo preview" className="size-14 rounded-xl object-cover border border-slate-200" />
+                  ) : (
+                    <div className="size-14 rounded-xl bg-primary flex items-center justify-center text-white text-xl font-black">
+                      {(brandForm.name || 'B').charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Business name</label>
+                    <input
+                      value={brandForm.name}
+                      onChange={e => setBrandForm(f => ({ ...f, name: e.target.value }))}
+                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Tagline</label>
+                    <input
+                      value={brandForm.tagline}
+                      onChange={e => setBrandForm(f => ({ ...f, tagline: e.target.value }))}
+                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Logo</label>
+                    <input ref={logoFileInputRef} type="file" accept="image/*" onChange={handleLogoFileChange} className="hidden" />
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => logoFileInputRef.current?.click()}
+                        className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                      >
+                        Upload image
+                      </button>
+                      {brandForm.logoUrl && (
+                        <button type="button" onClick={() => setBrandForm(f => ({ ...f, logoUrl: '' }))} className="text-xs font-bold text-danger">
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    {logoError && <p className="text-[11px] text-danger font-bold mt-1.5">{logoError}</p>}
+                    <p className="text-[10px] text-slate-400 mt-2 mb-1">Or paste an image URL:</p>
+                    <input
+                      value={brandForm.logoUrl.startsWith('data:') ? '' : brandForm.logoUrl}
+                      onChange={e => setBrandForm(f => ({ ...f, logoUrl: e.target.value }))}
+                      placeholder="https://... (leave blank to use the default mark)"
+                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                  <button onClick={saveBranding} className="sm:col-span-2 py-2.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest">
+                    Save branding
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">VAT</h3>
+                  <p className="text-xs text-slate-400 font-medium mt-1 max-w-sm">
+                    Mauritius only allows VAT to be charged once turnover passes MUR 3M/year (or you've voluntarily registered). Leave this off until BonManzE is actually VAT-registered with the MRA.
+                  </p>
+                </div>
+                <button
+                  onClick={() => toggleVat(!vatEnabled)}
+                  aria-label="Toggle VAT"
+                  className={`shrink-0 relative w-12 h-7 rounded-full transition-colors ${vatEnabled ? 'bg-primary' : 'bg-slate-200'}`}
+                >
+                  <span className={`absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform ${vatEnabled ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
+
+              {vatEnabled && (
+                <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-slate-100">
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">VAT rate (%)</label>
+                    <input
+                      type="number"
+                      value={vatRateInput}
+                      onChange={e => setVatRateInput(e.target.value)}
+                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">VRN (VAT reg. no.)</label>
+                    <input
+                      value={vatNumberInput}
+                      onChange={e => setVatNumberInput(e.target.value)}
+                      placeholder="e.g. VAT12345678"
+                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                  <button onClick={saveVatDetails} className="col-span-2 py-2.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest">
+                    Save VAT details
+                  </button>
+                </div>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
                 <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Collected</p>

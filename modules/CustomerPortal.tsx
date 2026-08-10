@@ -24,13 +24,16 @@ import {
   Edit3,
   Trash2,
   Copy,
-  Check
+  Check,
+  Receipt,
+  Printer
 } from 'lucide-react';
 import { Customer, Order, OrderItem, PaymentMethod } from '../types';
 import {
   WEEKDAY_KEYS,
   WeekdayKey,
   WEEKLY_CURRY_MENU,
+  WEEKLY_DINNER_MENU,
   MEAL_BASES,
   MEAL_DHALS,
   MEAL_SALADS,
@@ -48,6 +51,8 @@ import {
   subscribeToOrders,
   subscribeToSystemDate,
   subscribeToWeeklyMenu,
+  subscribeToDinnerMenu,
+  subscribeToConfig,
   MOCK_TODAY,
   addOrder,
   cancelOrderItem,
@@ -70,6 +75,51 @@ const isPastCutoff = (deliveryDate: string, systemDate: string): boolean => {
   if (deliveryDate > systemDate) return false;
   return new Date().getHours() >= 9;
 };
+
+// Which offering a meal belongs to — Dinner is a second, independently
+// toggleable offering (SYSTEM_CONFIG.dinnerEnabled) that otherwise works
+// exactly like Lunch: its own weekly menu, its own draft cart, tagged onto
+// OrderItem.serviceSlot the same way Lunch already is ('Lunch'/'Lunch-2' vs
+// 'Dinner'/'Dinner-2').
+type Service = 'Lunch' | 'Dinner';
+
+// Reads which offering a confirmed item belongs to straight off its
+// serviceSlot tag ('Lunch'/'Lunch-2' vs 'Dinner'/'Dinner-2') — used to
+// regroup My Order / the receipt by offering, not just by day.
+const serviceOf = (item: OrderItem): Service => (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
+
+// Shared shape of every "line" this screen deals with — a confirmed order
+// item plus which order it belongs to, and (for My Order) an optional
+// same-day sequence number used for the "Extra" badge.
+interface OrderLine { order: Order; item: OrderItem; seq?: number; }
+
+// Order -> Offering -> Day, in that nesting order — an order can contain
+// both Lunch and Dinner items for the same day (or, for a receipt spanning
+// a "Pay balance" claim, more than one order), and each level is cooked/
+// delivered/settled as its own distinct batch, so they always render as
+// separate groups rather than being interleaved.
+function groupByOrderServiceDay(lines: OrderLine[]) {
+  const orderIds: string[] = [];
+  lines.forEach(l => { if (!orderIds.includes(l.order.id)) orderIds.push(l.order.id); });
+  return orderIds.map(orderId => {
+    const orderLines = lines.filter(l => l.order.id === orderId);
+    const services = (['Lunch', 'Dinner'] as Service[])
+      .map(service => {
+        const serviceLines = orderLines.filter(l => serviceOf(l.item) === service);
+        if (!serviceLines.length) return null;
+        const days: { date: string; label: string; items: OrderLine[] }[] = [];
+        serviceLines.forEach(line => {
+          const date = line.item.deliveryDate || '';
+          const last = days[days.length - 1];
+          if (last && last.date === date) last.items.push(line);
+          else days.push({ date, label: line.item.deliveryDay || '', items: [line] });
+        });
+        return { service, days };
+      })
+      .filter((g): g is { service: Service; days: { date: string; label: string; items: OrderLine[] }[] } => g !== null);
+    return { order: orderLines[0].order, services };
+  });
+}
 
 interface MealSelection {
   curryId: string;
@@ -209,6 +259,13 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [systemDate, setSystemDate] = useState(MOCK_TODAY);
   const [view, setView] = useState<'home' | 'menu' | 'order' | 'profile'>('home');
   const [cart, setCart] = useState<Record<string, MealSelection[]>>({});
+  // Dinner's own draft cart, kept as a separate parallel state rather than
+  // folding a service key into `cart` — same shape, same day-keyed pattern,
+  // just a second bucket so Lunch's existing logic above stays untouched.
+  const [dinnerCart, setDinnerCart] = useState<Record<string, MealSelection[]>>({});
+  // Which offering the Menu tab is currently browsing/adding to — the Draft
+  // review further down shows both services at once regardless of this.
+  const [activeService, setActiveService] = useState<Service>('Lunch');
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   // Home's "How BonManzE works" card starts collapsed — repeat customers
@@ -217,7 +274,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [guideOpen, setGuideOpen] = useState(false);
 
   const [builder, setBuilder] = useState<{
-    day: WeekDay; openSection: 1 | 2 | 3; sel: MealSelection; editIndex: number | null;
+    day: WeekDay; service: Service; openSection: 1 | 2 | 3; sel: MealSelection; editIndex: number | null;
     // Set only when editing an already-confirmed meal (as opposed to a
     // draft-cart one, which uses editIndex) — commitBuilder branches on this.
     editingConfirmed: { orderId: string; date: string; slot: string } | null;
@@ -235,9 +292,20 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [ratings, setRatings] = useState<Record<string, { stars: number; comment: string }>>({});
   const [rateTarget, setRateTarget] = useState<{ orderId: string; itemId: string; label: string } | null>(null);
   const [rateStars, setRateStars] = useState(0);
+
+  // Receipt sheet — either one paid meal (item-level Pay) or every line in an
+  // Order once every item in it has been confirmed paid (order-level Paid).
+  // seq carries over from thisWeekLinesWithSeq so the "Extra 2/3" badge can
+  // still show on the receipt, same as it does in My Order.
+  const [receiptTarget, setReceiptTarget] = useState<{ order: Order; lines: { order: Order; item: OrderItem; seq?: number }[] } | null>(null);
   // Operations can now edit this week's curries (name/desc/price) — subscribed
   // rather than the static import, so an edit shows up here without a reload.
   const [weeklyMenu, setWeeklyMenu] = useState(WEEKLY_CURRY_MENU);
+  const [dinnerMenu, setDinnerMenu] = useState(WEEKLY_DINNER_MENU);
+  // SYSTEM_CONFIG (VAT on/off, rate, VRN, etc.) is a plain mutable object, not
+  // React state — this tick just forces a re-render whenever Operations saves
+  // a change, so cart totals reflect it without needing a reload.
+  const [configTick, setConfigTick] = useState(0);
 
   useEffect(() => {
     const u1 = subscribeToLoyaltyTiers(setLoyaltyTiers);
@@ -247,22 +315,36 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const u5 = subscribeToOrders(setOrders);
     const u6 = subscribeToSystemDate(setSystemDate);
     const u7 = subscribeToWeeklyMenu(setWeeklyMenu);
-    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); };
+    const u8 = subscribeToConfig(() => setConfigTick(t => t + 1));
+    const u9 = subscribeToDinnerMenu(setDinnerMenu);
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); u9(); };
   }, []);
+
+  // If Operations turns Dinner off while it's the active tab, fall back to
+  // Lunch rather than leaving the Menu tab stuck showing a now-hidden service.
+  useEffect(() => {
+    if (!SYSTEM_CONFIG.dinnerEnabled && activeService === 'Dinner') setActiveService('Lunch');
+  }, [configTick, activeService]);
+
+  const menuFor = (service: Service) => service === 'Dinner' ? dinnerMenu : weeklyMenu;
+  const cartFor = (service: Service) => service === 'Dinner' ? dinnerCart : cart;
+  const setCartFor = (service: Service) => service === 'Dinner' ? setDinnerCart : setCart;
 
   // Local, menu-aware versions of the two helpers that need to look up a
   // curry by id — moved inside the component (rather than a `menu` param on
-  // every call site) so they can close over `weeklyMenu` and every existing
-  // call site (mealPrice(sel, day.key), etc.) stays unchanged.
-  const mealPrice = (m: MealSelection, weekdayKey: WeekdayKey): number => {
-    const c = weeklyMenu[weekdayKey].find(x => x.id === m.curryId);
+  // every call site) so they can close over `weeklyMenu`/`dinnerMenu`. The
+  // service param defaults to 'Lunch' so every pre-existing call site that
+  // hasn't been updated to pass one explicitly keeps behaving exactly as
+  // before.
+  const mealPrice = (m: MealSelection, weekdayKey: WeekdayKey, service: Service = 'Lunch'): number => {
+    const c = menuFor(service)[weekdayKey].find(x => x.id === m.curryId);
     const b = MEAL_BASES.find(x => x.id === m.baseId);
     const v = m.beverageId !== 'none' ? MEAL_BEVERAGES.find(x => x.id === m.beverageId) : null;
     const d = m.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === m.dessertId) : null;
     return (c?.price || 0) + (b?.up || 0) + (v?.price || 0) + (d?.price || 0);
   };
-  const mealSummaryLabel = (m: MealSelection, weekdayKey: WeekdayKey): string => {
-    const c = weeklyMenu[weekdayKey].find(x => x.id === m.curryId);
+  const mealSummaryLabel = (m: MealSelection, weekdayKey: WeekdayKey, service: Service = 'Lunch'): string => {
+    const c = menuFor(service)[weekdayKey].find(x => x.id === m.curryId);
     const b = MEAL_BASES.find(x => x.id === m.baseId);
     return `${c?.emoji || ''} ${c?.name || ''}${b ? ` · ${b.name}` : ''}`;
   };
@@ -293,14 +375,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const culturePhrase = useMemo(() => CREOLE_PHRASES[new Date().getDate() % CREOLE_PHRASES.length], []);
 
   // --- CART / BUILDER ---
-  const openBuilder = (day: WeekDay, presetCurryId?: string, editIndex: number | null = null) => {
-    const existing = editIndex !== null ? cart[day.date]?.[editIndex] : null;
+  const openBuilder = (day: WeekDay, service: Service = 'Lunch', presetCurryId?: string, editIndex: number | null = null) => {
+    const existing = editIndex !== null ? cartFor(service)[day.date]?.[editIndex] : null;
     setBuilder({
       day,
+      service,
       openSection: 1,
       editIndex,
       editingConfirmed: null,
-      sel: existing ? { ...existing } : emptySelection(presetCurryId || weeklyMenu[day.key][0].id)
+      sel: existing ? { ...existing } : emptySelection(presetCurryId || menuFor(service)[day.key][0].id)
     });
   };
 
@@ -314,8 +397,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     }
     const day = weekDays.find(d => d.date === line.item.deliveryDate);
     if (!day) return;
+    const service: Service = (line.item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
     setBuilder({
       day,
+      service,
       openSection: 1,
       editIndex: null,
       editingConfirmed: { orderId: line.order.id, date: line.item.deliveryDate || '', slot: line.item.serviceSlot || 'Lunch' },
@@ -349,14 +434,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
   const commitBuilder = () => {
     if (!builder) return;
-    const { day, sel, editIndex, editingConfirmed } = builder;
+    const { day, service, sel, editIndex, editingConfirmed } = builder;
 
     if (editingConfirmed) {
-      const c = weeklyMenu[day.key].find(x => x.id === sel.curryId);
+      const c = menuFor(service)[day.key].find(x => x.id === sel.curryId);
       editOrderItem(editingConfirmed.orderId, editingConfirmed.date, editingConfirmed.slot, {
         itemId: sel.curryId,
         name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
-        price: mealPrice(sel, day.key),
+        price: mealPrice(sel, day.key, service),
         notes: mealNotesLine(sel)
       });
       toast('Meal updated');
@@ -364,28 +449,30 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       return;
     }
 
-    setCart(prev => {
+    setCartFor(service)(prev => {
       const dayList = [...(prev[day.date] || [])];
       if (editIndex !== null) dayList[editIndex] = sel;
       else dayList.push(sel);
       return { ...prev, [day.date]: dayList };
     });
-    toast(editIndex !== null ? 'Meal updated' : `${day.label} added · Rs ${mealPrice(sel, day.key)}`);
+    toast(editIndex !== null ? 'Meal updated' : `${day.label} added · Rs ${mealPrice(sel, day.key, service)}`);
     closeBuilder();
   };
 
-  const removeCartMeal = (dateKey: string, index: number) => {
-    setCart(prev => {
+  const removeCartMeal = (dateKey: string, index: number, service: Service = 'Lunch') => {
+    setCartFor(service)(prev => {
       const dayList = [...(prev[dateKey] || [])];
       dayList.splice(index, 1);
       return { ...prev, [dateKey]: dayList };
     });
   };
 
-  const cartCount = useMemo(
-    () => Object.values(cart).reduce((t: number, list) => t + (list as MealSelection[]).length, 0),
-    [cart]
-  );
+  const cartCount = useMemo(() => {
+    let n = 0;
+    Object.values(cart).forEach(list => { n += (list as MealSelection[]).length; });
+    Object.values(dinnerCart).forEach(list => { n += (list as MealSelection[]).length; });
+    return n;
+  }, [cart, dinnerCart]);
 
   // --- DISCOUNT / TOTALS (reuses the app's real loyalty tier + group +
   // bulk-plan discount math, just adapted from a generic cart to the
@@ -395,7 +482,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
     const flat: { date: string; weekday: WeekdayKey; price: number }[] = [];
     weekDays.forEach(d => {
-      (cart[d.date] || []).forEach(m => flat.push({ date: d.date, weekday: d.key, price: mealPrice(m, d.key) }));
+      (cart[d.date] || []).forEach(m => flat.push({ date: d.date, weekday: d.key, price: mealPrice(m, d.key, 'Lunch') }));
+      (dinnerCart[d.date] || []).forEach(m => flat.push({ date: d.date, weekday: d.key, price: mealPrice(m, d.key, 'Dinner') }));
     });
     const subtotal = flat.reduce((t, f) => t + f.price, 0);
 
@@ -433,7 +521,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const total = netTotal + vat;
 
     return { subtotal, discount: totalDiscount, standardDiscount, birthdayDiscount, standardLabel, bulkDiscount, vat, total };
-  }, [cart, currentUser, loyaltyTiers, customerGroups, weekDays, weeklyMenu]);
+  }, [cart, dinnerCart, currentUser, loyaltyTiers, customerGroups, weekDays, weeklyMenu, dinnerMenu, configTick]);
 
   const handleCheckout = () => {
     if (!currentUser || cartCount === 0) return;
@@ -445,11 +533,26 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           itemId: m.curryId,
           name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
           qty: 1,
-          price: mealPrice(m, d.key),
+          price: mealPrice(m, d.key, 'Lunch'),
           notes: mealNotesLine(m),
           deliveryDate: d.date,
           deliveryDay: d.label,
           serviceSlot: idx === 0 ? 'Lunch' : `Lunch-${idx + 1}`,
+          paymentStatus: 'Pending',
+          status: 'Active'
+        });
+      });
+      (dinnerCart[d.date] || []).forEach((m, idx) => {
+        const c = dinnerMenu[d.key].find(x => x.id === m.curryId);
+        items.push({
+          itemId: m.curryId,
+          name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
+          qty: 1,
+          price: mealPrice(m, d.key, 'Dinner'),
+          notes: mealNotesLine(m),
+          deliveryDate: d.date,
+          deliveryDay: d.label,
+          serviceSlot: idx === 0 ? 'Dinner' : `Dinner-${idx + 1}`,
           paymentStatus: 'Pending',
           status: 'Active'
         });
@@ -471,6 +574,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     };
     addOrder(newOrder);
     setCart({});
+    setDinnerCart({});
     setView('order');
     toast(`Order confirmed · ${items.length} meal${items.length !== 1 ? 's' : ''} · ${formatCurrency(cartTotals.total)} outstanding`);
   };
@@ -520,6 +624,23 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       map.get(l.order.id)!.lines.push(l);
     });
     return Array.from(map.values()).sort((a, b) => a.order.timestamp.localeCompare(b.order.timestamp));
+  }, [thisWeekLinesWithSeq]);
+
+  // A receipt corresponds to one payment, not to one order or one meal —
+  // "Pay order"/"Pay balance" claim several lines under a single generated
+  // reference, so those lines are one payment and belong on one receipt;
+  // a lone "Pay" on a single meal generates its own reference, so that meal
+  // gets its own receipt. Lines without a reference (shouldn't happen once
+  // Paid, but just in case) fall back to being their own single-line group.
+  const paymentGroups = useMemo(() => {
+    const map = new Map<string, typeof thisWeekLinesWithSeq>();
+    thisWeekLinesWithSeq.forEach(l => {
+      if (l.item.paymentStatus !== 'Paid') return;
+      const key = l.item.paymentReference || `solo-${l.order.id}-${l.item.itemId}-${l.item.deliveryDate}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(l);
+    });
+    return map;
   }, [thisWeekLinesWithSeq]);
 
   const pastLines: Line[] = useMemo(() => {
@@ -626,6 +747,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     setRateTarget({ orderId: line.order.id, itemId: `${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`, label: `${line.item.deliveryDay} · ${line.item.name}` });
     setRateStars(0);
   };
+
+  // A receipt always represents one payment — resolve to every line that
+  // shares this line's payment reference (paymentGroups), never just the one
+  // line that was clicked and never an entire order regardless of how many
+  // separate payments it was actually settled with.
+  const openReceipt = (line: Line) => {
+    const key = line.item.paymentReference || `solo-${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`;
+    setReceiptTarget({ order: line.order, lines: paymentGroups.get(key) || [line] });
+  };
   const submitRating = () => {
     if (!rateTarget || !rateStars) return;
     setRatings(prev => ({ ...prev, [rateTarget.itemId]: { stars: rateStars, comment: '' } }));
@@ -720,11 +850,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <ArrowLeft className="size-5" />
             </button>
           )}
-          <div className="size-16 bg-primary rounded-2xl flex items-center justify-center text-white shadow-lg shadow-primary/20 mx-auto mb-5">
-            <Sparkles className="size-8" />
-          </div>
-          <h1 className="text-3xl font-black text-slate-900 tracking-tight mb-1">BonManzE</h1>
-          <p className="text-slate-500 font-medium mb-1">Homemade. Delivered fresh.</p>
+          {SYSTEM_CONFIG.businessLogoUrl ? (
+            <img src={SYSTEM_CONFIG.businessLogoUrl} alt={SYSTEM_CONFIG.businessName} className="size-16 rounded-2xl object-cover shadow-lg shadow-primary/20 mx-auto mb-5" />
+          ) : (
+            <div className="size-16 bg-primary rounded-2xl flex items-center justify-center text-white shadow-lg shadow-primary/20 mx-auto mb-5">
+              <Sparkles className="size-8" />
+            </div>
+          )}
+          <h1 className="text-3xl font-black text-slate-900 tracking-tight mb-1">{SYSTEM_CONFIG.businessName}</h1>
+          <p className="text-slate-500 font-medium mb-1">{SYSTEM_CONFIG.businessTagline}</p>
           <p className="text-xs text-primary font-bold italic mb-8">"{culturePhrase.cr}" — {culturePhrase.en}</p>
 
           <div className="space-y-3">
@@ -756,12 +890,16 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     <div className="h-full w-full flex flex-col bg-[#FDFAF4] relative">
       <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-[#E7E0D0] px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="size-9 bg-primary rounded-xl flex items-center justify-center text-white shadow-lg shadow-primary/20">
-            <Sparkles className="size-5" />
-          </div>
+          {SYSTEM_CONFIG.businessLogoUrl ? (
+            <img src={SYSTEM_CONFIG.businessLogoUrl} alt={SYSTEM_CONFIG.businessName} className="size-9 rounded-xl object-cover shadow-lg shadow-primary/20" />
+          ) : (
+            <div className="size-9 bg-primary rounded-xl flex items-center justify-center text-white shadow-lg shadow-primary/20">
+              <Sparkles className="size-5" />
+            </div>
+          )}
           <div>
-            <h1 className="text-sm font-black text-slate-900 leading-none">BonManzE</h1>
-            <p className="text-[9px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">Homemade · Delivered fresh</p>
+            <h1 className="text-sm font-black text-slate-900 leading-none">{SYSTEM_CONFIG.businessName}</h1>
+            <p className="text-[9px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">{SYSTEM_CONFIG.businessTagline}</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -928,7 +1066,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <button onClick={() => setGuideOpen(o => !o)} className="w-full flex items-center justify-between gap-3 p-4 text-left">
                 <div className="flex items-center gap-2">
                   <Clock className="size-3.5 text-slate-500" />
-                  <p className="text-[11px] font-black text-slate-600">New here? How BonManzE works</p>
+                  <p className="text-[11px] font-black text-slate-600">New here? How {SYSTEM_CONFIG.businessName} works</p>
                 </div>
                 {guideOpen ? <ChevronUp className="size-4 text-slate-400 shrink-0" /> : <ChevronDown className="size-4 text-slate-400 shrink-0" />}
               </button>
@@ -946,24 +1084,39 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
         {view === 'menu' && (
           <div className="space-y-5">
-            <h2 className="text-lg font-black text-slate-900">This week's menu</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-black text-slate-900">This week's menu</h2>
+              {SYSTEM_CONFIG.dinnerEnabled && (
+                <div className="flex items-center gap-1 bg-[#F4EFE4] rounded-full p-1">
+                  {(['Lunch', 'Dinner'] as Service[]).map(s => (
+                    <button
+                      key={s}
+                      onClick={() => setActiveService(s)}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${activeService === s ? 'bg-primary text-white' : 'text-slate-500'}`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             {weekDays.map(d => {
-              const meals = cart[d.date] || [];
+              const meals = cartFor(activeService)[d.date] || [];
               return (
                 <div key={d.key} className="bg-white rounded-3xl border border-[#E7E0D0] p-5">
                   <div className="flex items-center justify-between mb-3">
                     <p className="text-sm font-black text-slate-900">{d.label}</p>
                     {meals.length > 0 && (
-                      <button onClick={() => openBuilder(d)} className="text-[10px] font-black uppercase tracking-widest text-primary flex items-center gap-1">
+                      <button onClick={() => openBuilder(d, activeService)} className="text-[10px] font-black uppercase tracking-widest text-primary flex items-center gap-1">
                         <Plus className="size-3" /> Add another
                       </button>
                     )}
                   </div>
                   <div className="space-y-2 mb-3">
-                    {weeklyMenu[d.key].map(c => (
+                    {menuFor(activeService)[d.key].map(c => (
                       <button
                         key={c.id}
-                        onClick={() => openBuilder(d, c.id)}
+                        onClick={() => openBuilder(d, activeService, c.id)}
                         className="w-full flex items-center gap-3 p-3 bg-[#F4EFE4] rounded-2xl hover:bg-primary/10 transition-all text-left"
                       >
                         <img src={dishPhotoFor(c.id)} className="size-11 rounded-xl object-cover shrink-0" alt={c.name} />
@@ -980,14 +1133,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       {meals.map((m, i) => (
                         <div key={i} className="flex items-start justify-between gap-2 text-xs">
                           <div className="min-w-0">
-                            <span className="font-bold text-slate-700 block">{mealSummaryLabel(m, d.key)}</span>
+                            <span className="font-bold text-slate-700 block">{mealSummaryLabel(m, d.key, activeService)}</span>
                             {mealExtrasLabel(m) && <span className="text-[11px] text-slate-400 block">{mealExtrasLabel(m)}</span>}
                             {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
-                            <span className="font-black text-primary">Rs {mealPrice(m, d.key)}</span>
-                            <button onClick={() => openBuilder(d, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
-                            <button onClick={() => removeCartMeal(d.date, i)} className="p-1.5 text-slate-400 hover:text-danger"><Trash2 className="size-3.5" /></button>
+                            <span className="font-black text-primary">Rs {mealPrice(m, d.key, activeService)}</span>
+                            <button onClick={() => openBuilder(d, activeService, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
+                            <button onClick={() => removeCartMeal(d.date, i, activeService)} className="p-1.5 text-slate-400 hover:text-danger"><Trash2 className="size-3.5" /></button>
                           </div>
                         </div>
                       ))}
@@ -1004,35 +1157,51 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
             <h2 className="text-lg font-black text-slate-900">My Order</h2>
 
             {cartCount > 0 && (
-              <div className="bg-white rounded-3xl border border-[#E7E0D0] p-5">
+              <div>
                 <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">Draft — not yet confirmed</p>
-                <div className="space-y-3 mb-4">
-                  {weekDays.map(d => (cart[d.date] || []).map((m, i) => (
-                    <div key={`${d.key}-${i}`} className="flex items-start justify-between gap-2 pb-3 border-b border-[#F0EADD] last:border-0 last:pb-0">
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold text-slate-700">{d.short} · {mealSummaryLabel(m, d.key)}</p>
-                        {mealExtrasLabel(m) && <p className="text-[11px] text-slate-400 mt-0.5">{mealExtrasLabel(m)}</p>}
-                        {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
+
+                <div className="space-y-4 mb-4">
+                  {(['Lunch', 'Dinner'] as Service[]).flatMap(service =>
+                    weekDays.filter(d => (cartFor(service)[d.date] || []).length > 0).map(d => (
+                      <div key={`${service}-${d.key}`} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
+                        <div className="flex items-center gap-1.5 mb-3">
+                          <p className="text-[10px] font-black uppercase text-primary tracking-widest">{d.label}</p>
+                          {service === 'Dinner' && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase">Dinner</span>}
+                        </div>
+                        <div className="space-y-3">
+                          {(cartFor(service)[d.date] || []).map((m, i) => (
+                            <div key={`${d.key}-${i}`} className={`flex items-start justify-between gap-2 ${i > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}`}>
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold text-slate-700">{mealSummaryLabel(m, d.key, service)}</p>
+                                {mealExtrasLabel(m) && <p className="text-[11px] text-slate-400 mt-0.5">{mealExtrasLabel(m)}</p>}
+                                {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="font-black text-slate-900 text-xs">Rs {mealPrice(m, d.key, service)}</span>
+                                <button onClick={() => openBuilder(d, service, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
+                                <button onClick={() => removeCartMeal(d.date, i, service)} className="p-1.5 text-slate-400 hover:text-danger"><Trash2 className="size-3.5" /></button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="font-black text-slate-900 text-xs">Rs {mealPrice(m, d.key)}</span>
-                        <button onClick={() => openBuilder(d, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
-                        <button onClick={() => removeCartMeal(d.date, i)} className="p-1.5 text-slate-400 hover:text-danger"><Trash2 className="size-3.5" /></button>
-                      </div>
-                    </div>
-                  )))}
+                    ))
+                  )}
                 </div>
-                <div className="space-y-1.5 pt-3 border-t border-[#E7E0D0] text-xs">
-                  <div className="flex justify-between font-bold text-slate-500"><span>Subtotal</span><span>{formatCurrency(cartTotals.subtotal)}</span></div>
-                  {cartTotals.standardDiscount > 0 && <div className="flex justify-between font-bold text-primary"><span>{cartTotals.standardLabel} Discount</span><span>-{formatCurrency(cartTotals.standardDiscount)}</span></div>}
-                  {cartTotals.birthdayDiscount > 0 && <div className="flex justify-between font-bold text-accent"><span>🎂 Birthday Discount</span><span>-{formatCurrency(cartTotals.birthdayDiscount)}</span></div>}
-                  {cartTotals.bulkDiscount > 0 && <div className="flex justify-between font-bold text-success"><span>Full-Week Discount</span><span>-{formatCurrency(cartTotals.bulkDiscount)}</span></div>}
-                  <div className="flex justify-between font-bold text-slate-500"><span>VAT ({SYSTEM_CONFIG.vatRate}%)</span><span>{formatCurrency(cartTotals.vat)}</span></div>
-                  <div className="pt-2 border-t border-[#E7E0D0] flex justify-between text-base font-black text-slate-900"><span>Total</span><span>{formatCurrency(cartTotals.total)}</span></div>
+
+                <div className="bg-white rounded-3xl border border-[#E7E0D0] p-5">
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex justify-between font-bold text-slate-500"><span>Subtotal</span><span>{formatCurrency(cartTotals.subtotal)}</span></div>
+                    {cartTotals.standardDiscount > 0 && <div className="flex justify-between font-bold text-primary"><span>{cartTotals.standardLabel} Discount</span><span>-{formatCurrency(cartTotals.standardDiscount)}</span></div>}
+                    {cartTotals.birthdayDiscount > 0 && <div className="flex justify-between font-bold text-accent"><span>🎂 Birthday Discount</span><span>-{formatCurrency(cartTotals.birthdayDiscount)}</span></div>}
+                    {cartTotals.bulkDiscount > 0 && <div className="flex justify-between font-bold text-success"><span>Full-Week Discount</span><span>-{formatCurrency(cartTotals.bulkDiscount)}</span></div>}
+                    <div className="flex justify-between font-bold text-slate-500"><span>VAT ({SYSTEM_CONFIG.vatRate}%)</span><span>{formatCurrency(cartTotals.vat)}</span></div>
+                    <div className="pt-2 border-t border-[#E7E0D0] flex justify-between text-base font-black text-slate-900"><span>Total</span><span>{formatCurrency(cartTotals.total)}</span></div>
+                  </div>
+                  <button onClick={handleCheckout} className="w-full mt-4 py-4 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-primary/20">
+                    Confirm order
+                  </button>
                 </div>
-                <button onClick={handleCheckout} className="w-full mt-4 py-4 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-primary/20">
-                  Confirm order
-                </button>
               </div>
             )}
 
@@ -1049,17 +1218,21 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     const orderPaid = lines.every(l => l.item.paymentStatus === 'Paid');
                     const orderUnclaimed = lines.filter(l => isUnclaimed(l.item));
                     const orderUnclaimedTotal = orderUnclaimed.reduce((t, l) => t + l.item.price, 0);
+                    // Only offer one receipt for the whole order when it was
+                    // actually settled as one payment (every line shares the
+                    // same reference) — if some meals were paid individually
+                    // and others together, that's more than one receipt, so
+                    // fall back to "Paid" with no combined receipt button;
+                    // each meal's own Receipt button still opens the right one.
+                    const orderPaymentRefs = new Set(lines.map(l => l.item.paymentReference || `solo-${l.order.id}-${l.item.itemId}-${l.item.deliveryDate}`));
+                    const orderIsOnePayment = orderPaid && orderPaymentRefs.size === 1;
 
-                    // Meals within an order are still grouped by day — an
-                    // order can cover more than one delivery day (you can
-                    // check out Monday and Tuesday's meals together).
-                    const dayGroups: { date: string; label: string; items: typeof lines }[] = [];
-                    lines.forEach(line => {
-                      const date = line.item.deliveryDate || '';
-                      const last = dayGroups[dayGroups.length - 1];
-                      if (last && last.date === date) last.items.push(line);
-                      else dayGroups.push({ date, label: line.item.deliveryDay || '', items: [line] });
-                    });
+                    // Meals within an order are grouped by offering first,
+                    // then by day — an order can cover more than one
+                    // delivery day (you can check out Monday and Tuesday's
+                    // meals together), and can contain both Lunch and Dinner
+                    // items, which are cooked/delivered as separate batches.
+                    const serviceGroups = groupByOrderServiceDay(lines)[0]?.services || [];
 
                     return (
                       <div key={order.id} className="bg-white rounded-2xl border border-[#E7E0D0] overflow-hidden">
@@ -1068,7 +1241,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">{gi === 0 ? 'Your order' : `Additional order ${gi + 1}`} · {lines.length} meal{lines.length !== 1 ? 's' : ''}</p>
                             <p className="text-[10px] text-slate-400 mt-0.5">Placed {new Date(order.timestamp).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</p>
                           </div>
-                          {orderPaid ? (
+                          {orderIsOnePayment ? (
+                            <button onClick={() => openReceipt(lines[0])} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success flex items-center gap-1">
+                              <Receipt className="size-3" /> Paid · Receipt
+                            </button>
+                          ) : orderPaid ? (
                             <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success">Paid</span>
                           ) : orderUnclaimed.length > 0 ? (
                             <button onClick={() => openPayOrder(lines)} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger">
@@ -1078,49 +1255,59 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-warning/10 text-warning">Awaiting confirmation</span>
                           )}
                         </div>
-                        <div className="divide-y divide-[#F0EADD]">
-                          {dayGroups.map(group => {
-                            const locked = isPastCutoff(group.date, systemDate);
-                            return (
-                              <div key={group.date} className="p-4">
-                                <div className="flex items-center gap-1.5 mb-2 flex-wrap">
-                                  <p className="text-[10px] font-black uppercase text-primary tracking-widest">{group.label}</p>
-                                  {locked && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase">🔒 Locked</span>}
-                                </div>
-                                <div className="space-y-3">
-                                  {group.items.map((line, idx) => {
-                                    const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
-                                    const isCompleted = line.item.status === 'Completed';
-                                    const isActive = line.item.status === 'Active';
-                                    const payInfo = paymentStatusInfo(line.item);
-                                    const { detail, person } = splitNotesTag(line.item.notes);
-                                    return (
-                                      <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
-                                        <div className="flex items-start justify-between gap-3 mb-1">
-                                          <p className="text-sm font-bold text-slate-900 min-w-0">{line.item.name}</p>
-                                          <span className="text-sm font-black text-slate-900 shrink-0">Rs {line.item.price}</span>
-                                        </div>
-                                        {detail && <p className="text-[11px] text-slate-400 mb-1.5">{detail}</p>}
-                                        <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                                          {line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {line.seq + 1}</span>}
-                                          <StatusBadge label={payInfo.label} tone={payInfo.tone} />
-                                          <StatusBadge label={line.item.status || ''} tone="slate" />
-                                          {person && <PersonTag name={person} />}
-                                        </div>
-                                        <div className="flex gap-2">
-                                          {isUnclaimed(line.item) && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
-                                          {isActive && !locked && <button onClick={() => openEditConfirmed(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest">Edit</button>}
-                                          {isActive && !locked && <button onClick={() => handleCancel(line)} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Cancel</button>}
-                                          {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
-                                          {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
-                                        </div>
+                        <div className="p-4 space-y-4 bg-[#FDFAF4]">
+                          {serviceGroups.map(sg => (
+                            <div key={sg.service}>
+                              {serviceGroups.length > 1 && (
+                                <p className="text-[10px] font-black uppercase text-accent tracking-widest mb-2">{sg.service === 'Dinner' ? '🌙 Dinner' : '☀️ Lunch'}</p>
+                              )}
+                              <div className="space-y-3">
+                                {sg.days.map(group => {
+                                  const locked = isPastCutoff(group.date, systemDate);
+                                  return (
+                                    <div key={group.date} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
+                                      <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                                        <p className="text-[10px] font-black uppercase text-primary tracking-widest">{group.label}</p>
+                                        {locked && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase">🔒 Locked</span>}
                                       </div>
-                                    );
-                                  })}
-                                </div>
+                                      <div className="space-y-3">
+                                        {group.items.map((line, idx) => {
+                                          const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
+                                          const isCompleted = line.item.status === 'Completed';
+                                          const isActive = line.item.status === 'Active';
+                                          const payInfo = paymentStatusInfo(line.item);
+                                          const { detail, person } = splitNotesTag(line.item.notes);
+                                          return (
+                                            <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
+                                              <div className="flex items-start justify-between gap-3 mb-1">
+                                                <p className="text-sm font-bold text-slate-900 min-w-0">{line.item.name}</p>
+                                                <span className="text-sm font-black text-slate-900 shrink-0">Rs {line.item.price}</span>
+                                              </div>
+                                              {detail && <p className="text-[11px] text-slate-400 mb-1.5">{detail}</p>}
+                                              <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                                                {line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {line.seq + 1}</span>}
+                                                <StatusBadge label={payInfo.label} tone={payInfo.tone} />
+                                                <StatusBadge label={line.item.status || ''} tone="slate" />
+                                                {person && <PersonTag name={person} />}
+                                              </div>
+                                              <div className="flex gap-2">
+                                                {line.item.paymentStatus === 'Paid' && <button onClick={() => openReceipt(line)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Receipt className="size-3" /> Receipt</button>}
+                                                {isUnclaimed(line.item) && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
+                                                {isActive && !locked && <button onClick={() => openEditConfirmed(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest">Edit</button>}
+                                                {isActive && !locked && <button onClick={() => handleCancel(line)} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Cancel</button>}
+                                                {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
+                                                {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
-                            );
-                          })}
+                            </div>
+                          ))}
                         </div>
                       </div>
                     );
@@ -1248,7 +1435,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       {/* --- MEAL BUILDER --- */}
       {builder && (() => {
         const complete = sectionComplete(builder);
-        const selectedCurry = weeklyMenu[builder.day.key].find(c => c.id === builder.sel.curryId);
+        const selectedCurry = menuFor(builder.service)[builder.day.key].find(c => c.id === builder.sel.curryId);
         const selectedBase = MEAL_BASES.find(b => b.id === builder.sel.baseId);
         const extrasList = [
           builder.sel.dhalId && builder.sel.dhalId !== 'none' ? MEAL_DHALS.find(x => x.id === builder.sel.dhalId)?.name : null,
@@ -1287,7 +1474,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 onToggle={() => toggleSection(1)}
               >
                 <div className="space-y-2">
-                  {weeklyMenu[builder.day.key].map(c => (
+                  {menuFor(builder.service)[builder.day.key].map(c => (
                     <button key={c.id} onClick={() => selectCurry(c.id)} className={`w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition-all ${builder.sel.curryId === c.id ? 'border-primary bg-primary/5' : 'border-transparent bg-[#F4EFE4]'}`}>
                       <span className="text-2xl">{c.emoji}</span>
                       <div className="flex-1 text-left"><p className="text-sm font-bold text-slate-900">{c.name}</p><p className="text-[11px] text-slate-500">{c.desc}</p></div>
@@ -1342,7 +1529,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
             <div className="p-4 border-t border-[#E7E0D0] flex items-center gap-3 shrink-0 bg-white">
               <div className="flex-1 text-right pr-3">
                 <span className="text-[10px] font-bold text-slate-400 uppercase">Total </span>
-                <span className="text-base font-black text-slate-900">Rs {mealPrice(builder.sel, builder.day.key)}</span>
+                <span className="text-base font-black text-slate-900">Rs {mealPrice(builder.sel, builder.day.key, builder.service)}</span>
               </div>
               <button
                 disabled={!builderReady(builder)}
@@ -1385,7 +1572,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     <p className="text-3xl font-black text-slate-900">{formatCurrency(payTarget.amount)}</p>
                   </div>
                   {isPayNowMethod(payMethod.name) ? (
-                    <p className="text-xs text-slate-500 text-center">You'll be handed to <strong>Juice by MCB</strong> to approve this payment to BonManzE.</p>
+                    <p className="text-xs text-slate-500 text-center">You'll be handed to <strong>Juice by MCB</strong> to approve this payment to {SYSTEM_CONFIG.businessName}.</p>
                   ) : (
                     <p className="text-xs text-slate-500 text-center">
                       {payMethod.name === 'MauCAS' ? "Your driver will show the MauCAS QR code on their device — scan it with your banking app on delivery." : 'Have cash ready for the driver on delivery.'}
@@ -1449,6 +1636,167 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           </div>
         </div>
       )}
+
+      {/* --- RECEIPT SHEET --- */}
+      {receiptTarget && (() => {
+        const receiptTotal = receiptTarget.lines.reduce((t, l) => t + l.item.price, 0);
+        // Every line in a receipt was settled in the same payment, so
+        // method/reference are shown once at the top, not repeated per line.
+        const first = receiptTarget.lines[0];
+        // The order ID is the actual invoice reference — the generated
+        // payment reference (and whatever the customer quoted back from
+        // Juice/MauCAS) is just how the payment itself gets matched, shown
+        // separately below as "Payment ref".
+        const orderIds = Array.from(new Set(receiptTarget.lines.map(l => l.order.id)));
+        // Meal prices are treated as VAT-inclusive when VAT is on — this
+        // doesn't change what was actually collected (still the sum of
+        // item.price below); it just discloses how much of that total is
+        // tax. Uses today's SYSTEM_CONFIG rate since the rate actually in
+        // effect at checkout time isn't stored per order/item.
+        const vatOn = SYSTEM_CONFIG.vatEnabled;
+        const vatRate = SYSTEM_CONFIG.vatRate;
+        const netTotal = vatOn ? receiptTotal / (1 + vatRate / 100) : receiptTotal;
+        const vatAmount = receiptTotal - netTotal;
+        const billToAddress = currentUser?.addresses?.[0];
+        // Same Order -> Offering -> Day nesting as My Order — a receipt can
+        // span more than one order (a "Pay balance" claim settles everything
+        // outstanding at once) and more than one offering, so the item table
+        // below groups accordingly instead of listing everything flat.
+        const receiptGroups = groupByOrderServiceDay(receiptTarget.lines);
+        return (
+          <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md overflow-y-auto p-4">
+            <style>{`
+              @media print {
+                body * { visibility: hidden; }
+                .bmz-receipt-printable, .bmz-receipt-printable * { visibility: visible; }
+                .bmz-receipt-printable { position: fixed; inset: 0; margin: 0; max-width: 100%; max-height: none; overflow: visible; box-shadow: none; border-radius: 0; }
+                .bmz-no-print { display: none !important; }
+              }
+            `}</style>
+            <div className="min-h-full flex items-center justify-center py-8">
+              <div className="bmz-receipt-printable bg-white rounded-[32px] w-full max-w-sm shadow-2xl overflow-x-hidden overflow-y-auto max-h-[85vh]">
+                <div className="p-6">
+                <div className="flex items-start justify-between mb-1">
+                  <div className="flex items-center gap-2.5">
+                    {SYSTEM_CONFIG.businessLogoUrl && (
+                      <img src={SYSTEM_CONFIG.businessLogoUrl} alt={SYSTEM_CONFIG.businessName} className="size-9 rounded-lg object-cover shrink-0" />
+                    )}
+                    <div>
+                      <p className="text-lg font-black text-slate-900">{SYSTEM_CONFIG.businessName}</p>
+                      <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{SYSTEM_CONFIG.businessTagline}</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setReceiptTarget(null)} className="bmz-no-print p-1.5 text-slate-400 hover:text-danger"><X className="size-5" /></button>
+                </div>
+                <p className="text-[10px] font-black uppercase text-primary tracking-widest mt-3">{vatOn ? 'Tax invoice' : 'Receipt'}</p>
+                {vatOn && SYSTEM_CONFIG.vatNumber && (
+                  <p className="text-[10px] text-slate-400 mt-0.5">VRN {SYSTEM_CONFIG.vatNumber}</p>
+                )}
+
+                <div className="border-t border-dashed border-slate-300 mt-3 pt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                  <div>
+                    <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-1">Bill to</p>
+                    <p className="font-black text-slate-800">{currentUser?.name || receiptTarget.order.customerName}</p>
+                    {currentUser?.phone && <p className="text-slate-500 mt-0.5">{currentUser.phone}</p>}
+                    {currentUser?.email && <p className="text-slate-500 mt-0.5 break-all">{currentUser.email}</p>}
+                    {billToAddress && <p className="text-slate-500 mt-0.5">{billToAddress.street}, {billToAddress.city}</p>}
+                  </div>
+                  <div className="text-right">
+                    <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-1">{orderIds.length > 1 ? 'Invoice refs' : 'Invoice ref'}</p>
+                    <p className="font-mono text-slate-600">{orderIds.join(', ')}</p>
+                    {orderIds.length === 1 && (
+                      <p className="text-slate-500 mt-1">{new Date(receiptTarget.order.timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
+                    )}
+                  </div>
+                </div>
+
+                {(first?.item.paymentMethodName || first?.item.paymentReference) && (
+                  <div className="border-t border-dashed border-slate-300 mt-3 pt-3 space-y-1 text-xs">
+                    {first?.item.paymentMethodName && (
+                      <div className="flex justify-between"><span className="text-slate-400 font-bold">Payment method</span><span className="text-slate-600">{first.item.paymentMethodName}</span></div>
+                    )}
+                    {first?.item.paymentReference && (
+                      <div className="flex justify-between gap-3"><span className="text-slate-400 font-bold shrink-0">Payment ref</span><span className="text-slate-600 text-right break-all">{first.item.paymentReference}</span></div>
+                    )}
+                  </div>
+                )}
+
+                <div className="border-t border-dashed border-slate-300 mt-3 pt-3">
+                  <div className="flex text-[9px] font-black uppercase text-slate-400 tracking-widest pb-2">
+                    <span className="flex-1">Description</span>
+                    <span className="w-8 text-center shrink-0">Qty</span>
+                    <span className="w-16 text-right shrink-0">Amount</span>
+                  </div>
+                  <div className="space-y-4">
+                    {receiptGroups.map(og => (
+                      <div key={og.order.id}>
+                        {receiptGroups.length > 1 && (
+                          <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest mb-1.5">Order {og.order.id}</p>
+                        )}
+                        <div className="space-y-3">
+                          {og.services.map(sg => (
+                            <div key={sg.service}>
+                              {og.services.length > 1 && (
+                                <p className="text-[9px] font-black uppercase text-accent tracking-widest mb-1.5">{sg.service === 'Dinner' ? '🌙 Dinner' : '☀️ Lunch'}</p>
+                              )}
+                              <div className="space-y-3">
+                                {sg.days.flatMap(d => d.items).map((line, i) => {
+                                  const { detail, person } = splitNotesTag(line.item.notes);
+                                  return (
+                                    <div key={i} className={i > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
+                                      <div className="flex items-start gap-2">
+                                        <div className="flex-1 min-w-0">
+                                          <p className="text-xs font-bold text-slate-800">{line.item.deliveryDay} · {line.item.name}</p>
+                                          {detail && <p className="text-[11px] text-slate-400 mt-0.5">{detail}</p>}
+                                        </div>
+                                        <span className="w-8 text-center text-xs text-slate-600 shrink-0">{line.item.qty}</span>
+                                        <span className="w-16 text-right text-xs font-black text-slate-900 shrink-0">Rs {line.item.price}</span>
+                                      </div>
+                                      {((!!line.seq && line.seq > 0) || person) && (
+                                        <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                                          {!!line.seq && line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase">Extra {line.seq + 1}</span>}
+                                          {person && <PersonTag name={person} />}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="border-t border-dashed border-slate-300 mt-3 pt-3 space-y-1.5">
+                  {vatOn && (
+                    <>
+                      <div className="flex justify-between text-xs text-slate-500 font-bold"><span>Subtotal (excl. VAT)</span><span>Rs {netTotal.toFixed(2)}</span></div>
+                      <div className="flex justify-between text-xs text-slate-500 font-bold"><span>VAT ({vatRate}%)</span><span>Rs {vatAmount.toFixed(2)}</span></div>
+                    </>
+                  )}
+                  <div className="flex justify-between items-baseline pt-1.5 border-t border-[#E7E0D0]">
+                    <span className="text-xs font-black uppercase text-slate-400 tracking-widest">Total paid</span>
+                    <span className="text-lg font-black text-success">Rs {receiptTotal.toFixed(0)}</span>
+                  </div>
+                </div>
+
+                <p className="text-center text-[10px] text-slate-400 mt-5">Thank you for ordering with {SYSTEM_CONFIG.businessName} 🌿</p>
+
+                <div className="bmz-no-print flex gap-2 mt-5">
+                  <button onClick={() => setReceiptTarget(null)} className="flex-1 py-2.5 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Close</button>
+                  <button onClick={() => window.print()} className="flex-1 py-2.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5">
+                    <Printer className="size-3.5" /> Print / Save PDF
+                  </button>
+                </div>
+              </div>
+            </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* --- TOAST --- */}
       {toastMsg && (

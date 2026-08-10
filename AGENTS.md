@@ -185,6 +185,33 @@ Verified with a clean `npx tsc --noEmit` (no imports pointed at any removed file
 
 Verified with a clean `npx tsc --noEmit` check.
 
+## 2026-08-10: Antigravity — Dinner Offering & Receipt Regrouping
+
+Implemented the Dinner offering and My Order/Receipt regrouping changes:
+
+**1. Dinner Offering Integration**:
+* **`modules/store.ts`**:
+  * Added `SYSTEM_CONFIG.dinnerEnabled` (defaulting to `true`).
+  * Declared a mutable reactive `WEEKLY_DINNER_MENU` store value along with `subscribeToDinnerMenu` and `updateDinnerCurryOption` helper functions to mirror the lunch menu behavior.
+  * Added custom business branding properties to the config (`businessName`, `businessTagline`, `businessLogoUrl`).
+* **`modules/CustomerPortal.tsx`**:
+  * Added a separate `dinnerCart` state and independent builder to manage dinner selections cleanly.
+  * Rendered a Lunch/Dinner tab switcher in the Menu view (gated by `dinnerEnabled`).
+  * Ensured dinner checkout items are correctly labeled with `serviceSlot` (e.g. `'Dinner'`).
+* **`modules/Operations.tsx`**:
+  * Integrated a "Dinner offering" toggle on the Menu tab to switch `SYSTEM_CONFIG.dinnerEnabled` live.
+  * Created a dinner menu-editing grid (inline pencil-edit UI) that appears when Dinner is enabled.
+  * Fixed the "Orders by Dish" aggregation to group by `serviceSlot` and name rather than name alone, preventing lunch and dinner dishes of the same name from summing up together.
+
+**2. Grouping & Layout Improvements**:
+* **`modules/CustomerPortal.tsx`**:
+  * Restructured My Order (Draft & Confirmed) and invoice receipts to group by Order $\rightarrow$ Offering (Lunch/Dinner) $\rightarrow$ Day.
+  * Added a unified helper `groupByOrderServiceDay()` to ensure layout consistency across all three receipt/order views.
+  * Surfaced visual indicators when a receipt spans multiple orders or service slots.
+
+Verified that the whole project builds and compiles perfectly with no warnings/errors.
+
+
 
 ## 2026-08-10: Claude — Home page rebuilt around dish photos, loyalty progress, and a quick-action grid
 
