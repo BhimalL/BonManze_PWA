@@ -50,9 +50,23 @@ import {
   MOCK_TODAY,
   addOrder,
   cancelOrderItem,
+  editOrderItem,
   updateOrderItemsPayment,
   formatCurrency
 } from './store';
+
+// Same-day edits/cancels lock at 9:00 AM, same rule the original HTML
+// prototype used ("the 9:00 AM cutoff has passed") — after that the kitchen
+// has already started on the meal. Past delivery days are always locked;
+// future ones are always open. Uses real wall-clock time for the hour check
+// since the app's simulated "today" (systemDate) only ever moves in whole
+// days.
+const isPastCutoff = (deliveryDate: string, systemDate: string): boolean => {
+  if (!deliveryDate) return false;
+  if (deliveryDate < systemDate) return true;
+  if (deliveryDate > systemDate) return false;
+  return new Date().getHours() >= 9;
+};
 
 interface MealSelection {
   curryId: string;
@@ -153,6 +167,31 @@ const splitNotesTag = (notes?: string): { detail: string; person: string | null 
   return { detail: notes, person: null };
 };
 
+// A confirmed OrderItem only stores its curry id (itemId) plus a flattened
+// text description — there's no structured base/dhal/salad/beverage/dessert
+// field to edit directly (OrderItem was never extended to carry one). This
+// rebuilds a MealSelection good enough to reopen in the builder by matching
+// each name in the notes back against the known option lists — reliable as
+// long as those names stay unique across categories, which they are today.
+const reconstructSelection = (item: OrderItem): MealSelection => {
+  const { detail, person } = splitNotesTag(item.notes);
+  const segments = detail.split(' · ').map(s => s.trim()).filter(Boolean);
+  const baseMatch = MEAL_BASES.find(b => segments.includes(b.name));
+  const dhalMatch = MEAL_DHALS.find(x => segments.includes(x.name));
+  const saladMatch = MEAL_SALADS.find(x => segments.includes(x.name));
+  const bevMatch = MEAL_BEVERAGES.find(x => segments.includes(x.name));
+  const desMatch = MEAL_DESSERTS.find(x => segments.includes(x.name));
+  return {
+    curryId: item.itemId,
+    baseId: baseMatch?.id || MEAL_BASES[0].id,
+    dhalId: dhalMatch?.id || 'none',
+    saladId: saladMatch?.id || 'none',
+    beverageId: bevMatch?.id || 'none',
+    dessertId: desMatch?.id || 'none',
+    note: person || ''
+  };
+};
+
 const CHECKOUT_METHOD_NAMES = ['Juice / Transfer', 'MauCAS', 'Cash on Delivery'];
 const isPayNowMethod = (name: string) => name.includes('Juice');
 
@@ -173,6 +212,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
   const [builder, setBuilder] = useState<{
     day: WeekDay; openSection: 1 | 2 | 3; sel: MealSelection; editIndex: number | null;
+    // Set only when editing an already-confirmed meal (as opposed to a
+    // draft-cart one, which uses editIndex) — commitBuilder branches on this.
+    editingConfirmed: { orderId: string; date: string; slot: string } | null;
   } | null>(null);
 
   const [payTarget, setPayTarget] = useState<{
@@ -213,9 +255,30 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       day,
       openSection: 1,
       editIndex,
+      editingConfirmed: null,
       sel: existing ? { ...existing } : emptySelection(presetCurryId || WEEKLY_CURRY_MENU[day.key][0].id)
     });
   };
+
+  // Editing an already-confirmed meal, gated by the same cutoff that gates
+  // Cancel — the button that calls this is only shown once that check
+  // passes, but this guards directly too in case anything calls it earlier.
+  const openEditConfirmed = (line: Line) => {
+    if (isPastCutoff(line.item.deliveryDate || '', systemDate)) {
+      toast('Locked — the 9:00 AM cutoff has passed');
+      return;
+    }
+    const day = weekDays.find(d => d.date === line.item.deliveryDate);
+    if (!day) return;
+    setBuilder({
+      day,
+      openSection: 1,
+      editIndex: null,
+      editingConfirmed: { orderId: line.order.id, date: line.item.deliveryDate || '', slot: line.item.serviceSlot || 'Lunch' },
+      sel: reconstructSelection(line.item)
+    });
+  };
+
   const closeBuilder = () => setBuilder(null);
 
   const setBuilderSel = (patch: Partial<MealSelection>) => {
@@ -242,7 +305,21 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
   const commitBuilder = () => {
     if (!builder) return;
-    const { day, sel, editIndex } = builder;
+    const { day, sel, editIndex, editingConfirmed } = builder;
+
+    if (editingConfirmed) {
+      const c = WEEKLY_CURRY_MENU[day.key].find(x => x.id === sel.curryId);
+      editOrderItem(editingConfirmed.orderId, editingConfirmed.date, editingConfirmed.slot, {
+        itemId: sel.curryId,
+        name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
+        price: mealPrice(sel, day.key),
+        notes: mealNotesLine(sel)
+      });
+      toast('Meal updated');
+      closeBuilder();
+      return;
+    }
+
     setCart(prev => {
       const dayList = [...(prev[day.date] || [])];
       if (editIndex !== null) dayList[editIndex] = sel;
@@ -457,6 +534,21 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     });
   };
 
+  // Pay everything unpaid within one specific Order, as opposed to the
+  // whole week (openPayBalance) or a single meal (openPayItem) — reuses the
+  // same 'balance' payTarget shape, just scoped to one order's lines.
+  const openPayOrder = (lines: (Line & { seq: number })[]) => {
+    const pending = lines.filter(l => l.item.paymentStatus === 'Pending');
+    if (!pending.length) return;
+    setPayMethod(null);
+    setPayTarget({
+      kind: 'balance',
+      items: pending.map(l => ({ orderId: l.order.id, date: l.item.deliveryDate || '', slot: l.item.serviceSlot || 'Lunch', amount: l.item.qty * l.item.price })),
+      amount: pending.reduce((t, l) => t + l.item.qty * l.item.price, 0),
+      what: `${pending.length} unpaid meal${pending.length !== 1 ? 's' : ''} · this order`
+    });
+  };
+
   const commitPayment = () => {
     if (!payTarget || !payMethod) return;
     if (payTarget.kind === 'item') {
@@ -485,6 +577,43 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     toast(`Thanks! ${rateStars}★ sent to the kitchen`);
     setRateTarget(null);
   };
+
+  // --- HOME: one status card that always tells you the single most useful
+  // next thing, plus a week-at-a-glance emoji strip — mirrors the original
+  // prototype's home status card / attention logic, adapted to what our
+  // OrderItem model actually tracks (no separate "delivered, unconfirmed"
+  // state — Mark Delivered in the Operator Console goes straight to
+  // Completed, so there's nothing to confirm receipt of here).
+  const needsRating = useMemo(
+    () => thisWeekLinesWithSeq.find(l => l.item.status === 'Completed' && l.item.paymentStatus === 'Paid' && !ratings[`${l.order.id}-${l.item.itemId}-${l.item.deliveryDate}`]),
+    [thisWeekLinesWithSeq, ratings]
+  );
+
+  const weekChips = useMemo(() => {
+    const chips: string[] = [];
+    weekOverview.forEach(({ day, confirmed, draft }) => {
+      confirmed.forEach(l => chips.push(WEEKLY_CURRY_MENU[day.key].find(x => x.id === l.item.itemId)?.emoji || '🍽️'));
+      draft.forEach(m => chips.push(WEEKLY_CURRY_MENU[day.key].find(x => x.id === m.curryId)?.emoji || '🍽️'));
+    });
+    return chips;
+  }, [weekOverview]);
+
+  const homeStatus = useMemo(() => {
+    if (cartCount === 0 && thisWeekLinesWithSeq.length === 0) {
+      return { icon: '🍽️', tone: 'bg-slate-100', title: "This week's menu is ready", subtitle: 'Order by Sunday noon · Lunch Mon–Fri', ctaLabel: 'Browse the menu', action: () => setView('menu') };
+    }
+    if (thisWeekLinesWithSeq.length === 0) {
+      return { icon: '🍱', tone: 'bg-slate-100', title: `${cartCount} meal${cartCount !== 1 ? 's' : ''} selected`, subtitle: `${formatCurrency(cartTotals.total)} · not yet confirmed`, ctaLabel: 'Review & confirm', action: () => setView('order') };
+    }
+    if (outstandingTotal > 0) {
+      const n = thisWeekLinesWithSeq.filter(l => l.item.paymentStatus === 'Pending').length;
+      return { icon: '💳', tone: 'bg-warning/10', title: `${formatCurrency(outstandingTotal)} outstanding`, subtitle: `across ${n} meal${n !== 1 ? 's' : ''}`, ctaLabel: 'Pay now', action: () => { setView('order'); openPayBalance(); } };
+    }
+    if (needsRating) {
+      return { icon: '⭐', tone: 'bg-primary/5', title: 'How was it?', subtitle: `Rate your ${needsRating.item.deliveryDay} meal`, ctaLabel: 'Rate meal', action: () => { setView('order'); openRating(needsRating); } };
+    }
+    return { icon: '✅', tone: 'bg-primary/5', title: 'All set for this week', subtitle: `${thisWeekLinesWithSeq.length} meal${thisWeekLinesWithSeq.length !== 1 ? 's' : ''} · fully paid`, ctaLabel: null as string | null, action: null as (() => void) | null };
+  }, [cartCount, thisWeekLinesWithSeq, outstandingTotal, needsRating, cartTotals]);
 
   // --- LOGIN ---
   if (!currentUser) {
@@ -557,29 +686,27 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <p className="text-xs opacity-80 mt-1">{culturePhrase.en}</p>
             </div>
 
-            {(cartCount > 0 || thisWeekLinesWithSeq.length > 0) && (
-              <div className={`rounded-2xl p-4 flex items-center justify-between gap-3 ${outstandingTotal > 0 ? 'bg-warning/10' : thisWeekLinesWithSeq.length > 0 ? 'bg-primary/5' : 'bg-slate-100'}`}>
-                <div className="min-w-0">
-                  <p className="text-sm font-black text-slate-900">
-                    {thisWeekLinesWithSeq.length === 0
-                      ? `${cartCount} meal${cartCount !== 1 ? 's' : ''} selected`
-                      : outstandingTotal > 0
-                        ? `${formatCurrency(outstandingTotal)} outstanding`
-                        : 'All set for this week'}
-                  </p>
-                  <p className="text-[11px] text-slate-500 font-medium truncate">
-                    {thisWeekLinesWithSeq.length === 0
-                      ? `${formatCurrency(cartTotals.total)} · not yet confirmed`
-                      : outstandingTotal > 0
-                        ? `across ${thisWeekLinesWithSeq.filter(l => l.item.paymentStatus === 'Pending').length} meal${thisWeekLinesWithSeq.filter(l => l.item.paymentStatus === 'Pending').length !== 1 ? 's' : ''}`
-                        : `${thisWeekLinesWithSeq.length} meal${thisWeekLinesWithSeq.length !== 1 ? 's' : ''} · fully paid`}
-                  </p>
-                </div>
-                <button onClick={() => setView('order')} className="text-[10px] font-black uppercase tracking-widest text-primary shrink-0">
-                  {thisWeekLinesWithSeq.length === 0 ? 'Review & confirm →' : outstandingTotal > 0 ? 'Pay now →' : 'My Order →'}
-                </button>
+            {weekChips.length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap">
+                {weekChips.slice(0, 8).map((emoji, i) => (
+                  <span key={i} className="size-8 rounded-full bg-white border border-[#E7E0D0] flex items-center justify-center text-sm shrink-0">{emoji}</span>
+                ))}
+                {weekChips.length > 8 && (
+                  <span className="size-8 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center text-[10px] font-black shrink-0">+{weekChips.length - 8}</span>
+                )}
               </div>
             )}
+
+            <div className={`rounded-2xl p-4 flex items-start gap-3 ${homeStatus.tone}`}>
+              <div className="size-10 rounded-xl bg-white/70 flex items-center justify-center text-lg shrink-0">{homeStatus.icon}</div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-black text-slate-900">{homeStatus.title}</p>
+                <p className="text-[11px] text-slate-500 font-medium mt-0.5">{homeStatus.subtitle}</p>
+                {homeStatus.ctaLabel && homeStatus.action && (
+                  <button onClick={homeStatus.action} className="mt-2 text-[10px] font-black uppercase tracking-widest text-primary">{homeStatus.ctaLabel} →</button>
+                )}
+              </div>
+            </div>
 
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -627,12 +754,6 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 ))}
               </div>
             </div>
-
-            {cartCount > 0 && (
-              <button onClick={() => setView('order')} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg flex items-center justify-center gap-2">
-                Review order · {cartCount} meal{cartCount !== 1 ? 's' : ''} · {formatCurrency(cartTotals.total)}
-              </button>
-            )}
           </div>
         )}
 
@@ -747,15 +868,21 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">{gi === 0 ? 'Your order' : `Additional order ${gi + 1}`} · {lines.length} meal{lines.length !== 1 ? 's' : ''}</p>
                             <p className="text-[10px] text-slate-400 mt-0.5">Placed {new Date(order.timestamp).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</p>
                           </div>
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 ${orderPaid ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
-                            {orderPaid ? 'Paid' : `${formatCurrency(orderOutstanding)} due`}
-                          </span>
+                          {orderPaid ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success">Paid</span>
+                          ) : (
+                            <button onClick={() => openPayOrder(lines)} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger">
+                              Pay order · {formatCurrency(orderOutstanding)}
+                            </button>
+                          )}
                         </div>
                         <div className="divide-y divide-[#F0EADD]">
                           {lines.map((line, idx) => {
                             const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
                             const isCompleted = line.item.status === 'Completed';
                             const isPaid = line.item.paymentStatus === 'Paid';
+                            const isActive = line.item.status === 'Active';
+                            const locked = isPastCutoff(line.item.deliveryDate || '', systemDate);
                             const { detail, person } = splitNotesTag(line.item.notes);
                             return (
                               <div key={idx} className="p-4">
@@ -777,10 +904,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                 </div>
                                 <div className="flex gap-2">
                                   {!isPaid && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
-                                  {line.item.status === 'Active' && <button onClick={() => handleCancel(line)} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Cancel</button>}
+                                  {isActive && !locked && <button onClick={() => openEditConfirmed(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest">Edit</button>}
+                                  {isActive && !locked && <button onClick={() => handleCancel(line)} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Cancel</button>}
                                   {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
                                   {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
                                 </div>
+                                {isActive && locked && (
+                                  <p className="text-[11px] text-slate-400 mt-1">🔒 Locked — the 9:00 AM cutoff has passed</p>
+                                )}
                               </div>
                             );
                           })}
@@ -906,7 +1037,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <img src={dishPhotoFor(builder.sel.curryId)} className="w-full h-full object-cover" alt="Dish" />
               <button onClick={closeBuilder} className="absolute top-4 right-4 p-2 bg-white/90 rounded-full text-slate-700"><X className="size-4" /></button>
               <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/70 to-transparent">
-                <p className="text-white font-black text-sm mb-2">{builder.editIndex !== null ? `Edit ${builder.day.label}` : `${builder.day.label} — customise`}</p>
+                <p className="text-white font-black text-sm mb-2">{(builder.editIndex !== null || builder.editingConfirmed) ? `Edit ${builder.day.label}` : `${builder.day.label} — customise`}</p>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {selectedCurry && (
                     <button onClick={() => toggleSection(1)} className="px-2.5 py-1 rounded-full bg-white/90 text-slate-900 text-[11px] font-bold">{selectedCurry.emoji} {selectedCurry.name}</button>
@@ -991,7 +1122,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 onClick={commitBuilder}
                 className="px-6 py-3 rounded-xl bg-primary text-white text-xs font-black uppercase shadow-lg shadow-primary/20 disabled:opacity-40"
               >
-                {builder.editIndex !== null ? 'Save changes' : 'Add to order'}
+                {(builder.editIndex !== null || builder.editingConfirmed) ? 'Save changes' : 'Add to order'}
               </button>
             </div>
           </div>

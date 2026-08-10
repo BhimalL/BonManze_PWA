@@ -114,3 +114,17 @@ Follow-up to the round above — Bhimal clarified two things weren't actually ad
 **Home mini cards now show order status.** They previously showed only a paid/unpaid dot; added the same status badge (Active/Completed/Preparing/etc.) used everywhere else, plus the person tag, so Home matches what My Order shows instead of a stripped-down subset.
 
 Verified with a clean `tsc --noEmit`, shipped.
+
+## 2026-08-10: Claude — Pay whole order, edit a confirmed meal (cutoff-gated), Home rebuilt
+
+Three more asks from Bhimal:
+
+**Pay whole order or per meal.** Each order group in My Order now has a "Pay order · Rs X" button in its header (`openPayOrder`) alongside the existing per-meal Pay buttons — reuses the same `payTarget: { kind: 'balance' }` shape `openPayBalance` already used for the whole week, just scoped to one order's unpaid lines. No new store function needed for this one.
+
+**Edit a confirmed meal, gated by a 9:00 AM cutoff.** This is the gap flagged two rounds ago (prototype cutoff logic recheck) — now implemented. `isPastCutoff(deliveryDate, systemDate)` locks past delivery days outright and locks today's delivery once the real wall-clock hour hits 9 — the app's simulated "today" (`systemDate`) only moves in whole days, so the hour check has to come from the real clock, there's nothing else to check it against. Both Edit and Cancel are now gated by this on confirmed meals; once locked, the meal shows "🔒 Locked — the 9:00 AM cutoff has passed" instead of those buttons, same wording as the prototype.
+
+Editing a confirmed meal needed a real store mutator — added `editOrderItem(orderId, date, slot, updates)` in `store.ts`, same find-by-date+slot-and-not-cancelled pattern as the existing `cancelOrderItem`, recalculating the order total afterward. The harder part: `OrderItem` only stores the curry id (`itemId`) and a flattened text description, no structured base/dhal/salad/beverage/dessert fields — so reopening the builder on a confirmed meal needed `reconstructSelection()`, which matches each name in the notes string back against `MEAL_BASES`/`MEAL_DHALS`/etc. to recover ids. This works reliably today because those names are unique across categories, but it's a workaround, not a real data model — if `OrderItem` ever gets a proper structured field for the original selection, this whole function goes away. Flagging again since this is the second feature in a row (after the cancel-credit gap) that really wants one.
+
+**Home rebuilt.** Replaced the patched-together status strip with a single status card that always shows the one most useful next thing — mirrors the prototype's home status-card state machine (nothing ordered → browse; draft in progress → review & confirm; confirmed with a balance → pay now; fully paid but something's ratable → rate meal; otherwise → all set) — plus a week-at-a-glance emoji chip row above it. Dropped the redundant bottom "Review order" button now that the status card's own CTA covers that case, so Home has one clear next action instead of two competing ones. The day-by-day grid underneath (draft/confirmed per day, Extra tags, Draft/Paid/Unpaid badges) is unchanged from last round.
+
+Verified with a clean `tsc --noEmit`, shipped.

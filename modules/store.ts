@@ -842,6 +842,24 @@ export const cancelOrderItem = (orderId: string, date: string, slot: string, ite
    notifyOrderListeners();
 };
 
+// Lets a customer amend a still-editable confirmed meal (curry/base/extras
+// changed, price recalculated) rather than only being able to cancel it.
+// Same find-by-date+slot pattern as cancelOrderItem; the cutoff check that
+// decides whether this is allowed at all lives in the caller (CustomerPortal),
+// same place the cancel cutoff will live.
+export const editOrderItem = (orderId: string, date: string, slot: string, updates: { itemId: string; name: string; price: number; notes: string }) => {
+  ACTIVE_ORDERS = ACTIVE_ORDERS.map(o => {
+    if (o.id !== orderId) return o;
+    const idx = o.items.findIndex(i => i.deliveryDate === date && i.serviceSlot === slot && i.status !== 'Cancelled');
+    if (idx === -1) return o;
+    const newItems = [...o.items];
+    newItems[idx] = { ...newItems[idx], ...updates };
+    const newTotal = newItems.reduce((acc, i) => i.status === 'Cancelled' ? acc : acc + calculateTotal(i.price * i.qty), 0);
+    return { ...o, items: newItems, total: newTotal };
+  });
+  notifyOrderListeners();
+};
+
 export const updateOrderItemsPayment = (orderId: string, date: string, slot: string | undefined, tenderType: Order['tenderType'], methodName: string) => {
    let amountPaid = 0;
    ACTIVE_ORDERS = ACTIVE_ORDERS.map(o => {
