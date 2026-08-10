@@ -202,6 +202,11 @@ export let PUBLISHED_PLAN: any = {};
 
 export const publishPlan = (plan: any) => {
     PUBLISHED_PLAN = plan;
+    // PUBLISHED_PLAN has no listener set of its own (CustomerPortal reads it
+    // on demand via getDayMenu rather than subscribing), so it can't
+    // piggyback on the persistAll-via-listener-set trick below. Persist it
+    // directly here instead.
+    persistAll();
 };
 
 export const getDayMenu = (dateKey: string, service: string) => {
@@ -1075,3 +1080,94 @@ export const deleteCustomerGroup = (id: string) => {
   CUSTOMER_GROUPS = CUSTOMER_GROUPS.filter(g => g.id !== id);
   groupListeners.forEach(l => l([...CUSTOMER_GROUPS]));
 };
+
+// --- PERSISTENCE (localStorage) ---
+// Everything above this point is an in-memory mock that forgets everything
+// on refresh — the single biggest gap identified in the 2026-08-10 codebase
+// review (see AGENTS.md / BonManzE_v1_scope.md). This adds a durable layer
+// without changing any mutator function above: every mutator already
+// notifies its own listener Set, so persistAll() below just registers
+// itself as one more listener on each Set and rides along for free.
+
+const PERSIST_KEY = 'bonmanze_rms_state_v1';
+
+interface PersistedState {
+  MOCK_TODAY: string;
+  PAYMENT_METHODS: PaymentMethod[];
+  MEAL_LIBRARY_ITEMS: MenuItem[];
+  PUBLISHED_PLAN: any;
+  GLOBAL_CUSTOMERS: Customer[];
+  AUDIT_LOG: AuditEntry[];
+  DISCREPANCIES: Discrepancy[];
+  PURCHASE_ORDERS: PurchaseOrder[];
+  PETTY_CASH: PettyCashState;
+  PREVIOUS_SHIFT_PHYSICAL: number;
+  CASHIER_SHIFT: ShiftState;
+  DISCOUNT_REQUESTS: DiscountRequest[];
+  ACTIVE_ORDERS: Order[];
+  POS_SESSION_CARTS: Record<string, PosSession>;
+  LOYALTY_TIERS: LoyaltyTier[];
+  CUSTOMER_GROUPS: CustomerGroup[];
+  SYSTEM_CONFIG: typeof SYSTEM_CONFIG;
+}
+
+const persistAll = () => {
+  try {
+    const snapshot: PersistedState = {
+      MOCK_TODAY, PAYMENT_METHODS, MEAL_LIBRARY_ITEMS, PUBLISHED_PLAN,
+      GLOBAL_CUSTOMERS, AUDIT_LOG, DISCREPANCIES, PURCHASE_ORDERS,
+      PETTY_CASH, PREVIOUS_SHIFT_PHYSICAL, CASHIER_SHIFT, DISCOUNT_REQUESTS,
+      ACTIVE_ORDERS, POS_SESSION_CARTS, LOYALTY_TIERS, CUSTOMER_GROUPS,
+      SYSTEM_CONFIG,
+    };
+    localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
+  } catch (e) {
+    // Storage can fail (quota exceeded, private/incognito mode) — a
+    // persistence hiccup should never break the app itself.
+    console.warn('BonManzE: failed to persist state', e);
+  }
+};
+
+// Every existing listener Set gets persistAll added as an extra subscriber.
+// No mutator function above needs to change.
+[
+  systemDateListeners, mealLibraryListeners, customerListeners,
+  auditListeners, discrepancyListeners, poListeners, pettyCashListeners,
+  cashierListeners, discountRequestListeners, orderListeners, posListeners,
+  loyaltyListeners, groupListeners, paymentMethodListeners, configListeners,
+].forEach((set: Set<any>) => set.add(persistAll));
+
+// Hydrate once at module load, before any component subscribes — ES module
+// top-level code always finishes running before an importer's code (e.g. a
+// React component's useEffect) can execute, so this is guaranteed to have
+// already run by the time anything calls subscribeToX().
+export const clearPersistedState = () => {
+  try { localStorage.removeItem(PERSIST_KEY); } catch (e) { /* ignore */ }
+};
+
+(() => {
+  try {
+    const raw = localStorage.getItem(PERSIST_KEY);
+    if (!raw) return;
+    const saved: Partial<PersistedState> = JSON.parse(raw);
+    if (saved.MOCK_TODAY !== undefined) MOCK_TODAY = saved.MOCK_TODAY;
+    if (saved.PAYMENT_METHODS !== undefined) PAYMENT_METHODS = saved.PAYMENT_METHODS;
+    if (saved.MEAL_LIBRARY_ITEMS !== undefined) MEAL_LIBRARY_ITEMS = saved.MEAL_LIBRARY_ITEMS;
+    if (saved.PUBLISHED_PLAN !== undefined) PUBLISHED_PLAN = saved.PUBLISHED_PLAN;
+    if (saved.GLOBAL_CUSTOMERS !== undefined) GLOBAL_CUSTOMERS = saved.GLOBAL_CUSTOMERS;
+    if (saved.AUDIT_LOG !== undefined) AUDIT_LOG = saved.AUDIT_LOG;
+    if (saved.DISCREPANCIES !== undefined) DISCREPANCIES = saved.DISCREPANCIES;
+    if (saved.PURCHASE_ORDERS !== undefined) PURCHASE_ORDERS = saved.PURCHASE_ORDERS;
+    if (saved.PETTY_CASH !== undefined) PETTY_CASH = saved.PETTY_CASH;
+    if (saved.PREVIOUS_SHIFT_PHYSICAL !== undefined) PREVIOUS_SHIFT_PHYSICAL = saved.PREVIOUS_SHIFT_PHYSICAL;
+    if (saved.CASHIER_SHIFT !== undefined) CASHIER_SHIFT = saved.CASHIER_SHIFT;
+    if (saved.DISCOUNT_REQUESTS !== undefined) DISCOUNT_REQUESTS = saved.DISCOUNT_REQUESTS;
+    if (saved.ACTIVE_ORDERS !== undefined) ACTIVE_ORDERS = saved.ACTIVE_ORDERS;
+    if (saved.POS_SESSION_CARTS !== undefined) POS_SESSION_CARTS = saved.POS_SESSION_CARTS;
+    if (saved.LOYALTY_TIERS !== undefined) LOYALTY_TIERS = saved.LOYALTY_TIERS;
+    if (saved.CUSTOMER_GROUPS !== undefined) CUSTOMER_GROUPS = saved.CUSTOMER_GROUPS;
+    if (saved.SYSTEM_CONFIG !== undefined) Object.assign(SYSTEM_CONFIG, saved.SYSTEM_CONFIG);
+  } catch (e) {
+    console.warn('BonManzE: failed to restore persisted state', e);
+  }
+})();
