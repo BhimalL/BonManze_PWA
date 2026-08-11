@@ -2104,6 +2104,8 @@ interface PersistedState {
   // See LUNCH_DEFAULT_LINK_MAP/DINNER_DEFAULT_LINK_MAP above.
   LUNCH_DEFAULT_LINK_MAP: Record<string, string>;
   DINNER_DEFAULT_LINK_MAP: Record<string, string>;
+  // See MENU_PLANNER_CLEARED_ONCE below.
+  MENU_PLANNER_CLEARED_ONCE: boolean;
 }
 
 const persistAll = () => {
@@ -2118,7 +2120,7 @@ const persistAll = () => {
       DINNER_MENU_OVERRIDES: dinnerMenuStore.getSnapshot(),
       MEAL_BASES, MEAL_DHALS, MEAL_SALADS, MEAL_BEVERAGES, MEAL_DESSERTS,
       MAIN_DISHES, ICON_LIBRARY, MENU_LIBRARY_MIGRATED, MAIN_DISH_CONTENT_CLEANED,
-      LUNCH_DEFAULT_LINK_MAP, DINNER_DEFAULT_LINK_MAP,
+      LUNCH_DEFAULT_LINK_MAP, DINNER_DEFAULT_LINK_MAP, MENU_PLANNER_CLEARED_ONCE,
     };
     localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
   } catch (e) {
@@ -2245,6 +2247,54 @@ const relinkDefaultRotationToLibrary = () => {
   }
 };
 
+// ONE-TIME script, run automatically the next time this installation loads
+// — requested directly by Bhimal to empty the Menu Planner (This Week/Next
+// Week/Week+2, both Lunch and Dinner) so he can re-pick every dish from
+// the Meal Library by hand and verify each one links correctly from a
+// clean slate, rather than trying to untangle whatever was already
+// planned before the resolveDish()/relink fixes above landed.
+//
+// Deliberately called ONLY from the "existing persisted state" branch of
+// the hydration IIFE below, never from the fresh-install branch — a brand
+// new installation (no persisted state yet) has nothing to clear, and
+// should keep showing the intended default rotation, not start blank
+// forever. Guarded by MENU_PLANNER_CLEARED_ONCE so it fires exactly once
+// on Bhimal's existing installation and never repeats — critically, it
+// must never re-fire after he's re-added dishes, or it would wipe his
+// rework right back out on the next reload.
+//
+// Sets every currently-relevant week to an explicit empty override —
+// clearing overrides alone isn't enough, since forWeek() would then fall
+// back to WEEKLY_LUNCH_MENU_DEFAULT/WEEKLY_DINNER_MENU_DEFAULT (the
+// hardcoded rotation), which is not empty. Only touches the Menu
+// Planner's day-slot dishes — never the Meal Library (Mains), orders, or
+// customers.
+let MENU_PLANNER_CLEARED_ONCE = false;
+const mondayOfWeek = (dateStr: string, offsetDays: number): string => {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + offsetDays);
+  const day = d.getDay(); // 0=Sun..6=Sat
+  d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day));
+  return d.toISOString().slice(0, 10);
+};
+const clearMenuPlannerOnce = () => {
+  if (MENU_PLANNER_CLEARED_ONCE) return;
+  const EMPTY_WEEK: Record<WeekdayKey, CurryOption[]> = { MON: [], TUE: [], WED: [], THU: [], FRI: [] };
+  // Empty every week that already has an override (past, present, future)...
+  Object.keys(lunchMenuStore.getSnapshot()).forEach(w => setLunchWeekMenu(w, { ...EMPTY_WEEK }));
+  Object.keys(dinnerMenuStore.getSnapshot()).forEach(w => setDinnerWeekMenu(w, { ...EMPTY_WEEK }));
+  // ...and force-empty This Week/Next Week/Week+2 even if they had no
+  // override yet (they'd otherwise still show the hardcoded default
+  // rotation, which is not empty).
+  [0, 7, 14].forEach(offsetDays => {
+    const weekStart = mondayOfWeek(MOCK_TODAY, offsetDays);
+    setLunchWeekMenu(weekStart, { ...EMPTY_WEEK });
+    setDinnerWeekMenu(weekStart, { ...EMPTY_WEEK });
+  });
+  MENU_PLANNER_CLEARED_ONCE = true;
+  persistAll();
+};
+
 (() => {
   try {
     const raw = localStorage.getItem(PERSIST_KEY);
@@ -2280,12 +2330,17 @@ const relinkDefaultRotationToLibrary = () => {
     if (saved.MAIN_DISH_CONTENT_CLEANED !== undefined) MAIN_DISH_CONTENT_CLEANED = saved.MAIN_DISH_CONTENT_CLEANED;
     if (saved.LUNCH_DEFAULT_LINK_MAP !== undefined) LUNCH_DEFAULT_LINK_MAP = saved.LUNCH_DEFAULT_LINK_MAP;
     if (saved.DINNER_DEFAULT_LINK_MAP !== undefined) DINNER_DEFAULT_LINK_MAP = saved.DINNER_DEFAULT_LINK_MAP;
+    if (saved.MENU_PLANNER_CLEARED_ONCE !== undefined) MENU_PLANNER_CLEARED_ONCE = saved.MENU_PLANNER_CLEARED_ONCE;
     runMenuLibraryMigrationOnce();
     cleanupMainDishContentOnce();
     // Unconditional (not just on the fresh-install path above) — see
     // relinkDefaultRotationToLibrary's comment for why this must run on
     // every load, not just once.
     relinkDefaultRotationToLibrary();
+    // One-time Menu Planner wipe — see clearMenuPlannerOnce's comment above
+    // for why this only ever runs from this branch (existing installation),
+    // never the fresh-install branch above.
+    clearMenuPlannerOnce();
   } catch (e) {
     console.warn('BonManzE: failed to restore persisted state', e);
   }
