@@ -312,7 +312,23 @@ function createWeeklyMenuStore(defaultMenu: Record<WeekdayKey, CurryOption[]>) {
     listeners.forEach(l => l({ ...overrides }));
   };
 
-  return { forWeek, subscribe, update };
+  // Raw accessors used only by the persistence layer at the bottom of this
+  // file: getSnapshot() reads the current overrides for saving, hydrate()
+  // restores a saved set on module load, and addRawListener() registers a
+  // subscriber without the immediate "call me with the current value" firing
+  // that subscribe() does (persistAll must NOT fire before hydrate() has run,
+  // or it would overwrite the saved data with the in-memory defaults).
+  const getSnapshot = () => ({ ...overrides });
+  const hydrate = (saved: Record<string, Record<WeekdayKey, CurryOption[]>> | undefined) => {
+    if (!saved) return;
+    overrides = { ...saved };
+    listeners.forEach(l => l({ ...overrides }));
+  };
+  const addRawListener = (listener: (overrides: Record<string, Record<WeekdayKey, CurryOption[]>>) => void) => {
+    listeners.add(listener);
+  };
+
+  return { forWeek, subscribe, update, getSnapshot, hydrate, addRawListener };
 }
 
 const WEEKLY_LUNCH_MENU_DEFAULT: Record<WeekdayKey, CurryOption[]> = {
@@ -1391,6 +1407,13 @@ interface PersistedState {
   LOYALTY_TIERS: LoyaltyTier[];
   CUSTOMER_GROUPS: CustomerGroup[];
   SYSTEM_CONFIG: typeof SYSTEM_CONFIG;
+  // Week-specific menu overrides (e.g. a custom "Next Week" lineup set in
+  // Operations before that week arrives) were originally left out of this
+  // snapshot — everything else in the app survives a refresh, but a planned
+  // future week's menu silently reverted to the default rotation. Included
+  // here so Operations can plan ahead without racing the clock.
+  LUNCH_MENU_OVERRIDES: Record<string, Record<WeekdayKey, CurryOption[]>>;
+  DINNER_MENU_OVERRIDES: Record<string, Record<WeekdayKey, CurryOption[]>>;
 }
 
 const persistAll = () => {
@@ -1401,6 +1424,8 @@ const persistAll = () => {
       PETTY_CASH, PREVIOUS_SHIFT_PHYSICAL, CASHIER_SHIFT, DISCOUNT_REQUESTS,
       ACTIVE_ORDERS, POS_SESSION_CARTS, LOYALTY_TIERS, CUSTOMER_GROUPS,
       SYSTEM_CONFIG,
+      LUNCH_MENU_OVERRIDES: lunchMenuStore.getSnapshot(),
+      DINNER_MENU_OVERRIDES: dinnerMenuStore.getSnapshot(),
     };
     localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
   } catch (e) {
@@ -1418,6 +1443,8 @@ const persistAll = () => {
   cashierListeners, discountRequestListeners, orderListeners, posListeners,
   loyaltyListeners, groupListeners, paymentMethodListeners, configListeners,
 ].forEach((set: Set<any>) => set.add(persistAll));
+lunchMenuStore.addRawListener(persistAll);
+dinnerMenuStore.addRawListener(persistAll);
 
 // Hydrate once at module load, before any component subscribes — ES module
 // top-level code always finishes running before an importer's code (e.g. a
@@ -1449,6 +1476,8 @@ export const clearPersistedState = () => {
     if (saved.LOYALTY_TIERS !== undefined) LOYALTY_TIERS = saved.LOYALTY_TIERS;
     if (saved.CUSTOMER_GROUPS !== undefined) CUSTOMER_GROUPS = saved.CUSTOMER_GROUPS;
     if (saved.SYSTEM_CONFIG !== undefined) Object.assign(SYSTEM_CONFIG, saved.SYSTEM_CONFIG);
+    lunchMenuStore.hydrate(saved.LUNCH_MENU_OVERRIDES);
+    dinnerMenuStore.hydrate(saved.DINNER_MENU_OVERRIDES);
   } catch (e) {
     console.warn('BonManzE: failed to restore persisted state', e);
   }
