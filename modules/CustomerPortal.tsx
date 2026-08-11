@@ -26,14 +26,21 @@ import {
   Copy,
   Check,
   Receipt,
-  Printer
+  Printer,
+  CalendarDays,
+  UtensilsCrossed,
+  Truck,
+  CreditCard,
+  MessageSquare,
+  Phone
 } from 'lucide-react';
 import { Customer, Order, OrderItem, PaymentMethod } from '../types';
 import {
   WEEKDAY_KEYS,
   WeekdayKey,
-  WEEKLY_CURRY_MENU,
-  WEEKLY_DINNER_MENU,
+  lunchMenuForWeek,
+  dinnerMenuForWeek,
+  CurryOption,
   MEAL_BASES,
   MEAL_DHALS,
   MEAL_SALADS,
@@ -50,7 +57,7 @@ import {
   subscribeToPaymentMethods,
   subscribeToOrders,
   subscribeToSystemDate,
-  subscribeToWeeklyMenu,
+  subscribeToLunchMenu,
   subscribeToDinnerMenu,
   subscribeToConfig,
   MOCK_TODAY,
@@ -63,17 +70,42 @@ import {
   calculateTotal
 } from './store';
 
-// Same-day edits/cancels lock at 9:00 AM, same rule the original HTML
-// prototype used ("the 9:00 AM cutoff has passed") — after that the kitchen
+// Edits/cancels lock at SYSTEM_CONFIG.cutoffTime on a day relative to
+// delivery, given by SYSTEM_CONFIG.cutoffDayOffset (0 = delivery day itself
+// — the rule the original HTML prototype hardcoded as "the 9:00 AM cutoff
+// has passed" — -1 = the day before, and so on) — after that the kitchen
 // has already started on the meal. Past delivery days are always locked;
-// future ones are always open. Uses real wall-clock time for the hour check
-// since the app's simulated "today" (systemDate) only ever moves in whole
-// days.
+// days before the cutoff day are always open. Uses real wall-clock time for
+// the same-day check since the app's simulated "today" (systemDate) only
+// ever moves in whole days.
 const isPastCutoff = (deliveryDate: string, systemDate: string): boolean => {
   if (!deliveryDate) return false;
   if (deliveryDate < systemDate) return true;
-  if (deliveryDate > systemDate) return false;
-  return new Date().getHours() >= 9;
+  const cutoffDate = addDays(deliveryDate, SYSTEM_CONFIG.cutoffDayOffset);
+  if (systemDate < cutoffDate) return false;
+  if (systemDate > cutoffDate) return true;
+  const [cutH, cutM] = SYSTEM_CONFIG.cutoffTime.split(':').map(n => parseInt(n, 10) || 0);
+  const now = new Date();
+  return now.getHours() > cutH || (now.getHours() === cutH && now.getMinutes() >= cutM);
+};
+
+// "09:00" -> "9:00 AM" — used anywhere the cutoff needs to read as a time a
+// human would say out loud, rather than the raw 24h config value.
+const formatTimeLabel = (time: string): string => {
+  const [h, m] = time.split(':').map(n => parseInt(n, 10) || 0);
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${period}`;
+};
+
+// "on its delivery day" / "the day before delivery" / "3 days before
+// delivery" — turns the signed cutoffDayOffset into a phrase that reads
+// naturally in the guide/status copy, rather than showing the raw integer.
+const cutoffDayPhrase = (): string => {
+  const offset = SYSTEM_CONFIG.cutoffDayOffset;
+  if (offset === 0) return 'on its delivery day';
+  if (offset === -1) return 'the day before delivery';
+  return `${Math.abs(offset)} days before delivery`;
 };
 
 // Which offering a meal belongs to — Dinner is a second, independently
@@ -82,6 +114,10 @@ const isPastCutoff = (deliveryDate: string, systemDate: string): boolean => {
 // OrderItem.serviceSlot the same way Lunch already is ('Lunch'/'Lunch-2' vs
 // 'Dinner'/'Dinner-2').
 type Service = 'Lunch' | 'Dinner';
+
+// Which of the two currently-orderable calendar weeks a view is showing —
+// 'This' is whatever week systemDate falls in, 'Next' is the week after.
+type WeekChoice = 'This' | 'Next';
 
 // Reads which offering a confirmed item belongs to straight off its
 // serviceSlot tag ('Lunch'/'Lunch-2' vs 'Dinner'/'Dinner-2') — used to
@@ -159,6 +195,15 @@ const getThisWeekDays = (systemDateStr: string): WeekDay[] => {
   return out;
 };
 
+// Adds/subtracts whole days to a 'YYYY-MM-DD' string — used to get from
+// "this week's" Monday to "next week's" Monday (7 days ahead) without
+// pulling in a date library for one calculation.
+const addDays = (dateStr: string, days: number): string => {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, (m || 1) - 1, (d || 1) + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+};
+
 const mealNotesLine = (m: MealSelection): string => {
   const parts: string[] = [];
   const b = MEAL_BASES.find(x => x.id === m.baseId);
@@ -179,7 +224,7 @@ const mealNotesLine = (m: MealSelection): string => {
 // curry in mealSummaryLabel) and without the "for X" note — the note gets
 // its own pill tag (PersonTag) wherever this is used, rather than being
 // buried in a wall of text.
-const mealExtrasLabel = (m: MealSelection): string => {
+const mealExtrasList = (m: MealSelection): string[] => {
   const parts: string[] = [];
   const dh = m.dhalId !== 'none' ? MEAL_DHALS.find(x => x.id === m.dhalId) : null;
   if (dh) parts.push(dh.name);
@@ -189,8 +234,9 @@ const mealExtrasLabel = (m: MealSelection): string => {
   if (bv) parts.push(bv.name);
   const ds = m.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === m.dessertId) : null;
   if (ds) parts.push(ds.name);
-  return parts.join(' · ');
+  return parts;
 };
+const mealExtrasLabel = (m: MealSelection): string => mealExtrasList(m).join(' · ');
 
 // Once a meal becomes a confirmed OrderItem, the "for X" note only survives
 // as the trailing segment of the flattened `notes` string (mealNotesLine
@@ -257,7 +303,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [systemDate, setSystemDate] = useState(MOCK_TODAY);
-  const [view, setView] = useState<'home' | 'menu' | 'order' | 'profile'>('home');
+  const [view, setView] = useState<'home' | 'menu' | 'order' | 'contact'>('home');
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [cart, setCart] = useState<Record<string, MealSelection[]>>({});
   // Dinner's own draft cart, kept as a separate parallel state rather than
   // folding a service key into `cart` — same shape, same day-keyed pattern,
@@ -266,6 +314,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // Which offering the Menu tab is currently browsing/adding to — the Draft
   // review further down shows both services at once regardless of this.
   const [activeService, setActiveService] = useState<Service>('Lunch');
+  // Which week the Menu tab is currently browsing/adding to — same idea as
+  // activeService, and likewise the Draft review shows both weeks at once
+  // regardless of this (the day label already carries the date, so there's
+  // no ambiguity there without an extra switcher).
+  const [activeWeek, setActiveWeek] = useState<WeekChoice>('This');
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   // Home's "How BonManzE works" card starts collapsed — repeat customers
@@ -274,11 +327,24 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [guideOpen, setGuideOpen] = useState(false);
 
   const [builder, setBuilder] = useState<{
-    day: WeekDay; service: Service; openSection: 1 | 2 | 3; sel: MealSelection; editIndex: number | null;
+    day: WeekDay; service: Service; weekStart: string; openSection: 1 | 2 | 3; sel: MealSelection; editIndex: number | null;
     // Set only when editing an already-confirmed meal (as opposed to a
     // draft-cart one, which uses editIndex) — commitBuilder branches on this.
     editingConfirmed: { orderId: string; date: string; slot: string } | null;
   } | null>(null);
+
+  // Dhal and salad are included at no extra cost (unlike beverage/dessert,
+  // which are paid add-ons) — this guards against a customer tapping "No
+  // dhal"/"No salad" by accident and losing something free without meaning
+  // to. Only fires when actually skipping (id === 'none'), not on every tap.
+  const [skipConfirm, setSkipConfirm] = useState<{ label: string; apply: () => void } | null>(null);
+  const requestExtraChange = (field: 'dhalId' | 'saladId', id: string, label: string) => {
+    if (id === 'none') {
+      setSkipConfirm({ label, apply: () => setBuilderSel({ [field]: id } as Partial<MealSelection>) });
+    } else {
+      setBuilderSel({ [field]: id } as Partial<MealSelection>);
+    }
+  };
 
   const [payTarget, setPayTarget] = useState<{
     kind: 'item'; orderId: string; date: string; slot: string; amount: number; what: string; ref: string;
@@ -298,10 +364,12 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // seq carries over from thisWeekLinesWithSeq so the "Extra 2/3" badge can
   // still show on the receipt, same as it does in My Order.
   const [receiptTarget, setReceiptTarget] = useState<{ order: Order; lines: { order: Order; item: OrderItem; seq?: number }[] } | null>(null);
-  // Operations can now edit this week's curries (name/desc/price) — subscribed
-  // rather than the static import, so an edit shows up here without a reload.
-  const [weeklyMenu, setWeeklyMenu] = useState(WEEKLY_CURRY_MENU);
-  const [dinnerMenu, setDinnerMenu] = useState(WEEKLY_DINNER_MENU);
+  // Menus are looked up live via lunchMenuForWeek(weekStart)/dinnerMenuForWeek
+  // (weekStart) — module-level pure functions reading store.ts's live
+  // week-override maps — rather than held in React state directly. This tick
+  // just forces a re-render whenever Operations edits either menu, same
+  // pattern as configTick below for SYSTEM_CONFIG.
+  const [menuTick, setMenuTick] = useState(0);
   // SYSTEM_CONFIG (VAT on/off, rate, VRN, etc.) is a plain mutable object, not
   // React state — this tick just forces a re-render whenever Operations saves
   // a change, so cart totals reflect it without needing a reload.
@@ -314,9 +382,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const u4 = subscribeToPaymentMethods(setPaymentMethods);
     const u5 = subscribeToOrders(setOrders);
     const u6 = subscribeToSystemDate(setSystemDate);
-    const u7 = subscribeToWeeklyMenu(setWeeklyMenu);
+    const u7 = subscribeToLunchMenu(() => setMenuTick(t => t + 1));
     const u8 = subscribeToConfig(() => setConfigTick(t => t + 1));
-    const u9 = subscribeToDinnerMenu(setDinnerMenu);
+    const u9 = subscribeToDinnerMenu(() => setMenuTick(t => t + 1));
     return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); u9(); };
   }, []);
 
@@ -326,25 +394,22 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     if (!SYSTEM_CONFIG.dinnerEnabled && activeService === 'Dinner') setActiveService('Lunch');
   }, [configTick, activeService]);
 
-  const menuFor = (service: Service) => service === 'Dinner' ? dinnerMenu : weeklyMenu;
+  const menuFor = (service: Service, weekStart: string) => service === 'Dinner' ? dinnerMenuForWeek(weekStart) : lunchMenuForWeek(weekStart);
   const cartFor = (service: Service) => service === 'Dinner' ? dinnerCart : cart;
   const setCartFor = (service: Service) => service === 'Dinner' ? setDinnerCart : setCart;
 
-  // Local, menu-aware versions of the two helpers that need to look up a
-  // curry by id — moved inside the component (rather than a `menu` param on
-  // every call site) so they can close over `weeklyMenu`/`dinnerMenu`. The
-  // service param defaults to 'Lunch' so every pre-existing call site that
-  // hasn't been updated to pass one explicitly keeps behaving exactly as
-  // before.
-  const mealPrice = (m: MealSelection, weekdayKey: WeekdayKey, service: Service = 'Lunch'): number => {
-    const c = menuFor(service)[weekdayKey].find(x => x.id === m.curryId);
+  // Local helpers that need to look up a curry by id for a given service AND
+  // week (the same weekday can show a different curry lineup next week than
+  // this week, once that week has its own menu override).
+  const mealPrice = (m: MealSelection, weekdayKey: WeekdayKey, service: Service, weekStart: string): number => {
+    const c = menuFor(service, weekStart)[weekdayKey].find(x => x.id === m.curryId);
     const b = MEAL_BASES.find(x => x.id === m.baseId);
     const v = m.beverageId !== 'none' ? MEAL_BEVERAGES.find(x => x.id === m.beverageId) : null;
     const d = m.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === m.dessertId) : null;
     return (c?.price || 0) + (b?.up || 0) + (v?.price || 0) + (d?.price || 0);
   };
-  const mealSummaryLabel = (m: MealSelection, weekdayKey: WeekdayKey, service: Service = 'Lunch'): string => {
-    const c = menuFor(service)[weekdayKey].find(x => x.id === m.curryId);
+  const mealSummaryLabel = (m: MealSelection, weekdayKey: WeekdayKey, service: Service, weekStart: string): string => {
+    const c = menuFor(service, weekStart)[weekdayKey].find(x => x.id === m.curryId);
     const b = MEAL_BASES.find(x => x.id === m.baseId);
     return `${c?.emoji || ''} ${c?.name || ''}${b ? ` · ${b.name}` : ''}`;
   };
@@ -371,36 +436,57 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const toast = (msg: string) => setToastMsg(msg);
 
   const weekDays = useMemo(() => getThisWeekDays(systemDate), [systemDate]);
+  // Customers can now browse and order a week ahead too — same menu
+  // mechanics, just a second set of days, one calendar week later.
+  const nextWeekDays = useMemo(() => getThisWeekDays(addDays(systemDate, 7)), [systemDate]);
+  // Bundles the two orderable weeks together so anything that needs to walk
+  // "everything currently orderable" (cart totals, checkout, Draft) does it
+  // once, consistently, instead of duplicating a two-week loop everywhere.
+  // Widening the horizon later (e.g. a third week) means adding one entry
+  // here, not touching every call site.
+  const orderableWeeks = useMemo(() => ([
+    { start: weekDays[0].date, days: weekDays },
+    { start: nextWeekDays[0].date, days: nextWeekDays },
+  ]), [weekDays, nextWeekDays]);
 
   const culturePhrase = useMemo(() => CREOLE_PHRASES[new Date().getDate() % CREOLE_PHRASES.length], []);
 
   // --- CART / BUILDER ---
-  const openBuilder = (day: WeekDay, service: Service = 'Lunch', presetCurryId?: string, editIndex: number | null = null) => {
+  const openBuilder = (day: WeekDay, service: Service, weekStart: string, presetCurryId?: string, editIndex: number | null = null) => {
     const existing = editIndex !== null ? cartFor(service)[day.date]?.[editIndex] : null;
     setBuilder({
       day,
       service,
+      weekStart,
       openSection: 1,
       editIndex,
       editingConfirmed: null,
-      sel: existing ? { ...existing } : emptySelection(presetCurryId || menuFor(service)[day.key][0].id)
+      sel: existing ? { ...existing } : emptySelection(presetCurryId || menuFor(service, weekStart)[day.key][0].id)
     });
   };
 
   // Editing an already-confirmed meal, gated by the same cutoff that gates
   // Cancel — the button that calls this is only shown once that check
   // passes, but this guards directly too in case anything calls it earlier.
+  // The confirmed meal could fall in either orderable week, so this searches
+  // both to find the matching day and which week it belongs to.
   const openEditConfirmed = (line: Line) => {
     if (isPastCutoff(line.item.deliveryDate || '', systemDate)) {
-      toast('Locked — the 9:00 AM cutoff has passed');
+      toast(`Locked — the ${formatTimeLabel(SYSTEM_CONFIG.cutoffTime)} cutoff (${cutoffDayPhrase()}) has passed`);
       return;
     }
-    const day = weekDays.find(d => d.date === line.item.deliveryDate);
+    let day: WeekDay | undefined;
+    let weekStart = orderableWeeks[0].start;
+    for (const week of orderableWeeks) {
+      const found = week.days.find(d => d.date === line.item.deliveryDate);
+      if (found) { day = found; weekStart = week.start; break; }
+    }
     if (!day) return;
     const service: Service = (line.item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
     setBuilder({
       day,
       service,
+      weekStart,
       openSection: 1,
       editIndex: null,
       editingConfirmed: { orderId: line.order.id, date: line.item.deliveryDate || '', slot: line.item.serviceSlot || 'Lunch' },
@@ -434,14 +520,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
   const commitBuilder = () => {
     if (!builder) return;
-    const { day, service, sel, editIndex, editingConfirmed } = builder;
+    const { day, service, weekStart, sel, editIndex, editingConfirmed } = builder;
 
     if (editingConfirmed) {
-      const c = menuFor(service)[day.key].find(x => x.id === sel.curryId);
+      const c = menuFor(service, weekStart)[day.key].find(x => x.id === sel.curryId);
       editOrderItem(editingConfirmed.orderId, editingConfirmed.date, editingConfirmed.slot, {
         itemId: sel.curryId,
         name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
-        price: mealPrice(sel, day.key, service),
+        price: mealPrice(sel, day.key, service, weekStart),
         notes: mealNotesLine(sel)
       });
       toast('Meal updated');
@@ -455,7 +541,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       else dayList.push(sel);
       return { ...prev, [day.date]: dayList };
     });
-    toast(editIndex !== null ? 'Meal updated' : `${day.label} added · Rs ${mealPrice(sel, day.key, service)}`);
+    toast(editIndex !== null ? 'Meal updated' : `${day.label} added · Rs ${mealPrice(sel, day.key, service, weekStart)}`);
     closeBuilder();
   };
 
@@ -480,10 +566,12 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const cartTotals = useMemo(() => {
     if (!currentUser) return { subtotal: 0, discount: 0, standardDiscount: 0, birthdayDiscount: 0, standardLabel: '', bulkDiscount: 0, vat: 0, total: 0 };
 
-    const flat: { date: string; weekday: WeekdayKey; price: number }[] = [];
-    weekDays.forEach(d => {
-      (cart[d.date] || []).forEach(m => flat.push({ date: d.date, weekday: d.key, price: mealPrice(m, d.key, 'Lunch') }));
-      (dinnerCart[d.date] || []).forEach(m => flat.push({ date: d.date, weekday: d.key, price: mealPrice(m, d.key, 'Dinner') }));
+    const flat: { date: string; weekday: WeekdayKey; weekStart: string; price: number }[] = [];
+    orderableWeeks.forEach(week => {
+      week.days.forEach(d => {
+        (cart[d.date] || []).forEach(m => flat.push({ date: d.date, weekday: d.key, weekStart: week.start, price: mealPrice(m, d.key, 'Lunch', week.start) }));
+        (dinnerCart[d.date] || []).forEach(m => flat.push({ date: d.date, weekday: d.key, weekStart: week.start, price: mealPrice(m, d.key, 'Dinner', week.start) }));
+      });
     });
     const subtotal = flat.reduce((t, f) => t + f.price, 0);
 
@@ -508,10 +596,20 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       if (fm === bMonth && fd === bDay && birthdayTierRate > 0) birthdayDiscount += f.price * (birthdayTierRate / 100);
     });
 
+    // Bulk ("full week") discount is scoped per calendar week, not summed
+    // across both — booking a full week ahead earns it for that week only;
+    // it doesn't take "half of each week" as satisfying the requirement.
+    // Coverage is still Lunch-only (matches the check as it existed before
+    // Dinner/next-week were added — not changing that business rule here).
     let bulkDiscount = 0;
     if (SYSTEM_CONFIG.bulkDiscountEnabled) {
-      const coveredDays = weekDays.filter(d => (cart[d.date] || []).length > 0).length;
-      if (coveredDays >= WEEKDAY_KEYS.length) bulkDiscount = subtotal * (SYSTEM_CONFIG.bulkDiscountRate / 100);
+      orderableWeeks.forEach(week => {
+        const coveredDays = week.days.filter(d => (cart[d.date] || []).length > 0).length;
+        if (coveredDays >= WEEKDAY_KEYS.length) {
+          const weekSubtotal = flat.filter(f => f.weekStart === week.start).reduce((t, f) => t + f.price, 0);
+          bulkDiscount += weekSubtotal * (SYSTEM_CONFIG.bulkDiscountRate / 100);
+        }
+      });
     }
 
     const totalDiscount = standardDiscount + birthdayDiscount + bulkDiscount;
@@ -521,40 +619,42 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const total = netTotal + vat;
 
     return { subtotal, discount: totalDiscount, standardDiscount, birthdayDiscount, standardLabel, bulkDiscount, vat, total };
-  }, [cart, dinnerCart, currentUser, loyaltyTiers, customerGroups, weekDays, weeklyMenu, dinnerMenu, configTick]);
+  }, [cart, dinnerCart, currentUser, loyaltyTiers, customerGroups, orderableWeeks, menuTick, configTick]);
 
   const handleCheckout = () => {
     if (!currentUser || cartCount === 0) return;
     const items: OrderItem[] = [];
-    weekDays.forEach(d => {
-      (cart[d.date] || []).forEach((m, idx) => {
-        const c = weeklyMenu[d.key].find(x => x.id === m.curryId);
-        items.push({
-          itemId: m.curryId,
-          name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
-          qty: 1,
-          price: mealPrice(m, d.key, 'Lunch'),
-          notes: mealNotesLine(m),
-          deliveryDate: d.date,
-          deliveryDay: d.label,
-          serviceSlot: idx === 0 ? 'Lunch' : `Lunch-${idx + 1}`,
-          paymentStatus: 'Pending',
-          status: 'Active'
+    orderableWeeks.forEach(week => {
+      week.days.forEach(d => {
+        (cart[d.date] || []).forEach((m, idx) => {
+          const c = menuFor('Lunch', week.start)[d.key].find(x => x.id === m.curryId);
+          items.push({
+            itemId: m.curryId,
+            name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
+            qty: 1,
+            price: mealPrice(m, d.key, 'Lunch', week.start),
+            notes: mealNotesLine(m),
+            deliveryDate: d.date,
+            deliveryDay: d.label,
+            serviceSlot: idx === 0 ? 'Lunch' : `Lunch-${idx + 1}`,
+            paymentStatus: 'Pending',
+            status: 'Active'
+          });
         });
-      });
-      (dinnerCart[d.date] || []).forEach((m, idx) => {
-        const c = dinnerMenu[d.key].find(x => x.id === m.curryId);
-        items.push({
-          itemId: m.curryId,
-          name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
-          qty: 1,
-          price: mealPrice(m, d.key, 'Dinner'),
-          notes: mealNotesLine(m),
-          deliveryDate: d.date,
-          deliveryDay: d.label,
-          serviceSlot: idx === 0 ? 'Dinner' : `Dinner-${idx + 1}`,
-          paymentStatus: 'Pending',
-          status: 'Active'
+        (dinnerCart[d.date] || []).forEach((m, idx) => {
+          const c = menuFor('Dinner', week.start)[d.key].find(x => x.id === m.curryId);
+          items.push({
+            itemId: m.curryId,
+            name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
+            qty: 1,
+            price: mealPrice(m, d.key, 'Dinner', week.start),
+            notes: mealNotesLine(m),
+            deliveryDate: d.date,
+            deliveryDay: d.label,
+            serviceSlot: idx === 0 ? 'Dinner' : `Dinner-${idx + 1}`,
+            paymentStatus: 'Pending',
+            status: 'Active'
+          });
         });
       });
     });
@@ -585,7 +685,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     [orders, currentUser]
   );
 
-  const weekDateKeys = useMemo(() => new Set(weekDays.map(d => d.date)), [weekDays]);
+  // Every date currently orderable/visible in My Order — both weeks, not
+  // just this one, now that customers can browse and book a week ahead.
+  const weekDateKeys = useMemo(() => new Set(orderableWeeks.flatMap(w => w.days.map(d => d.date))), [orderableWeeks]);
 
   interface Line { order: Order; item: OrderItem; }
   const thisWeekLines: Line[] = useMemo(() => {
@@ -776,7 +878,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
   const homeStatus = useMemo(() => {
     if (cartCount === 0 && thisWeekLinesWithSeq.length === 0) {
-      return { icon: '🍽️', tone: 'bg-slate-100', title: "This week's menu is ready", subtitle: 'Order by Sunday noon · Lunch Mon–Fri', ctaLabel: 'Browse the menu', action: () => setView('menu') };
+      const offerings = SYSTEM_CONFIG.dinnerEnabled ? 'Lunch & Dinner' : 'Lunch';
+      return { icon: '🍽️', tone: 'bg-slate-100', title: "This week's & next week's menus are ready", subtitle: `${offerings} · order by ${formatTimeLabel(SYSTEM_CONFIG.cutoffTime)} ${cutoffDayPhrase()}`, ctaLabel: 'Browse the menu', action: () => setView('menu') };
     }
     if (thisWeekLinesWithSeq.length === 0) {
       return { icon: '🍱', tone: 'bg-slate-100', title: `${cartCount} meal${cartCount !== 1 ? 's' : ''} selected`, subtitle: `${formatCurrency(cartTotals.total)} · not yet confirmed`, ctaLabel: 'Review & confirm', action: () => setView('order') };
@@ -792,7 +895,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       return { icon: '⭐', tone: 'bg-primary/5', title: 'How was it?', subtitle: `Rate your ${needsRating.item.deliveryDay} meal`, ctaLabel: 'Rate meal', action: () => { setView('order'); openRating(needsRating); } };
     }
     return { icon: '✅', tone: 'bg-primary/5', title: 'All set for this week', subtitle: `${thisWeekLinesWithSeq.length} meal${thisWeekLinesWithSeq.length !== 1 ? 's' : ''} · fully paid`, ctaLabel: null as string | null, action: null as (() => void) | null };
-  }, [cartCount, thisWeekLinesWithSeq, outstandingTotal, awaitingConfirmationLines, needsRating, cartTotals]);
+  }, [cartCount, thisWeekLinesWithSeq, outstandingTotal, awaitingConfirmationLines, needsRating, cartTotals, configTick]);
 
   // Meals still 'Active' (not yet delivered, not cancelled) landing today —
   // drives Home's hero: if lunch is actually en route today, that's more
@@ -819,14 +922,26 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return { next, pct: Math.min(100, Math.round((into / span) * 100)), remaining: Math.max(0, next.pointsThreshold - currentUser.points) };
   }, [currentUser, loyaltyTiers]);
 
-  // One representative dish per weekday for Home's photo strip — real
-  // dish photography instead of a text-only menu, so the app's front page
-  // actually looks like food. Picking [0] of each day's curry list rather
-  // than flattening every option keeps the strip at 5 cards, not 15.
-  const weekMenuPreview = useMemo(
-    () => weekDays.map(d => ({ day: d, primary: weeklyMenu[d.key][0], moreCount: weeklyMenu[d.key].length - 1 })),
-    [weekDays, weeklyMenu]
-  );
+  // Home's "order for..." shortcuts — one tile per week x offering
+  // combination a customer can currently order, each fronted by a real dish
+  // photo (Monday's first curry for that week/service) rather than a
+  // text-only menu. Replaces the old this-week-only day-by-day photo strip
+  // now that ordering spans two weeks and two offerings — a photo strip of
+  // every day in both weeks would be 10 cards; these four (or two, with
+  // Dinner off) get straight to "which week, which offering" instead.
+  const orderShortcuts = useMemo(() => {
+    const tiles: { week: WeekChoice; service: Service; weekLabel: string; dish: CurryOption }[] = [
+      { week: 'This', service: 'Lunch', weekLabel: 'This week', dish: lunchMenuForWeek(weekDays[0].date).MON[0] },
+      { week: 'Next', service: 'Lunch', weekLabel: 'Next week', dish: lunchMenuForWeek(nextWeekDays[0].date).MON[0] },
+    ];
+    if (SYSTEM_CONFIG.dinnerEnabled) {
+      tiles.push(
+        { week: 'This', service: 'Dinner', weekLabel: 'This week', dish: dinnerMenuForWeek(weekDays[0].date).MON[0] },
+        { week: 'Next', service: 'Dinner', weekLabel: 'Next week', dish: dinnerMenuForWeek(nextWeekDays[0].date).MON[0] }
+      );
+    }
+    return tiles;
+  }, [weekDays, nextWeekDays, menuTick, configTick]);
 
   // Thumbnail for the "My Orders" quick-action tile — the confirmed meal's
   // dish if there is one this week, else the first draft's, else none (the
@@ -888,7 +1003,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
   return (
     <div className="h-full w-full flex flex-col bg-[#FDFAF4] relative">
-      <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-[#E7E0D0] px-6 py-4 flex items-center justify-between">
+      <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-[#E7E0D0] px-6 py-4 flex items-center justify-between relative z-30">
         <div className="flex items-center gap-3">
           {SYSTEM_CONFIG.businessLogoUrl ? (
             <img src={SYSTEM_CONFIG.businessLogoUrl} alt={SYSTEM_CONFIG.businessName} className="size-9 rounded-xl object-cover shadow-lg shadow-primary/20" />
@@ -902,12 +1017,40 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
             <p className="text-[9px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">{SYSTEM_CONFIG.businessTagline}</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <img src={currentUser.avatar} className="size-8 rounded-full border-2 border-primary/20" alt={currentUser.name} />
-          {onLogout && (
-            <button onClick={onLogout} className="p-2 rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-900">
-              <ArrowLeft className="size-4" />
-            </button>
+        <div className="relative">
+          <button
+            onClick={() => setProfileMenuOpen(!profileMenuOpen)}
+            className="flex items-center focus:outline-none cursor-pointer"
+          >
+            <img src={currentUser.avatar} className="size-8 rounded-full border-2 border-primary/20 hover:border-primary/50 active:scale-95 transition-all" alt={currentUser.name} />
+          </button>
+          {profileMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40 cursor-default" onClick={() => setProfileMenuOpen(false)} />
+              <div className="absolute right-0 mt-2 w-40 bg-white rounded-2xl border border-[#E7E0D0] shadow-xl py-1.5 z-50">
+                <button
+                  onClick={() => {
+                    setProfileMenuOpen(false);
+                    setProfileOpen(true);
+                  }}
+                  className="w-full text-left px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors flex items-center gap-2"
+                >
+                  <UserIcon className="size-3.5 text-slate-400" />
+                  View Profile
+                </button>
+                <div className="border-t border-[#F0EADD] my-1" />
+                <button
+                  onClick={() => {
+                    setProfileMenuOpen(false);
+                    if (onLogout) onLogout();
+                  }}
+                  className="w-full text-left px-4 py-2.5 text-xs font-bold text-danger hover:bg-slate-50 transition-colors flex items-center gap-2"
+                >
+                  <LogOut className="size-3.5" />
+                  Log Out
+                </button>
+              </div>
+            </>
           )}
         </div>
       </header>
@@ -917,17 +1060,23 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           <div className="space-y-6">
             {/* Welcome hero — the customer's own name/avatar/tier is the first thing on the
                 page, not a generic banner; today's delivery (if any) folds in underneath
-                as a highlight rather than displacing the personal welcome entirely. */}
-            <div className="bg-primary rounded-[28px] p-6 text-white shadow-lg shadow-primary/20 relative overflow-hidden">
-              <button onClick={() => setView('profile')} className="absolute top-5 right-5 text-[10px] font-black uppercase tracking-widest text-white/70 hover:text-white">Profile →</button>
-              <div className="flex items-center gap-4">
-                <img src={currentUser.avatar} className="size-16 rounded-full border-2 border-white/30 shrink-0" alt={currentUser.name} />
+                as a highlight rather than displacing the personal welcome entirely.
+                Gradient + glassmorphism treatment: a diagonal primary->secondary
+                background, soft blurred color blobs for depth, and frosted
+                (backdrop-blur + translucent white) panels for every element
+                sitting on top of it, rather than flat white-on-solid-color. */}
+            <div className="relative rounded-[28px] p-6 text-white shadow-xl shadow-primary/30 overflow-hidden bg-gradient-to-br from-primary via-primary to-secondary">
+              <div className="absolute -top-12 -right-10 size-40 rounded-full bg-white/10 blur-2xl pointer-events-none" />
+              <div className="absolute -bottom-16 -left-10 size-44 rounded-full bg-secondary/40 blur-2xl pointer-events-none" />
+              <button onClick={() => setProfileOpen(true)} className="absolute top-5 right-5 z-10 text-[10px] font-black uppercase tracking-widest text-white/80 hover:text-white bg-white/10 backdrop-blur-md border border-white/20 px-2.5 py-1 rounded-full">Profile →</button>
+              <div className="relative z-10 flex items-center gap-4">
+                <img src={currentUser.avatar} className="size-16 rounded-full border-2 border-white/40 shadow-lg shrink-0" alt={currentUser.name} />
                 <div className="min-w-0">
                   <p className="text-[10px] font-bold uppercase tracking-widest opacity-70">Welcome back</p>
                   <p className="text-xl font-black leading-tight truncate">{currentUser.firstName}!</p>
                   <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                     {currentUser.tier && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/15 text-[10px] font-black uppercase shrink-0">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/15 backdrop-blur-md border border-white/20 text-[10px] font-black uppercase shrink-0">
                         <Star className="size-2.5" /> {currentUser.tier} Member
                       </span>
                     )}
@@ -937,13 +1086,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   </div>
                 </div>
               </div>
-              <p className="text-sm font-black italic leading-snug mt-4">"{culturePhrase.cr}"</p>
-              <p className="text-xs opacity-80 mt-1">{culturePhrase.en}</p>
+              <p className="relative z-10 text-sm font-black italic leading-snug mt-4">"{culturePhrase.cr}"</p>
+              <p className="relative z-10 text-xs opacity-80 mt-1">{culturePhrase.en}</p>
               {todaysArrivingLines.length > 0 && (
-                <div className="mt-4 pt-4 border-t border-white/15 flex items-center gap-3">
+                <div className="relative z-10 mt-4 flex items-center gap-3 bg-white/10 backdrop-blur-md border border-white/15 rounded-2xl p-3">
                   <img src={dishPhotoFor(todaysArrivingLines[0].item.itemId)} className="size-11 rounded-xl object-cover shrink-0 border-2 border-white/25" alt={todaysArrivingLines[0].item.name} />
                   <div className="min-w-0">
-                    <p className="text-[9px] font-black uppercase tracking-widest opacity-70">Arriving today · 11:30–12:00</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest opacity-70">
+                      Arriving today · {serviceOf(todaysArrivingLines[0].item) === 'Dinner' ? SYSTEM_CONFIG.dinnerDeliveryWindow : SYSTEM_CONFIG.lunchDeliveryWindow}
+                    </p>
                     <p className="text-xs font-bold truncate">
                       {todaysArrivingLines[0].item.name}
                       {todaysArrivingLines.length > 1 && ` +${todaysArrivingLines.length - 1} more`}
@@ -984,25 +1135,22 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               </div>
             </div>
 
-            {/* Real dish photography — a scrollable strip instead of a text-only menu */}
+            {/* Order shortcuts — straight to "which week, which offering" instead
+                of a this-week-only day strip, now that both are choices. */}
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-base font-black text-slate-900">This week's curries</h2>
-                <button onClick={() => setView('menu')} className="text-[11px] font-black uppercase tracking-widest text-primary">See all →</button>
-              </div>
-              <div className="flex gap-3 overflow-x-auto custom-scrollbar pb-1 -mx-6 px-6 snap-x">
-                {weekMenuPreview.map(({ day: d, primary, moreCount }) => (
-                  <button key={d.key} onClick={() => openBuilder(d)} className="shrink-0 w-36 rounded-2xl overflow-hidden bg-white border border-[#E7E0D0] text-left snap-start">
-                    <div className="relative h-24">
-                      <img src={dishPhotoFor(primary.id)} className="w-full h-full object-cover" alt={primary.name} />
-                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-white/90 text-[9px] font-black uppercase text-slate-700">{d.short}</span>
-                    </div>
-                    <div className="p-3">
-                      <p className="text-xs font-bold text-slate-900 truncate">{primary.emoji} {primary.name}</p>
-                      <div className="flex items-center justify-between mt-1">
-                        <span className="text-[11px] font-black text-primary">Rs {primary.price}</span>
-                        {moreCount > 0 && <span className="text-[9px] font-bold text-slate-400 shrink-0">+{moreCount} more</span>}
-                      </div>
+              <h2 className="text-base font-black text-slate-900 mb-3">Order for...</h2>
+              <div className="grid grid-cols-2 gap-3">
+                {orderShortcuts.map(tile => (
+                  <button
+                    key={`${tile.week}-${tile.service}`}
+                    onClick={() => { setActiveWeek(tile.week); setActiveService(tile.service); setView('menu'); }}
+                    className="relative rounded-2xl overflow-hidden text-left h-28 border border-[#E7E0D0]"
+                  >
+                    <img src={dishPhotoFor(tile.dish.id)} className="absolute inset-0 w-full h-full object-cover" alt="" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
+                    <div className="absolute bottom-0 left-0 right-0 p-3">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-white/80">{tile.weekLabel}</p>
+                      <p className="text-sm font-black text-white leading-tight">{tile.service}</p>
                     </div>
                   </button>
                 ))}
@@ -1048,7 +1196,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   <div className="size-10 rounded-xl bg-accent/10 text-accent flex items-center justify-center shrink-0"><BookOpen className="size-5" /></div>
                   <div className="min-w-0">
                     <p className="text-xs font-black text-slate-900">Browse menu</p>
-                    <p className="text-[10px] text-slate-400 font-bold truncate">This week's curries</p>
+                    <p className="text-[10px] text-slate-400 font-bold truncate">This week & next</p>
                   </div>
                 </button>
                 <button onClick={copyReferral} className="bg-white rounded-2xl border border-[#E7E0D0] p-4 text-left flex items-center gap-3">
@@ -1061,70 +1209,131 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               </div>
             </div>
 
-            {/* Guide — collapsed by default; repeat customers don't need this every visit */}
-            <div className="bg-[#F4EFE4] rounded-2xl overflow-hidden">
+            {/* Guide — collapsed by default; repeat customers don't need this
+                every visit. Redesigned from a flat numbered list into
+                icon-led steps so it reads at a glance, and every time-based
+                claim now pulls live from SYSTEM_CONFIG instead of hardcoded
+                copy ("Sunday noon", "11:30–12:00") that had drifted from the
+                actual rules. Covers both ordering weeks and both offerings. */}
+            <div className="bg-white rounded-2xl border border-[#E7E0D0] shadow-sm overflow-hidden">
               <button onClick={() => setGuideOpen(o => !o)} className="w-full flex items-center justify-between gap-3 p-4 text-left">
-                <div className="flex items-center gap-2">
-                  <Clock className="size-3.5 text-slate-500" />
-                  <p className="text-[11px] font-black text-slate-600">New here? How {SYSTEM_CONFIG.businessName} works</p>
+                <div className="flex items-center gap-2.5">
+                  <div className="size-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0"><Sparkles className="size-4" /></div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-slate-800">New here?</p>
+                    <p className="text-[10px] text-slate-400 font-bold truncate">How {SYSTEM_CONFIG.businessName} works</p>
+                  </div>
                 </div>
                 {guideOpen ? <ChevronUp className="size-4 text-slate-400 shrink-0" /> : <ChevronDown className="size-4 text-slate-400 shrink-0" />}
               </button>
               {guideOpen && (
-                <div className="px-4 pb-4 pt-3 border-t border-[#E7E0D0] space-y-1.5 text-xs text-slate-600 font-medium">
-                  <p>1. Browse this week's curries and build your meal</p>
-                  <p>2. Confirm your order by Sunday noon</p>
-                  <p>3. Pay by Juice, MauCAS, or cash on delivery</p>
-                  <p>4. Lunch arrives Mon–Fri, 11:30–12:00</p>
+                <div className="px-4 pb-4 pt-1 border-t border-[#E7E0D0] space-y-3">
+                  <div className="flex items-start gap-3">
+                    <div className="size-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0"><CalendarDays className="size-4" /></div>
+                    <div className="min-w-0 pt-0.5">
+                      <p className="text-xs font-black text-slate-800">Choose your week{SYSTEM_CONFIG.dinnerEnabled ? ' & meal' : ''}</p>
+                      <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                        This Week or Next Week{SYSTEM_CONFIG.dinnerEnabled ? ', Lunch or Dinner' : ''} — the Menu tab has shortcuts for all of it.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <div className="size-8 rounded-xl bg-accent/10 text-accent flex items-center justify-center shrink-0"><UtensilsCrossed className="size-4" /></div>
+                    <div className="min-w-0 pt-0.5">
+                      <p className="text-xs font-black text-slate-800">Build your plate</p>
+                      <p className="text-[11px] text-slate-500 font-medium mt-0.5">Pick a curry and sides for each day you want delivered.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <div className="size-8 rounded-xl bg-warning/10 text-warning flex items-center justify-center shrink-0"><Clock className="size-4" /></div>
+                    <div className="min-w-0 pt-0.5">
+                      <p className="text-xs font-black text-slate-800">Confirm before {formatTimeLabel(SYSTEM_CONFIG.cutoffTime)}</p>
+                      <p className="text-[11px] text-slate-500 font-medium mt-0.5">Each meal locks for changes at {formatTimeLabel(SYSTEM_CONFIG.cutoffTime)}, {cutoffDayPhrase()} — order any time before that.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <div className="size-8 rounded-xl bg-success/10 text-success flex items-center justify-center shrink-0"><CreditCard className="size-4" /></div>
+                    <div className="min-w-0 pt-0.5">
+                      <p className="text-xs font-black text-slate-800">Pay your way</p>
+                      <p className="text-[11px] text-slate-500 font-medium mt-0.5">Juice, MauCAS, or cash on delivery — whichever's easiest.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <div className="size-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0"><Truck className="size-4" /></div>
+                    <div className="min-w-0 pt-0.5">
+                      <p className="text-xs font-black text-slate-800">Fresh, right on time</p>
+                      <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                        Lunch arrives Mon–Fri, {SYSTEM_CONFIG.lunchDeliveryWindow}
+                        {SYSTEM_CONFIG.dinnerEnabled && <> · Dinner arrives {SYSTEM_CONFIG.dinnerDeliveryWindow}</>}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
           </div>
         )}
 
-        {view === 'menu' && (
+        {view === 'menu' && (() => {
+          const activeDays = activeWeek === 'Next' ? nextWeekDays : weekDays;
+          const activeWeekStart = activeDays[0].date;
+          return (
           <div className="space-y-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-black text-slate-900">This week's menu</h2>
-              {SYSTEM_CONFIG.dinnerEnabled && (
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <h2 className="text-lg font-black text-slate-900">{activeWeek === 'Next' ? "Next week's menu" : "This week's menu"}</h2>
+              <div className="flex items-center gap-2 flex-wrap">
                 <div className="flex items-center gap-1 bg-[#F4EFE4] rounded-full p-1">
-                  {(['Lunch', 'Dinner'] as Service[]).map(s => (
+                  {(['This', 'Next'] as WeekChoice[]).map(w => (
                     <button
-                      key={s}
-                      onClick={() => setActiveService(s)}
-                      className={`px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${activeService === s ? 'bg-primary text-white' : 'text-slate-500'}`}
+                      key={w}
+                      onClick={() => setActiveWeek(w)}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${activeWeek === w ? 'bg-primary text-white' : 'text-slate-500'}`}
                     >
-                      {s}
+                      {w === 'This' ? 'This week' : 'Next week'}
                     </button>
                   ))}
                 </div>
-              )}
+                {SYSTEM_CONFIG.dinnerEnabled && (
+                  <div className="flex items-center gap-1 bg-[#F4EFE4] rounded-full p-1">
+                    {(['Lunch', 'Dinner'] as Service[]).map(s => (
+                      <button
+                        key={s}
+                        onClick={() => setActiveService(s)}
+                        className={`px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${activeService === s ? 'bg-primary text-white' : 'text-slate-500'}`}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-            {weekDays.map(d => {
+            {activeDays.map(d => {
               const meals = cartFor(activeService)[d.date] || [];
               return (
                 <div key={d.key} className="bg-white rounded-3xl border border-[#E7E0D0] p-5">
                   <div className="flex items-center justify-between mb-3">
                     <p className="text-sm font-black text-slate-900">{d.label}</p>
                     {meals.length > 0 && (
-                      <button onClick={() => openBuilder(d, activeService)} className="text-[10px] font-black uppercase tracking-widest text-primary flex items-center gap-1">
+                      <button onClick={() => openBuilder(d, activeService, activeWeekStart)} className="text-[10px] font-black uppercase tracking-widest text-primary flex items-center gap-1">
                         <Plus className="size-3" /> Add another
                       </button>
                     )}
                   </div>
-                  <div className="space-y-2 mb-3">
-                    {menuFor(activeService)[d.key].map(c => (
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    {menuFor(activeService, activeWeekStart)[d.key].map(c => (
                       <button
                         key={c.id}
-                        onClick={() => openBuilder(d, activeService, c.id)}
-                        className="w-full flex items-center gap-3 p-3 bg-[#F4EFE4] rounded-2xl hover:bg-primary/10 transition-all text-left"
+                        onClick={() => openBuilder(d, activeService, activeWeekStart, c.id)}
+                        className="relative rounded-2xl overflow-hidden border border-[#E7E0D0] text-left h-32"
                       >
-                        <img src={dishPhotoFor(c.id)} className="size-11 rounded-xl object-cover shrink-0" alt={c.name} />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-bold text-slate-900">{c.emoji} {c.name}</p>
-                          <p className="text-[11px] text-slate-500">{c.desc}</p>
+                        <img src={dishPhotoFor(c.id)} className="absolute inset-0 w-full h-full object-cover" alt={c.name} />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent" />
+                        <div className="absolute bottom-0 left-0 right-0 p-2">
+                          <p className="text-[11px] font-black text-white leading-tight truncate">{c.emoji} {c.name}</p>
+                          <p className="text-[9px] text-white/80 font-medium truncate mt-0.5">{c.desc}</p>
+                          <p className="text-[11px] font-black text-white mt-1">Rs {c.price}</p>
                         </div>
-                        <span className="text-xs font-black text-primary shrink-0">Rs {c.price}</span>
                       </button>
                     ))}
                   </div>
@@ -1133,13 +1342,13 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       {meals.map((m, i) => (
                         <div key={i} className="flex items-start justify-between gap-2 text-xs">
                           <div className="min-w-0">
-                            <span className="font-bold text-slate-700 block">{mealSummaryLabel(m, d.key, activeService)}</span>
+                            <span className="font-bold text-slate-700 block">{mealSummaryLabel(m, d.key, activeService, activeWeekStart)}</span>
                             {mealExtrasLabel(m) && <span className="text-[11px] text-slate-400 block">{mealExtrasLabel(m)}</span>}
                             {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
-                            <span className="font-black text-primary">Rs {mealPrice(m, d.key, activeService)}</span>
-                            <button onClick={() => openBuilder(d, activeService, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
+                            <span className="font-black text-primary">Rs {mealPrice(m, d.key, activeService, activeWeekStart)}</span>
+                            <button onClick={() => openBuilder(d, activeService, activeWeekStart, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
                             <button onClick={() => removeCartMeal(d.date, i, activeService)} className="p-1.5 text-slate-400 hover:text-danger"><Trash2 className="size-3.5" /></button>
                           </div>
                         </div>
@@ -1150,7 +1359,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               );
             })}
           </div>
-        )}
+          );
+        })()}
 
         {view === 'order' && (
           <div className="space-y-6">
@@ -1162,30 +1372,32 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
                 <div className="space-y-4 mb-4">
                   {(['Lunch', 'Dinner'] as Service[]).flatMap(service =>
-                    weekDays.filter(d => (cartFor(service)[d.date] || []).length > 0).map(d => (
-                      <div key={`${service}-${d.key}`} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
-                        <div className="flex items-center gap-1.5 mb-3">
-                          <p className="text-[10px] font-black uppercase text-primary tracking-widest">{d.label}</p>
-                          {service === 'Dinner' && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase">Dinner</span>}
-                        </div>
-                        <div className="space-y-3">
-                          {(cartFor(service)[d.date] || []).map((m, i) => (
-                            <div key={`${d.key}-${i}`} className={`flex items-start justify-between gap-2 ${i > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}`}>
-                              <div className="min-w-0">
-                                <p className="text-xs font-bold text-slate-700">{mealSummaryLabel(m, d.key, service)}</p>
-                                {mealExtrasLabel(m) && <p className="text-[11px] text-slate-400 mt-0.5">{mealExtrasLabel(m)}</p>}
-                                {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
+                    orderableWeeks.flatMap(week =>
+                      week.days.filter(d => (cartFor(service)[d.date] || []).length > 0).map(d => (
+                        <div key={`${service}-${d.date}`} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
+                          <div className="flex items-center gap-1.5 mb-3">
+                            <p className="text-[10px] font-black uppercase text-primary tracking-widest">{d.label}</p>
+                            {service === 'Dinner' && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase">Dinner</span>}
+                          </div>
+                          <div className="space-y-3">
+                            {(cartFor(service)[d.date] || []).map((m, i) => (
+                              <div key={`${d.date}-${i}`} className={`flex items-start justify-between gap-2 ${i > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}`}>
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold text-slate-700">{mealSummaryLabel(m, d.key, service, week.start)}</p>
+                                  {mealExtrasLabel(m) && <p className="text-[11px] text-slate-400 mt-0.5">{mealExtrasLabel(m)}</p>}
+                                  {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className="font-black text-slate-900 text-xs">Rs {mealPrice(m, d.key, service, week.start)}</span>
+                                  <button onClick={() => openBuilder(d, service, week.start, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
+                                  <button onClick={() => removeCartMeal(d.date, i, service)} className="p-1.5 text-slate-400 hover:text-danger"><Trash2 className="size-3.5" /></button>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span className="font-black text-slate-900 text-xs">Rs {mealPrice(m, d.key, service)}</span>
-                                <button onClick={() => openBuilder(d, service, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
-                                <button onClick={() => removeCartMeal(d.date, i, service)} className="p-1.5 text-slate-400 hover:text-danger"><Trash2 className="size-3.5" /></button>
-                              </div>
-                            </div>
-                          ))}
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    ))
+                      ))
+                    )
                   )}
                 </div>
 
@@ -1326,16 +1538,101 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           </div>
         )}
 
-        {view === 'profile' && (
-          <div className="space-y-6">
+        {view === 'contact' && (
+          <div className="space-y-6 text-slate-800">
+            <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 text-center shadow-[0_8px_30px_rgb(0,0,0,0.015)]">
+              <div className="size-14 bg-primary/10 rounded-2xl flex items-center justify-center text-primary mx-auto mb-3">
+                <MessageSquare className="size-7" />
+              </div>
+              <h2 className="text-lg font-black text-slate-900">How can we help?</h2>
+              <p className="text-xs text-slate-400 font-medium max-w-xs mx-auto mt-1">
+                Have a question about your order, scheduling, or dietary preferences? We're here to assist.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              {/* WhatsApp Card */}
+              <a
+                href={`https://wa.me/${SYSTEM_CONFIG.supportPhone.replace(/\D/g, '').length === 8 ? '230' : ''}${SYSTEM_CONFIG.supportPhone.replace(/\D/g, '')}?text=Bonjour%20BonManzE!%20`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-4 p-5 bg-white rounded-3xl border border-[#E7E0D0] shadow-sm hover:border-[#25D366]/40 transition-all text-left active:scale-[0.98]"
+              >
+                <div className="size-12 bg-[#25D366]/10 text-[#25D366] rounded-2xl flex items-center justify-center shrink-0">
+                  <Phone className="size-6" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-slate-900">WhatsApp Chat</p>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">Message us at +230 {SYSTEM_CONFIG.supportPhone}</p>
+                </div>
+                <ChevronRight className="size-4 text-slate-300" />
+              </a>
+
+              {/* Email Card */}
+              <a
+                href={`mailto:${SYSTEM_CONFIG.supportEmail}?subject=BonManzE%20Customer%20Query`}
+                className="flex items-center gap-4 p-5 bg-white rounded-3xl border border-[#E7E0D0] shadow-sm hover:border-primary/40 transition-all text-left active:scale-[0.98]"
+              >
+                <div className="size-12 bg-primary/10 text-primary rounded-2xl flex items-center justify-center shrink-0">
+                  <Smartphone className="size-6" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-slate-900">Email Support</p>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">{SYSTEM_CONFIG.supportEmail}</p>
+                </div>
+                <ChevronRight className="size-4 text-slate-300" />
+              </a>
+            </div>
+
+            {/* Delivery details card */}
+            <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm">
+              <h3 className="text-sm font-black text-slate-900 mb-4">Kitchen & Delivery Hours</h3>
+              <div className="space-y-3 text-xs font-medium text-slate-600">
+                <div className="flex justify-between pb-2.5 border-b border-[#F0EADD]">
+                  <span>Operating Days</span>
+                  <span className="font-bold text-slate-900">{SYSTEM_CONFIG.operatingDays.join(', ')}</span>
+                </div>
+                <div className="flex justify-between pb-2.5 border-b border-[#F0EADD]">
+                  <span>Lunch Delivery Slot</span>
+                  <span className="font-bold text-slate-900">{SYSTEM_CONFIG.lunchDeliveryWindow}</span>
+                </div>
+                {SYSTEM_CONFIG.dinnerEnabled && (
+                  <div className="flex justify-between">
+                    <span>Dinner Delivery Slot</span>
+                    <span className="font-bold text-slate-900">{SYSTEM_CONFIG.dinnerDeliveryWindow}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* --- PROFILE MODAL DRAWER --- */}
+      {profileOpen && (
+        <div className="fixed inset-0 z-[9999] bg-[#FDFAF4] flex flex-col overflow-hidden animate-slide-up">
+          <header className="shrink-0 bg-white border-b border-[#E7E0D0] px-6 py-4 flex items-center justify-between relative z-30">
+            <div className="flex items-center gap-3">
+              <div className="size-8 bg-primary/10 rounded-xl flex items-center justify-center text-primary">
+                <UserIcon className="size-4" />
+              </div>
+              <h2 className="text-sm font-black text-slate-900 leading-none">Your Profile</h2>
+            </div>
+            <button
+              onClick={() => setProfileOpen(false)}
+              className="p-2 rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-900 active:scale-95 transition-transform"
+            >
+              <X className="size-5" />
+            </button>
+          </header>
+
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6 pb-24">
             <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 text-center">
               <img src={currentUser.avatar} className="size-16 rounded-full border-4 border-primary/10 mx-auto mb-3" alt={currentUser.name} />
               <p className="text-lg font-black text-slate-900">{currentUser.name}</p>
               <p className="text-xs text-slate-400 font-medium">{currentUser.email}</p>
             </div>
 
-            {/* Points and store credit are real balances the customer should be able to
-                check here — previously shown nowhere except a small chip on Home. */}
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 text-center">
                 <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Points</p>
@@ -1378,7 +1675,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     const code = currentUser.referenceCode || 'BONMANZE-' + currentUser.id.toUpperCase();
                     navigator.clipboard?.writeText(code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
                   }}
-                  className="p-2 text-primary hover:bg-primary/10 rounded-lg"
+                  className="p-2 text-primary hover:bg-primary/10 rounded-lg active:scale-90 transition-transform"
                 >
                   {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
                 </button>
@@ -1409,25 +1706,39 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
             </div>
 
             {onLogout && (
-              <button onClick={onLogout} className="w-full py-4 bg-slate-100 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2">
+              <button
+                onClick={() => {
+                  setProfileOpen(false);
+                  onLogout();
+                }}
+                className="w-full py-4 bg-slate-100 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-transform"
+              >
                 <LogOut className="size-4" /> Log out
               </button>
             )}
           </div>
-        )}
-      </main>
+        </div>
+      )}
 
-      <nav className="shrink-0 bg-white border-t border-[#E7E0D0] flex items-center justify-around py-2">
+      <nav className="fixed bottom-5 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-md bg-white/95 backdrop-blur-xl border border-white/10 rounded-[24px] shadow-[0_12px_40px_-12px_rgba(62,125,34,0.15)] z-40 flex items-center justify-around py-3 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] bmz-no-print">
         {([
           { id: 'home', label: 'Home', icon: HomeIcon },
           { id: 'menu', label: 'Menu', icon: BookOpen },
           { id: 'order', label: 'My Order', icon: ShoppingBag },
-          { id: 'profile', label: 'Profile', icon: UserIcon },
+          { id: 'contact', label: 'Contact Us', icon: MessageSquare },
         ] as const).map(t => (
-          <button key={t.id} onClick={() => setView(t.id)} className={`flex flex-col items-center gap-1 px-4 py-1.5 rounded-xl text-[10px] font-bold ${view === t.id ? 'text-primary' : 'text-slate-400'}`}>
+          <button
+            key={t.id}
+            onClick={() => setView(t.id)}
+            className={`flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl text-[10px] font-bold active:scale-95 transition-transform relative ${view === t.id ? 'text-primary' : 'text-slate-400'}`}
+          >
             <t.icon className="size-5" />
-            {t.label}
-            {t.id === 'order' && cartCount > 0 && <span className="absolute -mt-6 ml-6 size-4 bg-danger text-white rounded-full text-[8px] flex items-center justify-center">{cartCount}</span>}
+            <span>{t.label}</span>
+            {t.id === 'order' && cartCount > 0 && (
+              <span className="absolute -top-1 right-2 size-4 bg-danger text-white rounded-full text-[8px] flex items-center justify-center font-black">
+                {cartCount}
+              </span>
+            )}
           </button>
         ))}
       </nav>
@@ -1435,7 +1746,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       {/* --- MEAL BUILDER --- */}
       {builder && (() => {
         const complete = sectionComplete(builder);
-        const selectedCurry = menuFor(builder.service)[builder.day.key].find(c => c.id === builder.sel.curryId);
+        const selectedCurry = menuFor(builder.service, builder.weekStart)[builder.day.key].find(c => c.id === builder.sel.curryId);
         const selectedBase = MEAL_BASES.find(b => b.id === builder.sel.baseId);
         const extrasList = [
           builder.sel.dhalId && builder.sel.dhalId !== 'none' ? MEAL_DHALS.find(x => x.id === builder.sel.dhalId)?.name : null,
@@ -1443,10 +1754,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           builder.sel.beverageId !== 'none' ? MEAL_BEVERAGES.find(x => x.id === builder.sel.beverageId)?.name : null,
           builder.sel.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === builder.sel.dessertId)?.name : null,
         ].filter(Boolean) as string[];
-        const extrasSummary = extrasList.join(' · ');
 
         return (
-          <div className="fixed inset-0 z-[9999] bg-white flex flex-col">
+          <div className="fixed inset-0 z-[9999] bg-white flex flex-col animate-slide-up">
             <div className="relative h-64 shrink-0">
               <img src={dishPhotoFor(builder.sel.curryId)} className="w-full h-full object-cover" alt="Dish" />
               <button onClick={closeBuilder} className="absolute top-4 right-4 p-2 bg-white/90 rounded-full text-slate-700"><X className="size-4" /></button>
@@ -1459,12 +1769,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   <button onClick={() => toggleSection(2)} className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${selectedBase ? 'bg-white/90 text-slate-900' : 'bg-white/30 text-white'}`}>
                     {selectedBase ? `${selectedBase.emoji} ${selectedBase.name}` : '🌾 Pick a base'}
                   </button>
-                  {extrasList.length > 0 && (
-                    <button onClick={() => toggleSection(3)} className="px-2.5 py-1 rounded-full bg-white/90 text-slate-900 text-[11px] font-bold">✨ {extrasList.length} extra{extrasList.length > 1 ? 's' : ''}</button>
-                  )}
+                  {extrasList.map((label, i) => (
+                    <button key={i} onClick={() => toggleSection(3)} className="px-2.5 py-1 rounded-full bg-white/90 text-slate-900 text-[11px] font-bold">✨ {label}</button>
+                  ))}
                 </div>
               </div>
             </div>
+            {selectedCurry?.desc && (
+              <p className="px-4 pt-3 text-xs text-slate-500 font-medium leading-relaxed shrink-0">{selectedCurry.desc}</p>
+            )}
 
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               <SectionCard
@@ -1474,8 +1787,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 onToggle={() => toggleSection(1)}
               >
                 <div className="space-y-2">
-                  {menuFor(builder.service)[builder.day.key].map(c => (
-                    <button key={c.id} onClick={() => selectCurry(c.id)} className={`w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition-all ${builder.sel.curryId === c.id ? 'border-primary bg-primary/5' : 'border-transparent bg-[#F4EFE4]'}`}>
+                  {menuFor(builder.service, builder.weekStart)[builder.day.key].map(c => (
+                    <button key={c.id} onClick={() => selectCurry(c.id)} className={`w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition-all active:scale-[0.98] ${builder.sel.curryId === c.id ? 'border-primary bg-primary/[0.04] ring-4 ring-primary/10 shadow-[0_0_20px_rgba(62,125,34,0.08)]' : 'border-transparent bg-[#F4EFE4]'}`}>
                       <span className="text-2xl">{c.emoji}</span>
                       <div className="flex-1 text-left"><p className="text-sm font-bold text-slate-900">{c.name}</p><p className="text-[11px] text-slate-500">{c.desc}</p></div>
                       <span className="text-xs font-black text-primary">Rs {c.price}</span>
@@ -1492,7 +1805,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               >
                 <div className="grid grid-cols-2 gap-2">
                   {MEAL_BASES.map(b => (
-                    <button key={b.id} onClick={() => selectBase(b.id)} className={`p-4 rounded-2xl border-2 transition-all ${builder.sel.baseId === b.id ? 'border-primary bg-primary/5' : 'border-transparent bg-[#F4EFE4]'}`}>
+                    <button key={b.id} onClick={() => selectBase(b.id)} className={`p-4 rounded-2xl border-2 transition-all active:scale-[0.98] ${builder.sel.baseId === b.id ? 'border-primary bg-primary/[0.04] ring-4 ring-primary/10 shadow-[0_0_20px_rgba(62,125,34,0.08)]' : 'border-transparent bg-[#F4EFE4]'}`}>
                       <p className="text-2xl mb-1">{b.emoji}</p>
                       <p className="text-xs font-bold text-slate-900">{b.name}</p>
                       <p className="text-[10px] text-slate-400 font-bold">{b.up ? `+Rs ${b.up}` : 'included'}</p>
@@ -1504,12 +1817,20 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <SectionCard
                 index={3} title="Make it yours"
                 isOpen={builder.openSection === 3} isComplete={complete[3]}
-                summary={complete[3] ? (extrasSummary || 'No extras') : undefined}
+                summary={complete[3] ? (
+                  extrasList.length > 0 ? (
+                    <>
+                      {extrasList.map((label, i) => (
+                        <span key={i} className="px-1.5 py-0.5 rounded-full bg-primary/10 text-primary text-[9px] font-bold truncate max-w-[80px]">{label}</span>
+                      ))}
+                    </>
+                  ) : <span className="text-xs font-bold text-slate-400">No extras</span>
+                ) : undefined}
                 onToggle={() => toggleSection(3)}
               >
                 <div className="space-y-3">
-                  <ChipRow label="🫘 Dhal" options={MEAL_DHALS} selected={builder.sel.dhalId} onSelect={id => setBuilderSel({ dhalId: id })} noneLabel="No dhal" />
-                  <ChipRow label="🥗 Salad" options={MEAL_SALADS} selected={builder.sel.saladId} onSelect={id => setBuilderSel({ saladId: id })} noneLabel="No salad" />
+                  <ChipRow label="🫘 Dhal" options={MEAL_DHALS} selected={builder.sel.dhalId} onSelect={id => requestExtraChange('dhalId', id, 'dhal')} noneLabel="No dhal" />
+                  <ChipRow label="🥗 Salad" options={MEAL_SALADS} selected={builder.sel.saladId} onSelect={id => requestExtraChange('saladId', id, 'salad')} noneLabel="No salad" />
                   <ChipRow label="🥤 Beverage" options={MEAL_BEVERAGES} selected={builder.sel.beverageId} onSelect={id => setBuilderSel({ beverageId: id })} noneLabel="None" showPrice />
                   <ChipRow label="🍮 Dessert" options={MEAL_DESSERTS} selected={builder.sel.dessertId} onSelect={id => setBuilderSel({ dessertId: id })} noneLabel="None" showPrice />
                   <div className="rounded-2xl border border-[#E7E0D0] bg-[#FBF8F1] p-4">
@@ -1529,7 +1850,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
             <div className="p-4 border-t border-[#E7E0D0] flex items-center gap-3 shrink-0 bg-white">
               <div className="flex-1 text-right pr-3">
                 <span className="text-[10px] font-bold text-slate-400 uppercase">Total </span>
-                <span className="text-base font-black text-slate-900">Rs {mealPrice(builder.sel, builder.day.key, builder.service)}</span>
+                <span className="text-base font-black text-slate-900">Rs {mealPrice(builder.sel, builder.day.key, builder.service, builder.weekStart)}</span>
               </div>
               <button
                 disabled={!builderReady(builder)}
@@ -1542,6 +1863,22 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           </div>
         );
       })()}
+
+      {/* Skip-a-free-extra confirmation — fires when tapping "No dhal"/"No
+          salad" so a customer doesn't lose something included at no extra
+          cost without meaning to. Sits above the builder's own z-[9999]. */}
+      {skipConfirm && (
+        <div className="fixed inset-0 z-[10050] bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setSkipConfirm(null)}>
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-black text-slate-900 mb-1">Skip your free {skipConfirm.label}?</p>
+            <p className="text-xs text-slate-500 font-medium mb-5">It's included at no extra cost — you can always add it back before confirming.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setSkipConfirm(null)} className="flex-1 py-3 rounded-2xl bg-slate-100 text-slate-600 text-xs font-black uppercase tracking-widest">Keep it</button>
+              <button onClick={() => { skipConfirm.apply(); setSkipConfirm(null); }} className="flex-1 py-3 rounded-2xl bg-primary text-white text-xs font-black uppercase tracking-widest">Skip it</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* --- PAYMENT SHEET --- */}
       {payTarget && (
@@ -1808,14 +2145,6 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   );
 };
 
-// A small uniform badge for payment/order status — keeps the "one line of
-// tags" (extra / payment / status / person) actually the same shape and
-// size, rather than four differently-styled inline spans.
-const StatusBadge: React.FC<{ label: string; tone: 'success' | 'warning' | 'danger' | 'slate' }> = ({ label, tone }) => {
-  const cls = tone === 'success' ? 'bg-success/10 text-success' : tone === 'warning' ? 'bg-warning/10 text-warning' : tone === 'danger' ? 'bg-danger/10 text-danger' : 'bg-slate-100 text-slate-500';
-  return <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase shrink-0 ${cls}`}>{label}</span>;
-};
-
 // A small pill for "who this meal is for" — used everywhere a note shows up
 // (draft cart, Menu tab, My Order, Home) so it reads as a tag, not prose.
 const PersonTag: React.FC<{ name: string }> = ({ name }) => (
@@ -1824,12 +2153,20 @@ const PersonTag: React.FC<{ name: string }> = ({ name }) => (
   </span>
 );
 
+// A small uniform badge for payment/order status — keeps the "one line of
+// tags" (extra / payment / status / person) actually the same shape and
+// size, rather than four differently-styled inline spans.
+const StatusBadge: React.FC<{ label: string; tone: 'success' | 'warning' | 'danger' | 'slate' }> = ({ label, tone }) => {
+  const cls = tone === 'success' ? 'bg-success/10 text-success' : tone === 'warning' ? 'bg-warning/10 text-warning' : tone === 'danger' ? 'bg-danger/10 text-danger' : 'bg-slate-100 text-slate-500';
+  return <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase shrink-0 ${cls}`}>{label}</span>;
+};
+
 const SectionCard: React.FC<{
   index: number;
   title: string;
   isOpen: boolean;
   isComplete: boolean;
-  summary?: string;
+  summary?: React.ReactNode;
   onToggle: () => void;
   children: React.ReactNode;
 }> = ({ index, title, isOpen, isComplete, summary, onToggle, children }) => (
@@ -1842,7 +2179,7 @@ const SectionCard: React.FC<{
         <span className="text-sm font-black text-slate-900 truncate">{title}</span>
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        {!isOpen && summary && <span className="text-xs font-bold text-primary truncate max-w-[150px]">{summary}</span>}
+        {!isOpen && summary && <div className="flex items-center gap-1 flex-wrap justify-end max-w-[170px]">{summary}</div>}
         {isOpen ? <ChevronUp className="size-4 text-slate-400" /> : <ChevronDown className="size-4 text-slate-400" />}
       </div>
     </button>

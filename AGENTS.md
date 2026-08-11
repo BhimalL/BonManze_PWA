@@ -274,3 +274,35 @@ Bhimal's ask: take Operations as far as Home got — review it end to end and re
 **Near-miss worth recording:** while checking the Payments tab's handling of refunded items, I discovered my local canonical copy of `store.ts` had drifted from this repo's actual `store.ts` — specifically, it was missing the entire `cancelOrderItem` store-credit refund logic from `8bc1843`, because I'd been editing a copy that predated that commit and never diffed it against the live file before this round. Caught it before shipping by staging and diffing the live file first; no data was lost, but it's the second time this exact failure mode has almost happened (the first was `CustomerPortal.tsx` a few rounds back). Going forward: diff any file against the live device copy before editing it, not just before the ones already burned once.
 
 Verified with a clean `npx tsc --noEmit` on both the local build and the live copy, shipped.
+
+## 2026-08-11: Antigravity — Visual Refresh, Floating Bottom Nav, and Header Dropdown Refactoring
+
+Implemented styling updates and restructured the customer navigation flow:
+
+**1. Slide-up Modal Animations**:
+* **`index.html`**: Added a smooth, spring-like slide-up transition animation (`.animate-slide-up` with `@keyframes slide-up`) inside the main `<style>` block.
+* **`modules/CustomerPortal.tsx`**: Applied the `animate-slide-up` class to both the Meal Builder modal and the new Profile Drawer modal, ensuring they slide up natively rather than snapping instantly.
+
+**2. Brand Ochre Color Swap**:
+* **`index.html`**: Swapped out the clashing blue secondary color (`#1d9ec9`) in the Tailwind config with a warm brand ochre gold (`#D8A037`), aligning the Home hero card gradient and background blobs with the earthy food identity.
+
+**3. Interactive Avatar & Dropdown Menu**:
+* **`modules/CustomerPortal.tsx`**:
+  * Replaced the header log-out back arrow (`ArrowLeft`) with a clickable user avatar button.
+  * Added a floating, absolute dropdown menu toggle under the avatar featuring **View Profile** and **Log Out** actions.
+  * Added a click-outside detection overlay to dismiss the dropdown when tapping anywhere else.
+
+**4. Relocating Profile & Bottom Nav Restructuring**:
+* **`modules/CustomerPortal.tsx`**:
+  * Removed the bottom 'Profile' navigation tab.
+  * Moved the entire Profile JSX layout wholesale (loyalty points bar, discounts stats, referral code clipboard copy button, address info, and past order history) into a dedicated full-screen slide-up drawer modal (`profileOpen`).
+  * Replaced the bottom Profile navigation tab with **Contact Us** (using Lucide's `MessageSquare` icon).
+  * Styled the bottom tab navigation bar to float glassmorphically over the layout (`fixed bottom-5 left-1/2 ...`) with safe-area bottom padding for iOS swipe-bars and white fallback transparency for legacy browsers.
+
+**5. Dynamic Contact Support & WhatsApp Sanitization**:
+* **`modules/store.ts`**: Added `supportPhone` and `supportEmail` to `SYSTEM_CONFIG` and enabled updates inside `updateSystemConfig`.
+* **`modules/Operations.tsx`**: Added input fields in the settings tab (Business branding section) to update Support Phone and Email dynamically.
+* **`modules/CustomerPortal.tsx`**: Read contact details dynamically from the config. Sanitized WhatsApp links by stripping spaces and signs, and prepended Mauritian country code (`230`) if it's a standard local 8-digit number.
+
+Verified type compilation checks (`npx tsc --noEmit`) and Vite production bundling (`npm run build`) passed with zero errors.
+

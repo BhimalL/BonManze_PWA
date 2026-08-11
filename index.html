@@ -36,6 +36,13 @@
         body {
             overscroll-behavior-y: none;
         }
+        @keyframes slide-up {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+        }
+        .animate-slide-up {
+            animation: slide-up 0.28s cubic-bezier(0.32, 0.94, 0.6, 1) forwards;
+        }
     </style>
     <script>
         tailwind.config = {
@@ -44,7 +51,7 @@
                 extend: {
                     colors: {
                         primary: '#3E7D22',
-                        secondary: '#1d9ec9',
+                        secondary: '#D8A037',
                         accent: '#B4703A',
                         background: '#FDFAF4',
                         'surface-dark': '#1a1d21',
