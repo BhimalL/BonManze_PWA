@@ -770,6 +770,13 @@ export const migrateMenuToLibrary = (): MenuLibraryMigrationResult => {
     }
   });
 
+  // Persist these name→id links so relinkDefaultRotationToLibrary() can
+  // replay them on every future load — see LUNCH_DEFAULT_LINK_MAP above for
+  // why. Merged rather than overwritten, in case this ever runs more than
+  // once (it currently doesn't, but merging costs nothing and is safer).
+  LUNCH_DEFAULT_LINK_MAP = { ...LUNCH_DEFAULT_LINK_MAP, ...Object.fromEntries(lunchLinkByKey) };
+  DINNER_DEFAULT_LINK_MAP = { ...DINNER_DEFAULT_LINK_MAP, ...Object.fromEntries(dinnerLinkByKey) };
+
   // --- Backfill: link every already-existing day-slot dish (the default
   // rotation plus every saved week, both services) to the Main it matches
   // by name — so "Import" doesn't just create Mains, it also connects what
@@ -2028,7 +2035,30 @@ const PERSIST_KEY = 'bonmanze_rms_state_v1';
 // fresh browser profile/origin (empty localStorage) or one where this
 // flag never got saved will auto-run the migration on next load, same as
 // clicking the old button once used to do.
+//
+// IMPORTANT — this flag only guards *creating* Mains, not *linking* dishes
+// to them. See LUNCH_DEFAULT_LINK_MAP/relinkDefaultRotationToLibrary below
+// for why those two concerns had to be split apart.
 let MENU_LIBRARY_MIGRATED = false;
+
+// Name (lowercased) → Main id, captured once by migrateMenuToLibrary() and
+// persisted here so relinkDefaultRotationToLibrary() can replay it on every
+// future load. WEEKLY_LUNCH_MENU_DEFAULT/WEEKLY_DINNER_MENU_DEFAULT (below)
+// are plain in-memory literals — only week *overrides* are persisted, via
+// LUNCH_MENU_OVERRIDES/DINNER_MENU_OVERRIDES — so a mainId the migration
+// wrote directly onto those default-rotation objects lived only in that
+// page's memory and was gone the instant the module re-initialized on the
+// next reload. Because MENU_LIBRARY_MIGRATED (above) then blocked the
+// migration from ever running again, "This Week"/"Next Week" (or any future
+// week nobody has explicitly edited) silently lost its Meal Library link on
+// every single refresh or dev-server restart, forever, after the first
+// successful migration — this is the actual root cause of the Menu Planner
+// repeatedly appearing "not linked to the Library" across multiple rounds
+// of fixes. These maps, plus the ungated relink pass below, fix that for
+// good: the *link* step now safely re-runs on every load, while the
+// *create* step (gated by MENU_LIBRARY_MIGRATED) still only ever runs once.
+let LUNCH_DEFAULT_LINK_MAP: Record<string, string> = {};
+let DINNER_DEFAULT_LINK_MAP: Record<string, string> = {};
 
 interface PersistedState {
   MOCK_TODAY: string;
@@ -2071,6 +2101,9 @@ interface PersistedState {
   MENU_LIBRARY_MIGRATED: boolean;
   // See MAIN_DISH_CONTENT_CLEANED below.
   MAIN_DISH_CONTENT_CLEANED: boolean;
+  // See LUNCH_DEFAULT_LINK_MAP/DINNER_DEFAULT_LINK_MAP above.
+  LUNCH_DEFAULT_LINK_MAP: Record<string, string>;
+  DINNER_DEFAULT_LINK_MAP: Record<string, string>;
 }
 
 const persistAll = () => {
@@ -2085,6 +2118,7 @@ const persistAll = () => {
       DINNER_MENU_OVERRIDES: dinnerMenuStore.getSnapshot(),
       MEAL_BASES, MEAL_DHALS, MEAL_SALADS, MEAL_BEVERAGES, MEAL_DESSERTS,
       MAIN_DISHES, ICON_LIBRARY, MENU_LIBRARY_MIGRATED, MAIN_DISH_CONTENT_CLEANED,
+      LUNCH_DEFAULT_LINK_MAP, DINNER_DEFAULT_LINK_MAP,
     };
     localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
   } catch (e) {
@@ -2177,10 +2211,44 @@ const cleanupMainDishContentOnce = () => {
   persistAll();
 };
 
+// Re-applies LUNCH_DEFAULT_LINK_MAP/DINNER_DEFAULT_LINK_MAP onto
+// WEEKLY_LUNCH_MENU_DEFAULT/WEEKLY_DINNER_MENU_DEFAULT — see those maps'
+// comment above for the full root-cause explanation. Unlike
+// runMenuLibraryMigrationOnce()/cleanupMainDishContentOnce(), this is
+// deliberately NOT gated behind a "ran once" flag: it must re-run on every
+// single load, because the two default-rotation constants it's patching
+// are rebuilt fresh from source (unlinked) every time the module
+// re-initializes. Cheap and idempotent — skips any dish that already has a
+// mainId, and skips a link whose Main id no longer exists (e.g. deleted
+// from the Library since the map was captured).
+const relinkDefaultRotationToLibrary = () => {
+  let linked = 0;
+  const linkInPlace = (menu: Record<WeekdayKey, CurryOption[]>, linkMap: Record<string, string>) => {
+    WEEKDAY_KEYS.forEach(day => {
+      menu[day].forEach(dish => {
+        if (dish.mainId) return;
+        const id = linkMap[dish.name.trim().toLowerCase()];
+        if (id && MAIN_DISHES.some(m => m.id === id)) { dish.mainId = id; linked++; }
+      });
+    });
+  };
+  linkInPlace(WEEKLY_LUNCH_MENU_DEFAULT, LUNCH_DEFAULT_LINK_MAP);
+  linkInPlace(WEEKLY_DINNER_MENU_DEFAULT, DINNER_DEFAULT_LINK_MAP);
+  if (linked > 0) {
+    // Mutating the two default-rotation constants in place bypasses the
+    // normal update() path, so nothing would otherwise tell subscribers
+    // (Operations' menuTick, CustomerPortal) that a linked-but-unedited
+    // week just changed — same re-hydrate-to-force-notify trick
+    // migrateMenuToLibrary() already uses.
+    lunchMenuStore.hydrate(lunchMenuStore.getSnapshot());
+    dinnerMenuStore.hydrate(dinnerMenuStore.getSnapshot());
+  }
+};
+
 (() => {
   try {
     const raw = localStorage.getItem(PERSIST_KEY);
-    if (!raw) { runMenuLibraryMigrationOnce(); cleanupMainDishContentOnce(); return; }
+    if (!raw) { runMenuLibraryMigrationOnce(); cleanupMainDishContentOnce(); relinkDefaultRotationToLibrary(); return; }
     const saved: Partial<PersistedState> = JSON.parse(raw);
     if (saved.MOCK_TODAY !== undefined) MOCK_TODAY = saved.MOCK_TODAY;
     if (saved.PAYMENT_METHODS !== undefined) PAYMENT_METHODS = saved.PAYMENT_METHODS;
@@ -2210,8 +2278,14 @@ const cleanupMainDishContentOnce = () => {
     if (saved.ICON_LIBRARY !== undefined) ICON_LIBRARY = saved.ICON_LIBRARY;
     if (saved.MENU_LIBRARY_MIGRATED !== undefined) MENU_LIBRARY_MIGRATED = saved.MENU_LIBRARY_MIGRATED;
     if (saved.MAIN_DISH_CONTENT_CLEANED !== undefined) MAIN_DISH_CONTENT_CLEANED = saved.MAIN_DISH_CONTENT_CLEANED;
+    if (saved.LUNCH_DEFAULT_LINK_MAP !== undefined) LUNCH_DEFAULT_LINK_MAP = saved.LUNCH_DEFAULT_LINK_MAP;
+    if (saved.DINNER_DEFAULT_LINK_MAP !== undefined) DINNER_DEFAULT_LINK_MAP = saved.DINNER_DEFAULT_LINK_MAP;
     runMenuLibraryMigrationOnce();
     cleanupMainDishContentOnce();
+    // Unconditional (not just on the fresh-install path above) — see
+    // relinkDefaultRotationToLibrary's comment for why this must run on
+    // every load, not just once.
+    relinkDefaultRotationToLibrary();
   } catch (e) {
     console.warn('BonManzE: failed to restore persisted state', e);
   }
