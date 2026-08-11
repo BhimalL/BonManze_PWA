@@ -204,6 +204,16 @@ const addDays = (dateStr: string, days: number): string => {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 };
 
+// Same pattern as addDays, but shifting whole calendar months — used to draw
+// the Order History display window (last 3 months) off the actual calendar
+// rather than a fixed day count, so it behaves the same in a 28-day month or
+// a 31-day one.
+const addMonths = (dateStr: string, months: number): string => {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, (m || 1) - 1 + months, d || 1);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+};
+
 const mealNotesLine = (m: MealSelection): string => {
   const parts: string[] = [];
   const b = MEAL_BASES.find(x => x.id === m.baseId);
@@ -461,7 +471,12 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       openSection: 1,
       editIndex,
       editingConfirmed: null,
-      sel: existing ? { ...existing } : emptySelection(presetCurryId || menuFor(service, weekStart)[day.key][0].id)
+      // A brand-new meal defaults "who's this for" to whoever's signed in —
+      // it's almost always themselves, and typing your own name every time
+      // was the one bit of friction left in an otherwise one-tap flow. Only
+      // applies to a fresh meal; editing an existing one (draft or
+      // confirmed) keeps whatever note is already there, even if blank.
+      sel: existing ? { ...existing } : { ...emptySelection(presetCurryId || menuFor(service, weekStart)[day.key][0].id), note: currentUser.firstName || '' }
     });
   };
 
@@ -745,14 +760,21 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return map;
   }, [thisWeekLinesWithSeq]);
 
+  // Order History shows a rolling 3-month window rather than a fixed "last
+  // 10" count — orders are never deleted from the underlying store (nothing
+  // in ACTIVE_ORDERS is ever purged, so the full history is always there),
+  // this is purely a display window for the customer-facing list. Anything
+  // older than 3 months is still in the data, it's just not shown here.
+  const orderHistoryCutoff = useMemo(() => addMonths(systemDate, -3), [systemDate]);
+
   const pastLines: Line[] = useMemo(() => {
     const out: Line[] = [];
     myOrders.forEach(o => o.items.forEach(item => {
       if (item.status === 'Cancelled') return;
-      if (item.deliveryDate && !weekDateKeys.has(item.deliveryDate) && item.deliveryDate < systemDate) out.push({ order: o, item });
+      if (item.deliveryDate && !weekDateKeys.has(item.deliveryDate) && item.deliveryDate < systemDate && item.deliveryDate >= orderHistoryCutoff) out.push({ order: o, item });
     }));
     return out.sort((a, b) => (b.item.deliveryDate || '').localeCompare(a.item.deliveryDate || ''));
-  }, [myOrders, weekDateKeys, systemDate]);
+  }, [myOrders, weekDateKeys, systemDate, orderHistoryCutoff]);
 
   // "Outstanding" now means "still needs the customer to pick a payment
   // method" — once they've claimed one, it moves to awaitingConfirmation
@@ -1055,7 +1077,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6 pb-24">
+      <main className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6 pb-[calc(7rem+env(safe-area-inset-bottom))]">
         {view === 'home' && (
           <div className="space-y-6">
             {/* Welcome hero — the customer's own name/avatar/tier is the first thing on the
@@ -1377,7 +1399,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                         <div key={`${service}-${d.date}`} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
                           <div className="flex items-center gap-1.5 mb-3">
                             <p className="text-[10px] font-black uppercase text-primary tracking-widest">{d.label}</p>
-                            {service === 'Dinner' && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase">Dinner</span>}
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${service === 'Dinner' ? 'bg-accent/10 text-accent' : 'bg-primary/10 text-primary'}`}>{service}</span>
                           </div>
                           <div className="space-y-3">
                             {(cartFor(service)[d.date] || []).map((m, i) => (
@@ -1690,12 +1712,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
             )}
 
             <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6">
-              <p className="text-sm font-black text-slate-900 mb-4">Order history</p>
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-sm font-black text-slate-900">Order history</p>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Last 3 months</p>
+              </div>
               {pastLines.length === 0 ? (
                 <p className="text-xs text-slate-400 font-bold">No past orders yet.</p>
               ) : (
                 <div className="space-y-2">
-                  {pastLines.slice(0, 10).map((line, i) => (
+                  {pastLines.map((line, i) => (
                     <div key={i} className="flex justify-between text-xs">
                       <span className="font-bold text-slate-600">{line.item.deliveryDay} · {line.item.name}</span>
                       <span className="font-black text-slate-900">Rs {line.item.price}</span>
@@ -1720,7 +1745,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         </div>
       )}
 
-      <nav className="fixed bottom-5 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-md bg-white/95 backdrop-blur-xl border border-white/10 rounded-[24px] shadow-[0_12px_40px_-12px_rgba(62,125,34,0.15)] z-40 flex items-center justify-around py-3 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] bmz-no-print">
+      <nav className="fixed bottom-5 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-md bg-gradient-to-r from-primary/10 via-white/95 to-secondary/10 backdrop-blur-xl border border-[#E7E0D0] rounded-[24px] shadow-[0_12px_40px_-12px_rgba(62,125,34,0.15)] z-40 flex items-center justify-around py-3 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] bmz-no-print">
         {([
           { id: 'home', label: 'Home', icon: HomeIcon },
           { id: 'menu', label: 'Menu', icon: BookOpen },
@@ -1786,12 +1811,19 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 summary={selectedCurry ? `${selectedCurry.emoji} ${selectedCurry.name}` : undefined}
                 onToggle={() => toggleSection(1)}
               >
-                <div className="space-y-2">
+                <div className="grid grid-cols-3 gap-2">
                   {menuFor(builder.service, builder.weekStart)[builder.day.key].map(c => (
-                    <button key={c.id} onClick={() => selectCurry(c.id)} className={`w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition-all active:scale-[0.98] ${builder.sel.curryId === c.id ? 'border-primary bg-primary/[0.04] ring-4 ring-primary/10 shadow-[0_0_20px_rgba(62,125,34,0.08)]' : 'border-transparent bg-[#F4EFE4]'}`}>
-                      <span className="text-2xl">{c.emoji}</span>
-                      <div className="flex-1 text-left"><p className="text-sm font-bold text-slate-900">{c.name}</p><p className="text-[11px] text-slate-500">{c.desc}</p></div>
-                      <span className="text-xs font-black text-primary">Rs {c.price}</span>
+                    <button
+                      key={c.id}
+                      onClick={() => selectCurry(c.id)}
+                      className={`relative rounded-2xl overflow-hidden text-left h-28 border-2 transition-all active:scale-[0.98] ${builder.sel.curryId === c.id ? 'border-primary ring-4 ring-primary/10 shadow-[0_0_20px_rgba(62,125,34,0.08)]' : 'border-transparent'}`}
+                    >
+                      <img src={dishPhotoFor(c.id)} className="absolute inset-0 w-full h-full object-cover" alt={c.name} />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
+                      <div className="absolute bottom-0 left-0 right-0 p-2">
+                        <p className="text-[11px] font-black text-white leading-tight truncate">{c.name}</p>
+                        <p className="text-[10px] font-black text-white/90 mt-0.5">Rs {c.price}</p>
+                      </div>
                     </button>
                   ))}
                 </div>
