@@ -278,7 +278,149 @@ export interface CurryOption {
   name: string;
   desc: string;
   price: number;
+  // Which base-catalog group (see AddOnOption.group below) this dish's Base
+  // step offers — optional, defaults to 'rice' when unset so every existing
+  // curry keeps offering the same 5 rice-family bases it always has. A
+  // non-curry main (e.g. a grilled sausage served with bread) sets this to
+  // e.g. 'bread' so the Base step filters to bread-group options only.
+  baseGroup?: string;
+  // Whether the Dhal / Salad steps apply to this dish at all — optional,
+  // default true (existing behavior) when unset. Set to false for a dish
+  // that doesn't pair with a free dhal/salad; the meal builder skips that
+  // step entirely (not just defaults it to "none") when false.
+  dhalApplicable?: boolean;
+  saladApplicable?: boolean;
+  // Which specific catalog entries this dish offers within an applicable
+  // category — optional, undefined/empty means "all of them" (today's
+  // behavior for every existing dish). Lets two dishes that both allow Dhal
+  // still differ on *which* dhals they offer (e.g. a spicier dish only
+  // pairing with Red Lentil, not Yellow) — narrower than the all-or-nothing
+  // dhalApplicable/saladApplicable switch above. Beverage/Dessert have no
+  // applicable switch (every dish always offers both), just this narrowing.
+  dhalOptionIds?: string[];
+  saladOptionIds?: string[];
+  beverageOptionIds?: string[];
+  dessertOptionIds?: string[];
+  // Whether Beverage/Dessert apply at all — optional, default true (today's
+  // behavior: every dish offers both, narrowed only by *OptionIds above).
+  // Mirrors dhalApplicable/saladApplicable so all five extras — Base, Dhal,
+  // Salad, Beverage, Dessert — follow the same applicable+narrow pattern.
+  beverageApplicable?: boolean;
+  dessertApplicable?: boolean;
+  // Whether a Base step applies at all, and which specific Base catalog
+  // entries this dish offers — replaces the old single baseGroup filter
+  // with the same applicable+narrow pattern as Dhal/Salad, so a dish can
+  // offer an exact hand-picked set of bases instead of "every base tagged
+  // with this one group". baseGroup (above) is kept only for dishes
+  // configured before this existed — dishBaseOptionIds() below falls back
+  // to resolving it into an id list when baseOptionIds itself is unset, so
+  // nothing already configured silently loses its narrowing.
+  baseApplicable?: boolean;
+  baseOptionIds?: string[];
+  // A custom uploaded photo for this dish (data URL or path) — takes
+  // priority over dishPhotoFor's id-based protein-family fallback below.
+  // Optional: dishes that never had a photo assigned keep using that
+  // fallback exactly as before.
+  photoUrl?: string;
+  // Which Meal Library Main (see MainDish/MAIN_DISHES below) this day-slot
+  // entry was copied from, if any — set automatically when Menu Planner's
+  // "Add dish" picks a Main from the Library, left unset for a dish that
+  // predates the Library or was never linked to one. This is a one-time
+  // copy, not a live reference: editing the Main in the Library later never
+  // retroactively changes an already-planned day (same snapshot philosophy
+  // as the weekly menu overrides themselves). It exists so a day's price
+  // can be compared against the Main's *current* general price to detect
+  // a promo (see specialPriceInfo below) without needing to duplicate that
+  // comparison value onto every day-slot copy.
+  mainId?: string;
 }
+
+// Read-with-defaults helpers — every consumer (meal builder, Menu Planner
+// forms) should read through these rather than the raw optional fields, so
+// "unset" reliably means "behaves like an existing curry" everywhere,
+// without having to backfill baseGroup/dhalApplicable/saladApplicable onto
+// every literal curry entry already defined below.
+export const DEFAULT_BASE_GROUP = 'rice';
+export const dishBaseGroup = (dish: CurryOption): string => dish.baseGroup ?? DEFAULT_BASE_GROUP;
+export const dishDhalApplicable = (dish: CurryOption): boolean => dish.dhalApplicable ?? true;
+export const dishSaladApplicable = (dish: CurryOption): boolean => dish.saladApplicable ?? true;
+export const dishBeverageApplicable = (dish: CurryOption): boolean => dish.beverageApplicable ?? true;
+export const dishDessertApplicable = (dish: CurryOption): boolean => dish.dessertApplicable ?? true;
+export const dishBaseApplicable = (dish: CurryOption): boolean => dish.baseApplicable ?? true;
+// Effective allowed Base ids for a dish — prefers the explicit narrow list
+// set via the new Base checkboxes; for a dish configured before that
+// existed (baseOptionIds unset) falls back to resolving the legacy
+// baseGroup into whichever current Base catalog entries share that group,
+// so nothing already narrowed by group silently widens back to "every
+// base". A dish with neither set (baseOptionIds and baseGroup both unset)
+// returns undefined — "no restriction", today's default for every curry
+// that predates both mechanisms.
+export const dishBaseOptionIds = (dish: CurryOption, allBases: AddOnOption[]): string[] | undefined => {
+  if (dish.baseOptionIds !== undefined) return dish.baseOptionIds;
+  if (dish.baseGroup !== undefined) return allBases.filter(b => (b.group || DEFAULT_BASE_GROUP) === dish.baseGroup).map(b => b.id);
+  return undefined;
+};
+
+// --- MEAL LIBRARY (Mains) ---
+// The master catalog of dishes Bhimal actually sells — every field a day-menu
+// slot needs (base group, dhal/salad applicability and narrowing, beverage/
+// dessert narrowing, price) defined ONCE per Main rather than re-specified
+// every time it appears on a day. Menu Planner's "Add dish" now searches and
+// copies from here (a one-time copy — see CurryOption.mainId above) instead
+// of building a dish from a blank form, so the same Main's settings stay
+// consistent everywhere it's served. `cost` is admin-only (food cost, for
+// future margin tracking) — never shown to customers.
+export interface MainDish extends CurryOption {
+  cost?: number;
+}
+
+// Starts empty rather than auto-seeded from the existing default weekly
+// rotations: those defaults deliberately vary a curry's name/desc/price by
+// day (see dishPhotoFor's comment — ids there are shared per *photo family*,
+// not per canonical dish), so there's no single "the" Fish Curry to seed
+// from without guessing which day's version is canonical. Existing day-menu
+// dishes keep working exactly as before with no Library link (no mainId);
+// add Mains here going forward as new dishes come up.
+export let MAIN_DISHES: MainDish[] = [];
+const mainDishListeners = new Set<(items: MainDish[]) => void>();
+export const subscribeToMainDishes = (listener: (items: MainDish[]) => void) => {
+  mainDishListeners.add(listener);
+  listener([...MAIN_DISHES]);
+  return () => { mainDishListeners.delete(listener); };
+};
+export const addMainDish = (dish: MainDish) => {
+  MAIN_DISHES = [...MAIN_DISHES, dish];
+  mainDishListeners.forEach(l => l([...MAIN_DISHES]));
+};
+export const updateMainDish = (id: string, updates: Partial<Omit<MainDish, 'id'>>) => {
+  MAIN_DISHES = MAIN_DISHES.map(m => m.id === id ? { ...m, ...updates } : m);
+  mainDishListeners.forEach(l => l([...MAIN_DISHES]));
+};
+export const removeMainDish = (id: string) => {
+  MAIN_DISHES = MAIN_DISHES.filter(m => m.id !== id);
+  mainDishListeners.forEach(l => l([...MAIN_DISHES]));
+};
+
+// Whether a day-slot dish is currently running at a special/promo price —
+// true whenever it's linked to a Main (mainId) whose *current* general
+// price differs from what this specific day is charging. Comparing against
+// the Main's live price (not a frozen snapshot) is deliberate: raising or
+// lowering a Main's general price in the Library should immediately make
+// any day still priced at the old value read as a promo/markup relative to
+// today's normal price, without editing every day that references it.
+export const specialPriceInfo = (dish: CurryOption): { regularPrice: number } | null => {
+  if (!dish.mainId) return null;
+  const main = MAIN_DISHES.find(m => m.id === dish.mainId);
+  if (!main || main.price === dish.price) return null;
+  return { regularPrice: main.price };
+};
+
+// Narrows a full add-on catalog (MEAL_DHALS, MEAL_SALADS, MEAL_BEVERAGES,
+// MEAL_DESSERTS) down to the subset a specific dish allows. undefined or an
+// empty array means "no restriction" — every existing dish (which has never
+// set *OptionIds) keeps showing the full catalog exactly as before.
+export const filterAddOnOptions = (items: AddOnOption[], allowedIds?: string[]): AddOnOption[] =>
+  (!allowedIds || allowedIds.length === 0) ? items : items.filter(i => allowedIds.includes(i.id));
 
 export const WEEKDAY_KEYS = ['MON', 'TUE', 'WED', 'THU', 'FRI'] as const;
 export type WeekdayKey = typeof WEEKDAY_KEYS[number];
@@ -312,7 +454,12 @@ function createWeeklyMenuStore(defaultMenu: Record<WeekdayKey, CurryOption[]>) {
   // counts, a bigger change than "the price went up this week"). The first
   // edit to a week seeds its override from whatever it currently shows
   // (the default, or an earlier override), so only the touched week diverges.
-  const update = (weekStart: string, day: WeekdayKey, curryId: string, updates: Partial<Pick<CurryOption, 'name' | 'desc' | 'price' | 'emoji'>>) => {
+  // Widened to accept any dish field (not just name/desc/price/emoji) so
+  // editing an existing dish can also update baseGroup/dhalApplicable/
+  // saladApplicable/*OptionIds — the Menu Planner's dish editor now covers
+  // all of these on both add and edit, not just the original three text
+  // fields.
+  const update = (weekStart: string, day: WeekdayKey, curryId: string, updates: Partial<Omit<CurryOption, 'id'>>) => {
     const base = overrides[weekStart] || defaultMenu;
     overrides = {
       ...overrides,
@@ -320,6 +467,48 @@ function createWeeklyMenuStore(defaultMenu: Record<WeekdayKey, CurryOption[]>) {
     };
     listeners.forEach(l => l({ ...overrides }));
   };
+
+  // Adds a new main dish to a given day within a given week — same
+  // seed-the-override-from-current-value approach as update(), so only the
+  // touched week diverges from the default rotation.
+  const addDish = (weekStart: string, day: WeekdayKey, dish: CurryOption) => {
+    const base = overrides[weekStart] || defaultMenu;
+    overrides = {
+      ...overrides,
+      [weekStart]: { ...base, [day]: [...base[day], dish] }
+    };
+    listeners.forEach(l => l({ ...overrides }));
+  };
+
+  // Removes a main dish from a given day within a given week.
+  const removeDish = (weekStart: string, day: WeekdayKey, dishId: string) => {
+    const base = overrides[weekStart] || defaultMenu;
+    overrides = {
+      ...overrides,
+      [weekStart]: { ...base, [day]: base[day].filter(c => c.id !== dishId) }
+    };
+    listeners.forEach(l => l({ ...overrides }));
+  };
+
+  // Replaces an entire week's lineup in one atomic call — used by "reuse a
+  // previous week's plan" (copy one week's override into another) and by
+  // CSV import, so the copy/import doesn't require looping addDish/
+  // removeDish/update per dish. Takes a plain menu object (a snapshot of
+  // some week — either forWeek(sourceWeek) or a freshly parsed CSV), not a
+  // reference into another week's live override, so editing the destination
+  // afterwards never retroactively changes the source it was copied from.
+  const setWeekMenu = (weekStart: string, menu: Record<WeekdayKey, CurryOption[]>) => {
+    overrides = { ...overrides, [weekStart]: { ...menu } };
+    listeners.forEach(l => l({ ...overrides }));
+  };
+
+  // Every weekStart key that currently has a saved override — lets Menu
+  // Planner list and browse past/future weeks that were deliberately set
+  // apart from the default rotation, without already knowing the key.
+  // Sorted ascending (ISO date strings sort correctly as plain strings) so
+  // a "browse previous weeks" UI can show them oldest/newest without an
+  // extra sort step.
+  const listWeekStarts = (): string[] => Object.keys(overrides).sort();
 
   // Raw accessors used only by the persistence layer at the bottom of this
   // file: getSnapshot() reads the current overrides for saving, hydrate()
@@ -337,7 +526,7 @@ function createWeeklyMenuStore(defaultMenu: Record<WeekdayKey, CurryOption[]>) {
     listeners.add(listener);
   };
 
-  return { forWeek, subscribe, update, getSnapshot, hydrate, addRawListener };
+  return { forWeek, subscribe, update, addDish, removeDish, setWeekMenu, listWeekStarts, getSnapshot, hydrate, addRawListener };
 }
 
 const WEEKLY_LUNCH_MENU_DEFAULT: Record<WeekdayKey, CurryOption[]> = {
@@ -372,6 +561,10 @@ const lunchMenuStore = createWeeklyMenuStore(WEEKLY_LUNCH_MENU_DEFAULT);
 export const lunchMenuForWeek = lunchMenuStore.forWeek;
 export const subscribeToLunchMenu = lunchMenuStore.subscribe;
 export const updateLunchCurryOption = lunchMenuStore.update;
+export const addLunchDish = lunchMenuStore.addDish;
+export const removeLunchDish = lunchMenuStore.removeDish;
+export const setLunchWeekMenu = lunchMenuStore.setWeekMenu;
+export const listLunchWeekStarts = lunchMenuStore.listWeekStarts;
 
 // Dinner — a second offering, toggled on/off via SYSTEM_CONFIG.dinnerEnabled,
 // that otherwise mirrors Lunch exactly: same shape, same week-override
@@ -409,41 +602,403 @@ const dinnerMenuStore = createWeeklyMenuStore(WEEKLY_DINNER_MENU_DEFAULT);
 export const dinnerMenuForWeek = dinnerMenuStore.forWeek;
 export const subscribeToDinnerMenu = dinnerMenuStore.subscribe;
 export const updateDinnerCurryOption = dinnerMenuStore.update;
+export const addDinnerDish = dinnerMenuStore.addDish;
+export const removeDinnerDish = dinnerMenuStore.removeDish;
+export const setDinnerWeekMenu = dinnerMenuStore.setWeekMenu;
+export const listDinnerWeekStarts = dinnerMenuStore.listWeekStarts;
 
-export interface AddOnOption { id: string; emoji: string; name: string; price?: number; up?: number; }
+// --- One-time Meal Library migration ---
+// Walks every dish currently in play — the hardcoded default rotation plus
+// any saved week overrides, Lunch and Dinner both — and creates a Main in
+// the Library for each distinct dish name that doesn't already have one.
+//
+// Lunch and Dinner are walked (and deduped) separately rather than merged
+// into one shared pool: the same name can legitimately mean two different
+// offerings ("Chicken Curry" is Rs150 at lunch, Rs180 at dinner in the
+// current data), so folding them into a single Main would silently
+// overwrite one service's real price with the other's. Only when a name's
+// Lunch and Dinner canonical versions turn out identical (same price and
+// description) are they merged into one Main; otherwise each keeps its own
+// Main, suffixed "(Lunch)"/"(Dinner)" so both are distinguishable in the
+// Add-dish picker.
+//
+// "Canonical" for a given name is simply its first occurrence when walking
+// the default rotation (MON→FRI) and then saved override weeks in
+// ascending order — deterministic and reproducible, since in the current
+// data every day a name repeats it keeps the same price (only the
+// description varies day to day).
+//
+// Safe to re-run: a name already matching an existing Main (case-
+// insensitive) is skipped rather than duplicated, so running this again
+// after adding new override weeks only picks up genuinely new names. This
+// never touches existing day-slot dishes on the Menu Planner — it only
+// populates the Library; nothing already planned gets linked or locked.
+export interface MenuLibraryMigrationResult {
+  created: string[];
+  skipped: string[];
+  // How many already-existing day-slot dishes (default rotation + every
+  // saved week, both services) got their mainId set to the Main matching
+  // their name — see the backfill pass below.
+  linked: number;
+}
 
-export const MEAL_BASES: AddOnOption[] = [
-  { id: 'wrice', emoji: '🍚', name: 'White Rice', up: 0 },
-  { id: 'brice', emoji: '🌾', name: 'Brown Rice', up: 15 },
-  { id: 'quin', emoji: '🌿', name: 'Quinoa', up: 25 },
-  { id: 'cous', emoji: '🫓', name: 'Couscous', up: 20 },
-  { id: 'caul', emoji: '🥦', name: 'Cauliflower Rice', up: 20 },
+const canonicalDishesByName = (
+  defaultMenu: Record<WeekdayKey, CurryOption[]>,
+  weekStarts: string[],
+  forWeek: (weekStart: string) => Record<WeekdayKey, CurryOption[]>
+): Map<string, CurryOption> => {
+  const canonical = new Map<string, CurryOption>();
+  const visit = (menu: Record<WeekdayKey, CurryOption[]>) => {
+    WEEKDAY_KEYS.forEach(day => {
+      (menu[day] || []).forEach(dish => {
+        const key = dish.name.trim().toLowerCase();
+        if (key && !canonical.has(key)) canonical.set(key, dish);
+      });
+    });
+  };
+  visit(defaultMenu);
+  weekStarts.slice().sort().forEach(w => visit(forWeek(w)));
+  return canonical;
+};
+
+export const migrateMenuToLibrary = (): MenuLibraryMigrationResult => {
+  const lunchCanonical = canonicalDishesByName(WEEKLY_LUNCH_MENU_DEFAULT, listLunchWeekStarts(), lunchMenuForWeek);
+  const dinnerCanonical = canonicalDishesByName(WEEKLY_DINNER_MENU_DEFAULT, listDinnerWeekStarts(), dinnerMenuForWeek);
+
+  const findMainByName = (name: string) => MAIN_DISHES.find(m => m.name.trim().toLowerCase() === name.trim().toLowerCase());
+  const created: string[] = [];
+  const skipped: string[] = [];
+  let seq = 0;
+
+  // Creates a Main for `displayName` if one doesn't already exist (by
+  // name, case-insensitive), otherwise reuses the existing one — either
+  // way returns its id, so the backfill pass below always has something
+  // to link matching day-slot dishes to.
+  const ensureMain = (dish: CurryOption, displayName: string): string => {
+    const existing = findMainByName(displayName);
+    if (existing) {
+      skipped.push(displayName);
+      return existing.id;
+    }
+    seq += 1;
+    const id = `main-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${seq}`;
+    addMainDish({
+      id,
+      emoji: dish.emoji,
+      name: displayName,
+      desc: dish.desc,
+      price: dish.price,
+      photoUrl: dish.photoUrl,
+      baseApplicable: dishBaseApplicable(dish),
+      baseOptionIds: dish.baseOptionIds,
+      baseGroup: dish.baseGroup,
+      dhalApplicable: dishDhalApplicable(dish),
+      dhalOptionIds: dish.dhalOptionIds,
+      saladApplicable: dishSaladApplicable(dish),
+      saladOptionIds: dish.saladOptionIds,
+      beverageApplicable: dishBeverageApplicable(dish),
+      beverageOptionIds: dish.beverageOptionIds,
+      dessertApplicable: dishDessertApplicable(dish),
+      dessertOptionIds: dish.dessertOptionIds
+    });
+    created.push(displayName);
+    return id;
+  };
+
+  // Per-service, per-name → Main id, built once so the backfill pass below
+  // can link every occurrence of that name without re-deciding (identical
+  // vs. Lunch/Dinner-suffixed) each time.
+  const lunchLinkByKey = new Map<string, string>();
+  const dinnerLinkByKey = new Map<string, string>();
+
+  const allKeys = new Set<string>([...lunchCanonical.keys(), ...dinnerCanonical.keys()]);
+  allKeys.forEach(key => {
+    const lunchDish = lunchCanonical.get(key);
+    const dinnerDish = dinnerCanonical.get(key);
+    if (lunchDish && dinnerDish) {
+      const identical = lunchDish.price === dinnerDish.price && lunchDish.desc.trim() === dinnerDish.desc.trim();
+      if (identical) {
+        const id = ensureMain(lunchDish, lunchDish.name);
+        lunchLinkByKey.set(key, id);
+        dinnerLinkByKey.set(key, id);
+      } else {
+        lunchLinkByKey.set(key, ensureMain(lunchDish, `${lunchDish.name} (Lunch)`));
+        dinnerLinkByKey.set(key, ensureMain(dinnerDish, `${dinnerDish.name} (Dinner)`));
+      }
+    } else if (lunchDish) {
+      lunchLinkByKey.set(key, ensureMain(lunchDish, lunchDish.name));
+    } else if (dinnerDish) {
+      dinnerLinkByKey.set(key, ensureMain(dinnerDish, dinnerDish.name));
+    }
+  });
+
+  // --- Backfill: link every already-existing day-slot dish (the default
+  // rotation plus every saved week, both services) to the Main it matches
+  // by name — so "Import" doesn't just create Mains, it also connects what
+  // was already planned to them. Never touches a dish that already has a
+  // mainId (don't clobber a deliberate existing link), and never touches
+  // price/desc — a linked day keeps showing whatever it already showed;
+  // only its editability and its special-price comparison change from here.
+  let linked = 0;
+  const linkInPlace = (menu: Record<WeekdayKey, CurryOption[]>, linkByKey: Map<string, string>) => {
+    WEEKDAY_KEYS.forEach(day => {
+      menu[day].forEach(dish => {
+        if (dish.mainId) return;
+        const id = linkByKey.get(dish.name.trim().toLowerCase());
+        if (id) { dish.mainId = id; linked++; }
+      });
+    });
+  };
+  linkInPlace(WEEKLY_LUNCH_MENU_DEFAULT, lunchLinkByKey);
+  linkInPlace(WEEKLY_DINNER_MENU_DEFAULT, dinnerLinkByKey);
+
+  const linkOverrideWeek = (
+    weekStart: string,
+    menu: Record<WeekdayKey, CurryOption[]>,
+    linkByKey: Map<string, string>,
+    update: (weekStart: string, day: WeekdayKey, curryId: string, updates: Partial<Omit<CurryOption, 'id'>>) => void
+  ) => {
+    WEEKDAY_KEYS.forEach(day => {
+      menu[day].forEach(dish => {
+        if (dish.mainId) return;
+        const id = linkByKey.get(dish.name.trim().toLowerCase());
+        if (id) { update(weekStart, day, dish.id, { mainId: id }); linked++; }
+      });
+    });
+  };
+  listLunchWeekStarts().forEach(w => linkOverrideWeek(w, lunchMenuForWeek(w), lunchLinkByKey, updateLunchCurryOption));
+  listDinnerWeekStarts().forEach(w => linkOverrideWeek(w, dinnerMenuForWeek(w), dinnerLinkByKey, updateDinnerCurryOption));
+
+  // Mutating WEEKLY_LUNCH/DINNER_MENU_DEFAULT in place (above) bypasses the
+  // normal update()/addDish() paths — those only ever touch a single
+  // week's override, never the shared fallback rotation itself — so
+  // nothing would otherwise tell subscribers (Operations' menuTick,
+  // CustomerPortal's own subscription) that it changed. Re-hydrating with
+  // the current overrides is a no-op on the override data itself, just a
+  // way to force that notification.
+  lunchMenuStore.hydrate(lunchMenuStore.getSnapshot());
+  dinnerMenuStore.hydrate(dinnerMenuStore.getSnapshot());
+
+  return { created, skipped, linked };
+};
+
+export interface AddOnOption {
+  id: string;
+  emoji: string;
+  name: string;
+  price?: number;
+  up?: number;
+  // Which base-catalog "family" this option belongs to — Base entries only
+  // (e.g. 'rice' for the original 5, 'bread' for a White/Brown Bread pair
+  // added for a non-rice main dish). Unused by Dhal/Salad/Beverage/Dessert.
+  group?: string;
+}
+
+// Base/Dhal/Salad/Beverage/Dessert used to be plain immutable constants with
+// no admin UI — changing them meant editing source code. Each is now a real
+// mutable store (live-bound export + listener set + subscribe/add/update/
+// remove), the same hand-rolled pattern as MEAL_LIBRARY_ITEMS/LOYALTY_TIERS
+// above, so Operations can manage them and the meal builder can react live.
+
+export let MEAL_BASES: AddOnOption[] = [
+  { id: 'wrice', emoji: '🍚', name: 'White Rice', up: 0, group: 'rice' },
+  { id: 'brice', emoji: '🌾', name: 'Brown Rice', up: 15, group: 'rice' },
+  { id: 'quin', emoji: '🌿', name: 'Quinoa', up: 25, group: 'rice' },
+  { id: 'cous', emoji: '🫓', name: 'Couscous', up: 20, group: 'rice' },
+  { id: 'caul', emoji: '🥦', name: 'Cauliflower Rice', up: 20, group: 'rice' },
 ];
-export const MEAL_DHALS: AddOnOption[] = [
+const baseListeners = new Set<(items: AddOnOption[]) => void>();
+export const subscribeToBases = (listener: (items: AddOnOption[]) => void) => {
+  baseListeners.add(listener);
+  listener([...MEAL_BASES]);
+  return () => { baseListeners.delete(listener); };
+};
+export const addBaseOption = (item: AddOnOption) => {
+  MEAL_BASES = [...MEAL_BASES, item];
+  baseListeners.forEach(l => l([...MEAL_BASES]));
+};
+export const updateBaseOption = (id: string, updates: Partial<AddOnOption>) => {
+  MEAL_BASES = MEAL_BASES.map(i => i.id === id ? { ...i, ...updates } : i);
+  baseListeners.forEach(l => l([...MEAL_BASES]));
+};
+export const removeBaseOption = (id: string) => {
+  MEAL_BASES = MEAL_BASES.filter(i => i.id !== id);
+  baseListeners.forEach(l => l([...MEAL_BASES]));
+};
+
+export let MEAL_DHALS: AddOnOption[] = [
   { id: 'moong', emoji: '🟡', name: 'Yellow Dhal' },
   { id: 'red', emoji: '🟤', name: 'Red Lentil Dhal' },
 ];
-export const MEAL_SALADS: AddOnOption[] = [
+const dhalListeners = new Set<(items: AddOnOption[]) => void>();
+export const subscribeToDhals = (listener: (items: AddOnOption[]) => void) => {
+  dhalListeners.add(listener);
+  listener([...MEAL_DHALS]);
+  return () => { dhalListeners.delete(listener); };
+};
+export const addDhalOption = (item: AddOnOption) => {
+  MEAL_DHALS = [...MEAL_DHALS, item];
+  dhalListeners.forEach(l => l([...MEAL_DHALS]));
+};
+export const updateDhalOption = (id: string, updates: Partial<AddOnOption>) => {
+  MEAL_DHALS = MEAL_DHALS.map(i => i.id === id ? { ...i, ...updates } : i);
+  dhalListeners.forEach(l => l([...MEAL_DHALS]));
+};
+export const removeDhalOption = (id: string) => {
+  MEAL_DHALS = MEAL_DHALS.filter(i => i.id !== id);
+  dhalListeners.forEach(l => l([...MEAL_DHALS]));
+};
+
+export let MEAL_SALADS: AddOnOption[] = [
   { id: 'garden', emoji: '🥗', name: 'Garden Salad' },
   { id: 'slaw', emoji: '🥙', name: 'Creole Slaw' },
 ];
-export const MEAL_BEVERAGES: AddOnOption[] = [
+const saladListeners = new Set<(items: AddOnOption[]) => void>();
+export const subscribeToSalads = (listener: (items: AddOnOption[]) => void) => {
+  saladListeners.add(listener);
+  listener([...MEAL_SALADS]);
+  return () => { saladListeners.delete(listener); };
+};
+export const addSaladOption = (item: AddOnOption) => {
+  MEAL_SALADS = [...MEAL_SALADS, item];
+  saladListeners.forEach(l => l([...MEAL_SALADS]));
+};
+export const updateSaladOption = (id: string, updates: Partial<AddOnOption>) => {
+  MEAL_SALADS = MEAL_SALADS.map(i => i.id === id ? { ...i, ...updates } : i);
+  saladListeners.forEach(l => l([...MEAL_SALADS]));
+};
+export const removeSaladOption = (id: string) => {
+  MEAL_SALADS = MEAL_SALADS.filter(i => i.id !== id);
+  saladListeners.forEach(l => l([...MEAL_SALADS]));
+};
+
+export let MEAL_BEVERAGES: AddOnOption[] = [
   { id: 'alouda', emoji: '🥤', name: 'Alouda', price: 35 },
   { id: 'lemonade', emoji: '🍋', name: 'Lemonade', price: 30 },
   { id: 'water', emoji: '💧', name: 'Mineral Water', price: 0 },
 ];
-export const MEAL_DESSERTS: AddOnOption[] = [
+const beverageListeners = new Set<(items: AddOnOption[]) => void>();
+export const subscribeToBeverages = (listener: (items: AddOnOption[]) => void) => {
+  beverageListeners.add(listener);
+  listener([...MEAL_BEVERAGES]);
+  return () => { beverageListeners.delete(listener); };
+};
+export const addBeverageOption = (item: AddOnOption) => {
+  MEAL_BEVERAGES = [...MEAL_BEVERAGES, item];
+  beverageListeners.forEach(l => l([...MEAL_BEVERAGES]));
+};
+export const updateBeverageOption = (id: string, updates: Partial<AddOnOption>) => {
+  MEAL_BEVERAGES = MEAL_BEVERAGES.map(i => i.id === id ? { ...i, ...updates } : i);
+  beverageListeners.forEach(l => l([...MEAL_BEVERAGES]));
+};
+export const removeBeverageOption = (id: string) => {
+  MEAL_BEVERAGES = MEAL_BEVERAGES.filter(i => i.id !== id);
+  beverageListeners.forEach(l => l([...MEAL_BEVERAGES]));
+};
+
+export let MEAL_DESSERTS: AddOnOption[] = [
   { id: 'gateau', emoji: '🍡', name: 'Gateau Piment', price: 25 },
   { id: 'fruits', emoji: '🍌', name: 'Fruit Salad', price: 30 },
   { id: 'cake', emoji: '🎂', name: 'Coconut Cake', price: 0 },
 ];
+const dessertListeners = new Set<(items: AddOnOption[]) => void>();
+export const subscribeToDesserts = (listener: (items: AddOnOption[]) => void) => {
+  dessertListeners.add(listener);
+  listener([...MEAL_DESSERTS]);
+  return () => { dessertListeners.delete(listener); };
+};
+export const addDessertOption = (item: AddOnOption) => {
+  MEAL_DESSERTS = [...MEAL_DESSERTS, item];
+  dessertListeners.forEach(l => l([...MEAL_DESSERTS]));
+};
+export const updateDessertOption = (id: string, updates: Partial<AddOnOption>) => {
+  MEAL_DESSERTS = MEAL_DESSERTS.map(i => i.id === id ? { ...i, ...updates } : i);
+  dessertListeners.forEach(l => l([...MEAL_DESSERTS]));
+};
+export const removeDessertOption = (id: string) => {
+  MEAL_DESSERTS = MEAL_DESSERTS.filter(i => i.id !== id);
+  dessertListeners.forEach(l => l([...MEAL_DESSERTS]));
+};
+
+// --- ICON LIBRARY ---
+// A searchable, admin-curated set of emoji glyphs — every "pick an emoji"
+// field in Operations (a Main's icon, an Add-on Catalog entry's icon) opens
+// a search modal over this list instead of a free-text box, so the same
+// small set of icons stays visually consistent across Mains/catalogs
+// instead of admins typing/pasting whatever emoji they happen to have handy.
+// Managed from Settings → Icons, same reactive-store + CRUD pattern as the
+// five Add-on catalogs above.
+export interface IconEntry {
+  id: string;
+  emoji: string;
+  label: string;
+}
+
+export let ICON_LIBRARY: IconEntry[] = [
+  { id: 'ic-chicken', emoji: '🍗', label: 'Chicken' },
+  { id: 'ic-fish', emoji: '🐟', label: 'Fish' },
+  { id: 'ic-prawn', emoji: '🦐', label: 'Prawn / Shrimp' },
+  { id: 'ic-beef', emoji: '🥩', label: 'Beef' },
+  { id: 'ic-veg', emoji: '🥦', label: 'Vegetable' },
+  { id: 'ic-paneer', emoji: '🧀', label: 'Paneer / Cheese' },
+  { id: 'ic-egg', emoji: '🥚', label: 'Egg' },
+  { id: 'ic-bread', emoji: '🍞', label: 'Bread' },
+  { id: 'ic-sausage', emoji: '🌭', label: 'Sausage' },
+  { id: 'ic-rice', emoji: '🍚', label: 'Rice' },
+  { id: 'ic-grain', emoji: '🌾', label: 'Grain' },
+  { id: 'ic-noodle', emoji: '🍜', label: 'Noodles' },
+  { id: 'ic-curry', emoji: '🍛', label: 'Curry' },
+  { id: 'ic-plate', emoji: '🍽️', label: 'Plate / General dish' },
+  { id: 'ic-salad', emoji: '🥗', label: 'Salad' },
+  { id: 'ic-dhal', emoji: '🟡', label: 'Dhal / Lentil' },
+  { id: 'ic-dhal2', emoji: '🟤', label: 'Dhal (dark)' },
+  { id: 'ic-chilli', emoji: '🌶️', label: 'Chilli / Spice' },
+  { id: 'ic-lemon', emoji: '🍋', label: 'Lemon' },
+  { id: 'ic-coconut', emoji: '🥥', label: 'Coconut' },
+  { id: 'ic-juice', emoji: '🥤', label: 'Juice / Drink' },
+  { id: 'ic-water', emoji: '💧', label: 'Water' },
+  { id: 'ic-tea', emoji: '🍵', label: 'Tea' },
+  { id: 'ic-cake', emoji: '🎂', label: 'Cake' },
+  { id: 'ic-dessert', emoji: '🍡', label: 'Dessert (skewer)' },
+  { id: 'ic-fruit', emoji: '🍌', label: 'Fruit' },
+  { id: 'ic-strawberry', emoji: '🍓', label: 'Strawberry' },
+  { id: 'ic-star', emoji: '⭐', label: 'Star / Featured' },
+  { id: 'ic-fire', emoji: '🔥', label: 'Spicy / Popular' },
+  { id: 'ic-gift', emoji: '🎁', label: 'Gift / Promo' },
+];
+const iconLibraryListeners = new Set<(items: IconEntry[]) => void>();
+export const subscribeToIconLibrary = (listener: (items: IconEntry[]) => void) => {
+  iconLibraryListeners.add(listener);
+  listener([...ICON_LIBRARY]);
+  return () => { iconLibraryListeners.delete(listener); };
+};
+export const addIconEntry = (item: IconEntry) => {
+  ICON_LIBRARY = [...ICON_LIBRARY, item];
+  iconLibraryListeners.forEach(l => l([...ICON_LIBRARY]));
+};
+export const updateIconEntry = (id: string, updates: Partial<IconEntry>) => {
+  ICON_LIBRARY = ICON_LIBRARY.map(i => i.id === id ? { ...i, ...updates } : i);
+  iconLibraryListeners.forEach(l => l([...ICON_LIBRARY]));
+};
+export const removeIconEntry = (id: string) => {
+  ICON_LIBRARY = ICON_LIBRARY.filter(i => i.id !== id);
+  iconLibraryListeners.forEach(l => l([...ICON_LIBRARY]));
+};
 
 // Real dish photography (three actual photos, licensed for this app),
 // grouped by protein family so the same three photos cover every curry on
 // the menu without a new photo shoot each time a day's curry changes.
-export const dishPhotoFor = (curryId: string): string => {
-  if (['fsh', 'prn', 'shp'].includes(curryId)) return '/dishes/fish.jpg';
-  if (['veg', 'len', 'pan'].includes(curryId)) return '/dishes/veg.jpg';
+// Accepts either a full dish (preferred — lets a custom uploaded photoUrl
+// win) or a bare id string (for call sites that only ever had an id on
+// hand, e.g. a historical order line's itemId) — every existing call site
+// that passes just an id keeps working unchanged, falling back to the
+// protein-family guess exactly as before.
+export const dishPhotoFor = (dish: CurryOption | string): string => {
+  const id = typeof dish === 'string' ? dish : dish.id;
+  const photoUrl = typeof dish === 'string' ? undefined : dish.photoUrl;
+  if (photoUrl) return photoUrl;
+  if (['fsh', 'prn', 'shp'].includes(id)) return '/dishes/fish.jpg';
+  if (['veg', 'len', 'pan'].includes(id)) return '/dishes/veg.jpg';
   return '/dishes/chicken.jpg';
 };
 
@@ -1423,6 +1978,18 @@ interface PersistedState {
   // here so Operations can plan ahead without racing the clock.
   LUNCH_MENU_OVERRIDES: Record<string, Record<WeekdayKey, CurryOption[]>>;
   DINNER_MENU_OVERRIDES: Record<string, Record<WeekdayKey, CurryOption[]>>;
+  // Base/Dhal/Salad/Beverage/Dessert catalogs — previously plain constants,
+  // now admin-editable from Operations, so they need the same persistence
+  // treatment as everything else above.
+  MEAL_BASES: AddOnOption[];
+  MEAL_DHALS: AddOnOption[];
+  MEAL_SALADS: AddOnOption[];
+  MEAL_BEVERAGES: AddOnOption[];
+  MEAL_DESSERTS: AddOnOption[];
+  // Meal Library Mains — see MAIN_DISHES above.
+  MAIN_DISHES: MainDish[];
+  // Icon Library — see ICON_LIBRARY above.
+  ICON_LIBRARY: IconEntry[];
 }
 
 const persistAll = () => {
@@ -1435,6 +2002,8 @@ const persistAll = () => {
       SYSTEM_CONFIG,
       LUNCH_MENU_OVERRIDES: lunchMenuStore.getSnapshot(),
       DINNER_MENU_OVERRIDES: dinnerMenuStore.getSnapshot(),
+      MEAL_BASES, MEAL_DHALS, MEAL_SALADS, MEAL_BEVERAGES, MEAL_DESSERTS,
+      MAIN_DISHES, ICON_LIBRARY,
     };
     localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
   } catch (e) {
@@ -1451,6 +2020,8 @@ const persistAll = () => {
   auditListeners, discrepancyListeners, poListeners, pettyCashListeners,
   cashierListeners, discountRequestListeners, orderListeners, posListeners,
   loyaltyListeners, groupListeners, paymentMethodListeners, configListeners,
+  baseListeners, dhalListeners, saladListeners, beverageListeners, dessertListeners,
+  mainDishListeners, iconLibraryListeners,
 ].forEach((set: Set<any>) => set.add(persistAll));
 lunchMenuStore.addRawListener(persistAll);
 dinnerMenuStore.addRawListener(persistAll);
@@ -1487,6 +2058,13 @@ export const clearPersistedState = () => {
     if (saved.SYSTEM_CONFIG !== undefined) Object.assign(SYSTEM_CONFIG, saved.SYSTEM_CONFIG);
     lunchMenuStore.hydrate(saved.LUNCH_MENU_OVERRIDES);
     dinnerMenuStore.hydrate(saved.DINNER_MENU_OVERRIDES);
+    if (saved.MEAL_BASES !== undefined) MEAL_BASES = saved.MEAL_BASES;
+    if (saved.MEAL_DHALS !== undefined) MEAL_DHALS = saved.MEAL_DHALS;
+    if (saved.MEAL_SALADS !== undefined) MEAL_SALADS = saved.MEAL_SALADS;
+    if (saved.MEAL_BEVERAGES !== undefined) MEAL_BEVERAGES = saved.MEAL_BEVERAGES;
+    if (saved.MEAL_DESSERTS !== undefined) MEAL_DESSERTS = saved.MEAL_DESSERTS;
+    if (saved.MAIN_DISHES !== undefined) MAIN_DISHES = saved.MAIN_DISHES;
+    if (saved.ICON_LIBRARY !== undefined) ICON_LIBRARY = saved.ICON_LIBRARY;
   } catch (e) {
     console.warn('BonManzE: failed to restore persisted state', e);
   }

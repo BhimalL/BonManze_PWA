@@ -46,6 +46,13 @@ import {
   MEAL_SALADS,
   MEAL_BEVERAGES,
   MEAL_DESSERTS,
+  dishBaseApplicable,
+  dishBaseOptionIds,
+  dishDhalApplicable,
+  dishSaladApplicable,
+  dishBeverageApplicable,
+  dishDessertApplicable,
+  filterAddOnOptions,
   dishPhotoFor,
   CREOLE_PHRASES,
   SYSTEM_CONFIG,
@@ -67,7 +74,8 @@ import {
   submitPaymentClaim,
   MEAL_PLAN_PAYMENT_METHOD_NAMES,
   formatCurrency,
-  calculateTotal
+  calculateTotal,
+  specialPriceInfo
 } from './store';
 
 // Edits/cancels lock at SYSTEM_CONFIG.cutoffTime on a day relative to
@@ -343,18 +351,23 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     editingConfirmed: { orderId: string; date: string; slot: string } | null;
   } | null>(null);
 
-  // Dhal and salad are included at no extra cost (unlike beverage/dessert,
-  // which are paid add-ons) — this guards against a customer tapping "No
-  // dhal"/"No salad" by accident and losing something free without meaning
-  // to. Only fires when actually skipping (id === 'none'), not on every tap.
-  const [skipConfirm, setSkipConfirm] = useState<{ label: string; apply: () => void } | null>(null);
-  const requestExtraChange = (field: 'dhalId' | 'saladId', id: string, label: string) => {
-    if (id === 'none') {
-      setSkipConfirm({ label, apply: () => setBuilderSel({ [field]: id } as Partial<MealSelection>) });
-    } else {
-      setBuilderSel({ [field]: id } as Partial<MealSelection>);
-    }
+  // Picking "None" for Dhal/Salad just updates the selection immediately —
+  // no per-tap interrupt. The free-item forfeiture warning now fires once,
+  // batched, at commit time (see forfeitConfirm/commitBuilder below) rather
+  // than once per category, which used to fire twice back-to-back if both
+  // were skipped.
+  const requestExtraChange = (field: 'dhalId' | 'saladId', id: string) => {
+    setBuilderSel({ [field]: id } as Partial<MealSelection>);
   };
+
+  // Dhal and salad are included at no extra cost (unlike beverage/dessert,
+  // which are paid add-ons) — this confirms once, at commit time, listing
+  // every applicable free category the customer is about to forfeit, so
+  // nothing free is lost by accident without one clear final chance to go
+  // back. `apply` is the real commit (performCommit) to run once confirmed;
+  // when nothing applicable is being skipped, commitBuilder below calls
+  // performCommit directly and this never appears.
+  const [forfeitConfirm, setForfeitConfirm] = useState<{ labels: string[]; apply: () => void } | null>(null);
 
   const [payTarget, setPayTarget] = useState<{
     kind: 'item'; orderId: string; date: string; slot: string; amount: number; what: string; ref: string;
@@ -519,21 +532,69 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // one; every section stays visible (as a collapsed summary row) so the
   // user can tap back into it, rather than being hidden behind a Next/Back
   // paged wizard.
-  const selectCurry = (id: string) => setBuilder(b => b ? { ...b, sel: { ...b.sel, curryId: id }, openSection: 2 } : b);
+  const selectCurry = (id: string) => setBuilder(b => {
+    if (!b) return b;
+    const dish = menuFor(b.service, b.weekStart)[b.day.key].find(x => x.id === id);
+    // A previous selection stays only if it's still in the newly-picked
+    // dish's *allowed* set — covers both "different base group entirely"
+    // (old behavior) and "same group, but this dish narrowed to a specific
+    // few" (new — see dishBaseOptionIds/filterAddOnOptions in store.ts).
+    const allowedBaseIds = dish ? dishBaseOptionIds(dish, MEAL_BASES) : undefined;
+    const baseStillValid = !!b.sel.baseId && (!allowedBaseIds || allowedBaseIds.includes(b.sel.baseId));
+    const stillAllowed = (current: string, allowedIds: string[] | undefined) =>
+      current === '' || current === 'none' || !allowedIds || allowedIds.includes(current);
+    return {
+      ...b,
+      sel: {
+        ...b.sel,
+        curryId: id,
+        // Switching to a dish with a different/narrower base selection
+        // invalidates whatever base was picked — reset it so the Base
+        // step can't silently keep an incompatible selection.
+        baseId: baseStillValid ? b.sel.baseId : '',
+        // Dhal/Salad/Beverage/Dessert only apply (or only offer certain
+        // items) to some dishes now — force to 'none' (skipped) when the
+        // newly-selected dish doesn't offer the category at all, or reset
+        // to unselected when it narrowed away the specific item that was
+        // already picked, rather than leaving an now-invalid selection.
+        dhalId: dish && !dishDhalApplicable(dish) ? 'none' : (stillAllowed(b.sel.dhalId, dish?.dhalOptionIds) ? b.sel.dhalId : ''),
+        saladId: dish && !dishSaladApplicable(dish) ? 'none' : (stillAllowed(b.sel.saladId, dish?.saladOptionIds) ? b.sel.saladId : ''),
+        beverageId: dish && !dishBeverageApplicable(dish) ? 'none' : (stillAllowed(b.sel.beverageId, dish?.beverageOptionIds) ? b.sel.beverageId : 'none'),
+        dessertId: dish && !dishDessertApplicable(dish) ? 'none' : (stillAllowed(b.sel.dessertId, dish?.dessertOptionIds) ? b.sel.dessertId : 'none')
+      },
+      openSection: 2
+    };
+  });
   const selectBase = (id: string) => setBuilder(b => b ? { ...b, sel: { ...b.sel, baseId: id }, openSection: 3 } : b);
   const toggleSection = (n: 1 | 2 | 3) => setBuilder(b => b ? { ...b, openSection: n } : b);
 
-  const sectionComplete = (b: NonNullable<typeof builder>) => ({
-    1: !!b.sel.curryId,
-    2: !!b.sel.baseId,
-    3: b.sel.dhalId !== '' && b.sel.saladId !== ''
-  });
+  // A category that doesn't apply to the selected dish (e.g. Dhal for a
+  // dish with dhalApplicable === false) is treated as automatically
+  // complete regardless of its raw '' value — its ChipRow doesn't render
+  // at all (see the Section 3 JSX below), so it would otherwise never
+  // leave '' and permanently block the Add-to-order button.
+  const sectionComplete = (b: NonNullable<typeof builder>) => {
+    const dish = menuFor(b.service, b.weekStart)[b.day.key].find(x => x.id === b.sel.curryId);
+    const dhalOk = !dish || !dishDhalApplicable(dish) || b.sel.dhalId !== '';
+    const saladOk = !dish || !dishSaladApplicable(dish) || b.sel.saladId !== '';
+    return {
+      1: !!b.sel.curryId,
+      // A dish with Base turned off entirely doesn't need one picked —
+      // same "inapplicable category is auto-complete" rule as Dhal/Salad.
+      2: !dish || !dishBaseApplicable(dish) || !!b.sel.baseId,
+      3: dhalOk && saladOk
+    };
+  };
   const builderReady = (b: NonNullable<typeof builder>) => {
     const c = sectionComplete(b);
     return c[1] && c[2] && c[3];
   };
 
-  const commitBuilder = () => {
+  // The actual commit — unchanged from before this round of changes, just
+  // renamed and pulled out of commitBuilder so the forfeiture check below
+  // can defer calling it until after confirmation (or call it immediately
+  // when there's nothing to confirm).
+  const performCommit = () => {
     if (!builder) return;
     const { day, service, weekStart, sel, editIndex, editingConfirmed } = builder;
 
@@ -558,6 +619,25 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     });
     toast(editIndex !== null ? 'Meal updated' : `${day.label} added · Rs ${mealPrice(sel, day.key, service, weekStart)}`);
     closeBuilder();
+  };
+
+  // Fired by the "Add to order"/"Save changes" button. Checks every
+  // *applicable* free category (Dhal/Salad only — Beverage/Dessert are paid
+  // add-ons, never free, so never part of this) for a "none" selection and,
+  // if any are found, opens one consolidated confirmation listing all of
+  // them instead of committing immediately. Commits straight away, exactly
+  // as before, when nothing applicable is being skipped.
+  const commitBuilder = () => {
+    if (!builder) return;
+    const dish = menuFor(builder.service, builder.weekStart)[builder.day.key].find(x => x.id === builder.sel.curryId);
+    const forfeited: string[] = [];
+    if (dish && dishDhalApplicable(dish) && builder.sel.dhalId === 'none') forfeited.push('Dhal');
+    if (dish && dishSaladApplicable(dish) && builder.sel.saladId === 'none') forfeited.push('Salad');
+    if (forfeited.length > 0) {
+      setForfeitConfirm({ labels: forfeited, apply: performCommit });
+    } else {
+      performCommit();
+    }
   };
 
   const removeCartMeal = (dateKey: string, index: number, service: Service = 'Lunch') => {
@@ -1168,7 +1248,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     onClick={() => { setActiveWeek(tile.week); setActiveService(tile.service); setView('menu'); }}
                     className="relative rounded-2xl overflow-hidden text-left h-28 border border-[#E7E0D0]"
                   >
-                    <img src={dishPhotoFor(tile.dish.id)} className="absolute inset-0 w-full h-full object-cover" alt="" />
+                    <img src={dishPhotoFor(tile.dish)} className="absolute inset-0 w-full h-full object-cover" alt="" />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
                     <div className="absolute bottom-0 left-0 right-0 p-3">
                       <p className="text-[9px] font-black uppercase tracking-widest text-white/80">{tile.weekLabel}</p>
@@ -1343,21 +1423,30 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     )}
                   </div>
                   <div className="grid grid-cols-3 gap-2 mb-3">
-                    {menuFor(activeService, activeWeekStart)[d.key].map(c => (
-                      <button
-                        key={c.id}
-                        onClick={() => openBuilder(d, activeService, activeWeekStart, c.id)}
-                        className="relative rounded-2xl overflow-hidden border border-[#E7E0D0] text-left h-32"
-                      >
-                        <img src={dishPhotoFor(c.id)} className="absolute inset-0 w-full h-full object-cover" alt={c.name} />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent" />
-                        <div className="absolute bottom-0 left-0 right-0 p-2">
-                          <p className="text-[11px] font-black text-white leading-tight truncate">{c.emoji} {c.name}</p>
-                          <p className="text-[9px] text-white/80 font-medium truncate mt-0.5">{c.desc}</p>
-                          <p className="text-[11px] font-black text-white mt-1">Rs {c.price}</p>
-                        </div>
-                      </button>
-                    ))}
+                    {menuFor(activeService, activeWeekStart)[d.key].map(c => {
+                      const special = specialPriceInfo(c);
+                      return (
+                        <button
+                          key={c.id}
+                          onClick={() => openBuilder(d, activeService, activeWeekStart, c.id)}
+                          className="relative rounded-2xl overflow-hidden border border-[#E7E0D0] text-left h-32"
+                        >
+                          <img src={dishPhotoFor(c)} className="absolute inset-0 w-full h-full object-cover" alt={c.name} />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent" />
+                          {special && (
+                            <span className="absolute top-1.5 right-1.5 bg-emerald-500 text-white text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full shadow-sm">Special</span>
+                          )}
+                          <div className="absolute bottom-0 left-0 right-0 p-2">
+                            <p className="text-[11px] font-black text-white leading-tight truncate">{c.emoji} {c.name}</p>
+                            <p className="text-[9px] text-white/80 font-medium truncate mt-0.5">{c.desc}</p>
+                            <div className="flex items-center gap-1.5 mt-1">
+                              {special && <span className="text-[9px] text-white/60 font-bold line-through">Rs {special.regularPrice}</span>}
+                              <p className={`text-[11px] font-black mt-0 ${special ? 'text-emerald-300' : 'text-white'}`}>Rs {c.price}</p>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                   {meals.length > 0 && (
                     <div className="space-y-1.5 pt-3 border-t border-[#E7E0D0]">
@@ -1783,7 +1872,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         return (
           <div className="fixed inset-0 z-[9999] bg-white flex flex-col animate-slide-up">
             <div className="relative h-64 shrink-0">
-              <img src={dishPhotoFor(builder.sel.curryId)} className="w-full h-full object-cover" alt="Dish" />
+              <img src={dishPhotoFor(selectedCurry || builder.sel.curryId)} className="w-full h-full object-cover" alt="Dish" />
               <button onClick={closeBuilder} className="absolute top-4 right-4 p-2 bg-white/90 rounded-full text-slate-700"><X className="size-4" /></button>
               <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/70 to-transparent">
                 <p className="text-white font-black text-sm mb-2">{(builder.editIndex !== null || builder.editingConfirmed) ? `Edit ${builder.day.label}` : `${builder.day.label} — customise`}</p>
@@ -1812,23 +1901,33 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 onToggle={() => toggleSection(1)}
               >
                 <div className="grid grid-cols-3 gap-2">
-                  {menuFor(builder.service, builder.weekStart)[builder.day.key].map(c => (
-                    <button
-                      key={c.id}
-                      onClick={() => selectCurry(c.id)}
-                      className={`relative rounded-2xl overflow-hidden text-left h-28 border-2 transition-all active:scale-[0.98] ${builder.sel.curryId === c.id ? 'border-primary ring-4 ring-primary/10 shadow-[0_0_20px_rgba(62,125,34,0.08)]' : 'border-transparent'}`}
-                    >
-                      <img src={dishPhotoFor(c.id)} className="absolute inset-0 w-full h-full object-cover" alt={c.name} />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
-                      <div className="absolute bottom-0 left-0 right-0 p-2">
-                        <p className="text-[11px] font-black text-white leading-tight truncate">{c.name}</p>
-                        <p className="text-[10px] font-black text-white/90 mt-0.5">Rs {c.price}</p>
-                      </div>
-                    </button>
-                  ))}
+                  {menuFor(builder.service, builder.weekStart)[builder.day.key].map(c => {
+                    const special = specialPriceInfo(c);
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => selectCurry(c.id)}
+                        className={`relative rounded-2xl overflow-hidden text-left h-28 border-2 transition-all active:scale-[0.98] ${builder.sel.curryId === c.id ? 'border-primary ring-4 ring-primary/10 shadow-[0_0_20px_rgba(62,125,34,0.08)]' : 'border-transparent'}`}
+                      >
+                        <img src={dishPhotoFor(c)} className="absolute inset-0 w-full h-full object-cover" alt={c.name} />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
+                        {special && (
+                          <span className="absolute top-1.5 right-1.5 bg-emerald-500 text-white text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full shadow-sm">Special</span>
+                        )}
+                        <div className="absolute bottom-0 left-0 right-0 p-2">
+                          <p className="text-[11px] font-black text-white leading-tight truncate">{c.name}</p>
+                          <div className="flex items-center gap-1.5">
+                            {special && <span className="text-[9px] text-white/60 font-bold line-through">Rs {special.regularPrice}</span>}
+                            <p className={`text-[10px] font-black mt-0.5 ${special ? 'text-emerald-300' : 'text-white/90'}`}>Rs {c.price}</p>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </SectionCard>
 
+              {(!selectedCurry || dishBaseApplicable(selectedCurry)) && (
               <SectionCard
                 index={2} title="Choose your base"
                 isOpen={builder.openSection === 2} isComplete={complete[2]}
@@ -1836,7 +1935,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 onToggle={() => toggleSection(2)}
               >
                 <div className="grid grid-cols-2 gap-2">
-                  {MEAL_BASES.map(b => (
+                  {filterAddOnOptions(MEAL_BASES, selectedCurry ? dishBaseOptionIds(selectedCurry, MEAL_BASES) : undefined).map(b => (
                     <button key={b.id} onClick={() => selectBase(b.id)} className={`p-4 rounded-2xl border-2 transition-all active:scale-[0.98] ${builder.sel.baseId === b.id ? 'border-primary bg-primary/[0.04] ring-4 ring-primary/10 shadow-[0_0_20px_rgba(62,125,34,0.08)]' : 'border-transparent bg-[#F4EFE4]'}`}>
                       <p className="text-2xl mb-1">{b.emoji}</p>
                       <p className="text-xs font-bold text-slate-900">{b.name}</p>
@@ -1845,6 +1944,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   ))}
                 </div>
               </SectionCard>
+              )}
 
               <SectionCard
                 index={3} title="Make it yours"
@@ -1861,10 +1961,18 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 onToggle={() => toggleSection(3)}
               >
                 <div className="space-y-3">
-                  <ChipRow label="🫘 Dhal" options={MEAL_DHALS} selected={builder.sel.dhalId} onSelect={id => requestExtraChange('dhalId', id, 'dhal')} noneLabel="No dhal" />
-                  <ChipRow label="🥗 Salad" options={MEAL_SALADS} selected={builder.sel.saladId} onSelect={id => requestExtraChange('saladId', id, 'salad')} noneLabel="No salad" />
-                  <ChipRow label="🥤 Beverage" options={MEAL_BEVERAGES} selected={builder.sel.beverageId} onSelect={id => setBuilderSel({ beverageId: id })} noneLabel="None" showPrice />
-                  <ChipRow label="🍮 Dessert" options={MEAL_DESSERTS} selected={builder.sel.dessertId} onSelect={id => setBuilderSel({ dessertId: id })} noneLabel="None" showPrice />
+                  {(!selectedCurry || dishDhalApplicable(selectedCurry)) && (
+                    <ChipRow label="🫘 Dhal" options={filterAddOnOptions(MEAL_DHALS, selectedCurry?.dhalOptionIds)} selected={builder.sel.dhalId} onSelect={id => requestExtraChange('dhalId', id)} noneLabel="No dhal" />
+                  )}
+                  {(!selectedCurry || dishSaladApplicable(selectedCurry)) && (
+                    <ChipRow label="🥗 Salad" options={filterAddOnOptions(MEAL_SALADS, selectedCurry?.saladOptionIds)} selected={builder.sel.saladId} onSelect={id => requestExtraChange('saladId', id)} noneLabel="No salad" />
+                  )}
+                  {(!selectedCurry || dishBeverageApplicable(selectedCurry)) && (
+                    <ChipRow label="🥤 Beverage" options={filterAddOnOptions(MEAL_BEVERAGES, selectedCurry?.beverageOptionIds)} selected={builder.sel.beverageId} onSelect={id => setBuilderSel({ beverageId: id })} noneLabel="None" showPrice />
+                  )}
+                  {(!selectedCurry || dishDessertApplicable(selectedCurry)) && (
+                    <ChipRow label="🍮 Dessert" options={filterAddOnOptions(MEAL_DESSERTS, selectedCurry?.dessertOptionIds)} selected={builder.sel.dessertId} onSelect={id => setBuilderSel({ dessertId: id })} noneLabel="None" showPrice />
+                  )}
                   <div className="rounded-2xl border border-[#E7E0D0] bg-[#FBF8F1] p-4">
                     <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">🧑 Who's this meal for? (optional)</p>
                     <input
@@ -1896,17 +2004,20 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         );
       })()}
 
-      {/* Skip-a-free-extra confirmation — fires when tapping "No dhal"/"No
-          salad" so a customer doesn't lose something included at no extra
-          cost without meaning to. Sits above the builder's own z-[9999]. */}
-      {skipConfirm && (
-        <div className="fixed inset-0 z-[10050] bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setSkipConfirm(null)}>
+      {/* Free-item forfeiture confirmation — fires once at commit time
+          (Add to order/Save changes), listing every applicable free
+          category (Dhal/Salad) set to "none", rather than interrupting
+          per-tap. Sits above the builder's own z-[9999]. */}
+      {forfeitConfirm && (
+        <div className="fixed inset-0 z-[10050] bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setForfeitConfirm(null)}>
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl" onClick={e => e.stopPropagation()}>
-            <p className="text-sm font-black text-slate-900 mb-1">Skip your free {skipConfirm.label}?</p>
-            <p className="text-xs text-slate-500 font-medium mb-5">It's included at no extra cost — you can always add it back before confirming.</p>
+            <p className="text-sm font-black text-slate-900 mb-1">You're skipping: {forfeitConfirm.labels.join(', ')}</p>
+            <p className="text-xs text-slate-500 font-medium mb-5">
+              {forfeitConfirm.labels.length > 1 ? "They're included" : "It's included"} at no extra cost — go back to add {forfeitConfirm.labels.length > 1 ? 'them' : 'it'} back, or confirm to skip.
+            </p>
             <div className="flex gap-3">
-              <button onClick={() => setSkipConfirm(null)} className="flex-1 py-3 rounded-2xl bg-slate-100 text-slate-600 text-xs font-black uppercase tracking-widest">Keep it</button>
-              <button onClick={() => { skipConfirm.apply(); setSkipConfirm(null); }} className="flex-1 py-3 rounded-2xl bg-primary text-white text-xs font-black uppercase tracking-widest">Skip it</button>
+              <button onClick={() => setForfeitConfirm(null)} className="flex-1 py-3 rounded-2xl bg-slate-100 text-slate-600 text-xs font-black uppercase tracking-widest">Go back</button>
+              <button onClick={() => { forfeitConfirm.apply(); setForfeitConfirm(null); }} className="flex-1 py-3 rounded-2xl bg-primary text-white text-xs font-black uppercase tracking-widest">Confirm</button>
             </div>
           </div>
         </div>

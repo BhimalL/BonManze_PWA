@@ -24,9 +24,19 @@ import {
   Settings as SettingsIcon,
   Search,
   LogOut,
-  MessageSquare
+  MessageSquare,
+  Plus,
+  Trash2,
+  Upload,
+  Download,
+  Copy,
+  History,
+  ChefHat,
+  ImagePlus
 } from 'lucide-react';
 import { Order, OrderItem, Customer, PaymentMethod } from '../types';
+import { Portal } from './Portal';
+import { IconPickerButton } from './IconPicker';
 import {
   subscribeToOrders,
   updateOrderItemStatus,
@@ -39,40 +49,99 @@ import {
   subscribeToLunchMenu,
   updateLunchCurryOption,
   lunchMenuForWeek,
+  addLunchDish,
+  removeLunchDish,
+  setLunchWeekMenu,
+  listLunchWeekStarts,
   subscribeToDinnerMenu,
   updateDinnerCurryOption,
   dinnerMenuForWeek,
+  addDinnerDish,
+  removeDinnerDish,
+  setDinnerWeekMenu,
+  listDinnerWeekStarts,
   MOCK_TODAY,
   getRealTodayISO,
   WEEKDAY_KEYS,
   WeekdayKey,
   CurryOption,
+  AddOnOption,
+  DEFAULT_BASE_GROUP,
+  dishBaseGroup,
+  dishBaseApplicable,
+  dishBaseOptionIds,
+  dishDhalApplicable,
+  dishSaladApplicable,
+  dishBeverageApplicable,
+  dishDessertApplicable,
   dishPhotoFor,
   formatCurrency,
   MEAL_PLAN_PAYMENT_METHOD_NAMES,
   SYSTEM_CONFIG,
   subscribeToConfig,
-  updateSystemConfig
+  updateSystemConfig,
+  subscribeToBases,
+  addBaseOption,
+  updateBaseOption,
+  removeBaseOption,
+  subscribeToDhals,
+  addDhalOption,
+  updateDhalOption,
+  removeDhalOption,
+  subscribeToSalads,
+  addSaladOption,
+  updateSaladOption,
+  removeSaladOption,
+  subscribeToBeverages,
+  addBeverageOption,
+  updateBeverageOption,
+  removeBeverageOption,
+  subscribeToDesserts,
+  addDessertOption,
+  updateDessertOption,
+  removeDessertOption,
+  MainDish,
+  subscribeToMainDishes,
+  addMainDish,
+  updateMainDish,
+  removeMainDish,
+  specialPriceInfo,
+  migrateMenuToLibrary,
+  IconEntry,
+  subscribeToIconLibrary,
+  addIconEntry,
+  updateIconEntry,
+  removeIconEntry
 } from './store';
 
 interface OperationsProps {
   onExit: () => void;
 }
 
-type Tab = 'dashboard' | 'menu' | 'orders' | 'delivery' | 'payments' | 'customers' | 'settings';
+type Tab = 'dashboard' | 'menu' | 'library' | 'orders' | 'delivery' | 'payments' | 'customers' | 'settings';
 
 // Which offering a curry-menu edit applies to — Dinner is a second,
 // independently toggleable offering that otherwise mirrors Lunch exactly.
 type Service = 'Lunch' | 'Dinner';
 
-// Which of the two currently-orderable calendar weeks the Menu tab is
-// editing — 'This' is whatever week the date control up top is in, 'Next'
-// is the week after. Matches the Customer App's own This/Next switcher.
-type WeekChoice = 'This' | 'Next';
+// Which week the Menu tab is currently planning — 'This' and 'Next' match
+// the Customer App's own This/Next switcher exactly (those two are what a
+// customer can actually order). 'Week+2' is admin-only planning headroom —
+// it lets Bhimal stay one week ahead of the calendar rollover instead of
+// "Next Week" being empty the moment it becomes "This Week" — and has zero
+// effect on what the Customer App shows or lets anyone order; nothing
+// customer-facing (orderableWeeks, etc.) reads this type or this value.
+type WeekChoice = 'This' | 'Next' | 'Week+2';
+
+// A day's lineup can now grow/shrink (add/remove dish), so the fixed
+// "curry" vocabulary is generalized to "main dish" wherever new UI is added
+// below — CurryOption itself keeps its name (renaming it app-wide is a
+// bigger, unrelated change) but the new UI speaks of "dishes".
 
 const TABS: { id: Exclude<Tab, 'settings'>; label: string; icon: any }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'menu', label: 'Menu Planner', icon: BookOpen },
+  { id: 'library', label: 'Meal Library', icon: ChefHat },
   { id: 'orders', label: 'Orders by Dish', icon: ClipboardList },
   { id: 'delivery', label: 'Delivery List', icon: Truck },
   { id: 'payments', label: 'Payments', icon: Wallet },
@@ -147,11 +216,121 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [activeMenuWeek, setActiveMenuWeek] = useState<WeekChoice>('This');
   const [paymentDrop, setPaymentDrop] = useState<DropTask | null>(null);
 
-  // Which curry is being edited inline on the Menu tab, plus its draft
-  // values — Save calls updateLunchCurryOption/updateDinnerCurryOption
-  // depending on `service`, scoped to `weekStart`, Cancel just clears this.
-  const [editingCurry, setEditingCurry] = useState<{ day: WeekdayKey; curryId: string; service: Service; weekStart: string } | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', desc: '', price: '' });
+  // Meal Library Main editor — opens as a modal, used from the Library tab
+  // ("Add Main"/pencil on a Main) — base group, dhal/salad applicability
+  // and which specific catalog options each allows all live here now,
+  // defined once per Main rather than re-specified every time it's served.
+  // `mode` distinguishes Save calling addMainDish vs updateMainDish;
+  // `mainId` is only set (and only needed) in 'edit' mode.
+  const [mainEditor, setMainEditor] = useState<{ mode: 'add' | 'edit'; mainId?: string } | null>(null);
+  // null for an *OptionIds field means "no restriction — every catalog
+  // entry" (matches every Main that's never narrowed one down). Ticking
+  // individual boxes narrows it to an explicit array; re-ticking every box
+  // normalizes back to null rather than storing a redundant "all of them,
+  // explicitly" list — see toggleMainOption below.
+  const [mainForm, setMainForm] = useState<{
+    emoji: string; name: string; desc: string; price: string; cost: string; photoUrl: string;
+    baseApplicable: boolean; baseOptionIds: string[] | null;
+    dhalApplicable: boolean; dhalOptionIds: string[] | null;
+    saladApplicable: boolean; saladOptionIds: string[] | null;
+    beverageApplicable: boolean; beverageOptionIds: string[] | null;
+    dessertApplicable: boolean; dessertOptionIds: string[] | null;
+  }>({
+    emoji: '🍽️', name: '', desc: '', price: '', cost: '', photoUrl: '',
+    baseApplicable: true, baseOptionIds: null,
+    dhalApplicable: true, dhalOptionIds: null,
+    saladApplicable: true, saladOptionIds: null,
+    beverageApplicable: true, beverageOptionIds: null,
+    dessertApplicable: true, dessertOptionIds: null
+  });
+  // Photo upload error, shown inline near the field — same pattern as
+  // logoError/csvError elsewhere rather than a blocking alert().
+  const [mainPhotoError, setMainPhotoError] = useState('');
+  const mainPhotoFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Meal Library Mains — subscribed the same way the five add-on catalogs
+  // are below.
+  const [mainDishes, setMainDishes] = useState<MainDish[]>([]);
+
+  // One-time "Import from existing menu" — result of the last run, shown
+  // inline under the button rather than a blocking alert(), same "quiet
+  // inline feedback" convention as csvError/logoError elsewhere. Safe to
+  // click more than once: migrateMenuToLibrary() skips names that already
+  // have a Main, so a second run only reports what's new (usually nothing).
+  const [libraryImportResult, setLibraryImportResult] = useState<{ created: string[]; skipped: string[]; linked: number } | null>(null);
+
+  // Day-slot dish editing is back to a lightweight inline form (name/desc/
+  // price only) — base/dhal/salad/beverage/dessert settings now live on the
+  // Main a day-slot dish was copied from (see mainId), edited once in the
+  // Library rather than per day. Price stays editable here on purpose: a
+  // day can run a promo below the Main's general price, shown to customers
+  // as a special price (see specialPriceInfo in store.ts).
+  const [editingDaySlot, setEditingDaySlot] = useState<{ day: WeekdayKey; curryId: string; service: Service; weekStart: string } | null>(null);
+  const [daySlotEditForm, setDaySlotEditForm] = useState({ name: '', desc: '', price: '' });
+
+  // "Add dish" now opens a search-and-select popup over the Meal Library
+  // instead of a blank creation form — picking a Main copies its full
+  // current settings (base group, dhal/salad applicability + narrowing,
+  // beverage/dessert narrowing, price) into a fresh day-slot dish. If the
+  // Main you want isn't in the Library yet, add it there first (Library
+  // tab) — this popup is select-only, it doesn't create new Mains.
+  const [mainPickerFor, setMainPickerFor] = useState<{ day: WeekdayKey; service: Service; weekStart: string } | null>(null);
+  const [mainPickerSearch, setMainPickerSearch] = useState('');
+
+  // Base/Dhal/Salad/Beverage/Dessert catalogs — previously plain constants
+  // with zero admin UI; now real reactive stores (see store.ts), subscribed
+  // here the same way orders/customers/etc. already are.
+  const [bases, setBases] = useState<AddOnOption[]>([]);
+  const [dhals, setDhals] = useState<AddOnOption[]>([]);
+  const [salads, setSalads] = useState<AddOnOption[]>([]);
+  const [beverages, setBeverages] = useState<AddOnOption[]>([]);
+  const [desserts, setDesserts] = useState<AddOnOption[]>([]);
+  const [catalogsOpen, setCatalogsOpen] = useState(false);
+
+  // Icon Library — managed from Settings → Icons, searched from every
+  // IconPickerButton (Main Editor's icon, each Add-on Catalog entry's
+  // icon) via subscribeToIconLibrary directly inside that component, but
+  // Settings itself needs its own subscription to render the CRUD list.
+  const [icons, setIcons] = useState<IconEntry[]>([]);
+  const [editingIcon, setEditingIcon] = useState<string | null>(null);
+  const [iconForm, setIconForm] = useState({ emoji: '', label: '' });
+  const [newIconForm, setNewIconForm] = useState({ emoji: '', label: '' });
+  // Settings has its own General/Icons sub-tabs now that it manages the
+  // Icon Library too — everything that used to be the whole Settings page
+  // lives under "General".
+  const [settingsSubTab, setSettingsSubTab] = useState<'general' | 'icons'>('general');
+
+  // Which existing add-on catalog entry is being edited inline, and its
+  // draft form — mirrors editingCurry/editForm's shape for the five add-on
+  // catalogs instead of main dishes. `catalog` identifies which of the five
+  // stores the id belongs to, since ids aren't guaranteed unique *across*
+  // catalogs (only within one).
+  type CatalogKey = 'base' | 'dhal' | 'salad' | 'beverage' | 'dessert';
+  const [editingAddOn, setEditingAddOn] = useState<{ catalog: CatalogKey; id: string } | null>(null);
+  const [addOnForm, setAddOnForm] = useState({ emoji: '', name: '', price: '', group: '' });
+  const [newAddOnForm, setNewAddOnForm] = useState<Record<CatalogKey, { emoji: string; name: string; price: string; group: string }>>({
+    base: { emoji: '🍚', name: '', price: '0', group: 'rice' },
+    dhal: { emoji: '🟡', name: '', price: '', group: '' },
+    salad: { emoji: '🥗', name: '', price: '', group: '' },
+    beverage: { emoji: '🥤', name: '', price: '0', group: '' },
+    dessert: { emoji: '🍡', name: '', price: '0', group: '' },
+  });
+
+  // "Reuse a previous week" — which service's picker is open, and the
+  // source weekStart currently selected in it. Copying calls
+  // setLunchWeekMenu/setDinnerWeekMenu with a *snapshot* of the source
+  // week (forWeek() returns a plain object, not a live reference), so
+  // editing the destination afterwards never retroactively changes the
+  // source week it was copied from.
+  const [reusePickerFor, setReusePickerFor] = useState<Service | null>(null);
+  const [reuseSourceWeek, setReuseSourceWeek] = useState<string>('');
+
+  // CSV import — errors surface inline near the Import button rather than
+  // as a blocking alert(), same "quiet inline feedback" convention as the
+  // logo-upload error above.
+  const csvFileInputRef = useRef<HTMLInputElement>(null);
+  const [csvImportTarget, setCsvImportTarget] = useState<Service | null>(null);
+  const [csvError, setCsvError] = useState('');
 
   // Dinner is a second, independently toggleable offering (same pattern as
   // the VAT switch below) — customers never see this switch, only Bhimal
@@ -220,7 +399,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setDeliveryForm({ cutoffTime: SYSTEM_CONFIG.cutoffTime, cutoffDayOffset: String(SYSTEM_CONFIG.cutoffDayOffset), lunchDeliveryWindow: SYSTEM_CONFIG.lunchDeliveryWindow, dinnerDeliveryWindow: SYSTEM_CONFIG.dinnerDeliveryWindow });
     });
     const u7 = subscribeToDinnerMenu(() => setMenuTick(t => t + 1));
-    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); };
+    const u8 = subscribeToBases(setBases);
+    const u9 = subscribeToDhals(setDhals);
+    const u10 = subscribeToSalads(setSalads);
+    const u11 = subscribeToBeverages(setBeverages);
+    const u12 = subscribeToDesserts(setDesserts);
+    const u13 = subscribeToMainDishes(setMainDishes);
+    const u14 = subscribeToIconLibrary(setIcons);
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); u9(); u10(); u11(); u12(); u13(); u14(); };
   }, []);
 
   const toggleVat = (next: boolean) => setVatEnabledLocal(next);
@@ -319,6 +505,15 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // show up there until that week actually arrives, which is correct for a
   // kitchen-prep tool.
   const nextWeekDays = useMemo(() => getThisWeekDays(addDays(systemDate, 7)), [systemDate]);
+  // Admin-only planning headroom, one week beyond "Next" — see the WeekChoice
+  // comment above for why this never touches the Customer App.
+  const week2Days = useMemo(() => getThisWeekDays(addDays(systemDate, 14)), [systemDate]);
+  // Which week the Menu tab is currently showing, resolved from
+  // activeMenuWeek — hoisted to component scope (not just inside
+  // renderMenuTab) so the CSV import handler can target the same week the
+  // admin is currently looking at.
+  const activeMenuDays = activeMenuWeek === 'Next' ? nextWeekDays : activeMenuWeek === 'Week+2' ? week2Days : weekDays;
+  const activeMenuWeekStart = activeMenuDays[0].date;
   const weekDateKeys = useMemo(() => new Set(weekDays.map(d => d.date)), [weekDays]);
   const todayKey = useMemo(() => weekDays.find(d => d.date === systemDate)?.key ?? null, [weekDays, systemDate]);
   const activeDeliveryDay = deliveryDayOverride ?? todayKey ?? weekDays[0].key;
@@ -474,23 +669,388 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setPaymentDrop(null);
   };
 
-  const startEditCurry = (day: WeekdayKey, curry: CurryOption, service: Service, weekStart: string) => {
-    setEditingCurry({ day, curryId: curry.id, service, weekStart });
-    setEditForm({ name: curry.name, desc: curry.desc, price: String(curry.price) });
+  // --- Meal Library: Main add/edit/remove ---
+
+  const handleImportFromMenu = () => {
+    const result = migrateMenuToLibrary();
+    setLibraryImportResult(result);
   };
 
-  const saveCurryEdit = () => {
-    if (!editingCurry) return;
-    const menu = editingCurry.service === 'Dinner' ? dinnerMenuForWeek(editingCurry.weekStart) : lunchMenuForWeek(editingCurry.weekStart);
-    const update = editingCurry.service === 'Dinner' ? updateDinnerCurryOption : updateLunchCurryOption;
-    const existing = menu[editingCurry.day].find(c => c.id === editingCurry.curryId);
-    const parsedPrice = parseInt(editForm.price, 10);
-    update(editingCurry.weekStart, editingCurry.day, editingCurry.curryId, {
-      name: editForm.name.trim() || existing?.name || '',
-      desc: editForm.desc.trim(),
-      price: isNaN(parsedPrice) ? (existing?.price || 0) : parsedPrice
+  const startAddMain = () => {
+    setMainEditor({ mode: 'add' });
+    setMainPhotoError('');
+    setMainForm({
+      emoji: '🍽️', name: '', desc: '', price: '', cost: '', photoUrl: '',
+      baseApplicable: true, baseOptionIds: null,
+      dhalApplicable: true, dhalOptionIds: null,
+      saladApplicable: true, saladOptionIds: null,
+      beverageApplicable: true, beverageOptionIds: null,
+      dessertApplicable: true, dessertOptionIds: null
     });
-    setEditingCurry(null);
+  };
+
+  const startEditMain = (main: MainDish) => {
+    setMainEditor({ mode: 'edit', mainId: main.id });
+    setMainPhotoError('');
+    setMainForm({
+      emoji: main.emoji, name: main.name, desc: main.desc, price: String(main.price), cost: main.cost !== undefined ? String(main.cost) : '', photoUrl: main.photoUrl || '',
+      baseApplicable: dishBaseApplicable(main), baseOptionIds: dishBaseOptionIds(main, bases) ?? null,
+      dhalApplicable: dishDhalApplicable(main), dhalOptionIds: main.dhalOptionIds ?? null,
+      saladApplicable: dishSaladApplicable(main), saladOptionIds: main.saladOptionIds ?? null,
+      beverageApplicable: dishBeverageApplicable(main), beverageOptionIds: main.beverageOptionIds ?? null,
+      dessertApplicable: dishDessertApplicable(main), dessertOptionIds: main.dessertOptionIds ?? null
+    });
+  };
+
+  const cancelMainEditor = () => setMainEditor(null);
+
+  // Mirrors handleLogoFileChange's pattern (Settings → Brand Identity) —
+  // read into a base64 data URL and store it directly, no backend/file
+  // storage to upload to. dishPhotoFor() prefers this over the built-in
+  // protein-family guess whenever it's set.
+  const handleMainPhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { setMainPhotoError('Please choose an image file.'); return; }
+    if (file.size > 1_500_000) { setMainPhotoError('That image is over 1.5MB — pick a smaller file.'); return; }
+    setMainPhotoError('');
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') setMainForm(f => ({ ...f, photoUrl: reader.result as string }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Toggles one catalog entry's membership in a *OptionIds field. Starts
+  // from "every entry" when the field is currently null (no restriction),
+  // then normalizes back to null if every entry ends up checked again —
+  // so the common case (a Main that offers everything in a category) never
+  // accumulates a redundant "all of them, explicitly" array. Covers Base
+  // now too (baseOptionIds), following the exact same applicable+narrow
+  // pattern as Dhal/Salad/Beverage/Dessert.
+  const toggleMainOption = (field: 'baseOptionIds' | 'dhalOptionIds' | 'saladOptionIds' | 'beverageOptionIds' | 'dessertOptionIds', allItems: AddOnOption[], id: string) => {
+    setMainForm(f => {
+      const current = f[field] ?? allItems.map(i => i.id);
+      const next = current.includes(id) ? current.filter(x => x !== id) : [...current, id];
+      return { ...f, [field]: next.length === allItems.length ? null : next };
+    });
+  };
+
+  const saveMainEditor = () => {
+    if (!mainEditor) return;
+    if (!mainForm.name.trim()) return;
+    const parsedPrice = parseInt(mainForm.price, 10);
+    const parsedCost = parseFloat(mainForm.cost);
+    const patch: Partial<Omit<MainDish, 'id'>> = {
+      emoji: mainForm.emoji.trim() || '🍽️',
+      name: mainForm.name.trim(),
+      desc: mainForm.desc.trim(),
+      price: isNaN(parsedPrice) ? 0 : parsedPrice,
+      cost: mainForm.cost.trim() === '' || isNaN(parsedCost) ? undefined : parsedCost,
+      photoUrl: mainForm.photoUrl.trim() || undefined,
+      // baseGroup is explicitly cleared going forward — baseOptionIds (set
+      // via checkboxes below) is now the only source of truth for which
+      // bases a Main offers, so a stale group tag can never resurface and
+      // silently re-narrow things once baseOptionIds itself is cleared
+      // back to "no restriction" (see dishBaseOptionIds in store.ts).
+      baseGroup: undefined,
+      baseApplicable: mainForm.baseApplicable,
+      baseOptionIds: mainForm.baseOptionIds ?? undefined,
+      dhalApplicable: mainForm.dhalApplicable,
+      dhalOptionIds: mainForm.dhalOptionIds ?? undefined,
+      saladApplicable: mainForm.saladApplicable,
+      saladOptionIds: mainForm.saladOptionIds ?? undefined,
+      beverageApplicable: mainForm.beverageApplicable,
+      beverageOptionIds: mainForm.beverageOptionIds ?? undefined,
+      dessertApplicable: mainForm.dessertApplicable,
+      dessertOptionIds: mainForm.dessertOptionIds ?? undefined
+    };
+    if (mainEditor.mode === 'add') {
+      addMainDish({
+        id: `main-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        ...patch
+      } as MainDish);
+    } else if (mainEditor.mainId) {
+      updateMainDish(mainEditor.mainId, patch);
+    }
+    setMainEditor(null);
+  };
+
+  // --- Menu Planner: pick a Main into a day, remove a day-slot dish, edit a
+  // day-slot dish's name/desc/price ---
+
+  const openMainPicker = (day: WeekdayKey, service: Service, weekStart: string) => {
+    setMainPickerFor({ day, service, weekStart });
+    setMainPickerSearch('');
+  };
+
+  const cancelMainPicker = () => { setMainPickerFor(null); setMainPickerSearch(''); };
+
+  const filteredMainPickerResults = useMemo(() => {
+    const q = mainPickerSearch.trim().toLowerCase();
+    if (!q) return mainDishes;
+    return mainDishes.filter(m => m.name.toLowerCase().includes(q) || m.desc.toLowerCase().includes(q));
+  }, [mainDishes, mainPickerSearch]);
+
+  const pickMainForDay = (main: MainDish) => {
+    if (!mainPickerFor) return;
+    const add = mainPickerFor.service === 'Dinner' ? addDinnerDish : addLunchDish;
+    const { cost, id, ...rest } = main;
+    add(mainPickerFor.weekStart, mainPickerFor.day, {
+      id: `dish-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      ...rest,
+      // Library-sourced copies remember which Main they came from, for the
+      // special-price comparison — cost is deliberately not copied down
+      // (it's an admin-only Library concern, no day-slot field for it).
+      mainId: id
+    } as CurryOption);
+    cancelMainPicker();
+  };
+
+  const handleRemoveDish = (day: WeekdayKey, service: Service, weekStart: string, dishId: string) => {
+    const remove = service === 'Dinner' ? removeDinnerDish : removeLunchDish;
+    remove(weekStart, day, dishId);
+  };
+
+  const startEditDaySlot = (day: WeekdayKey, service: Service, weekStart: string, dish: CurryOption) => {
+    setEditingDaySlot({ day, curryId: dish.id, service, weekStart });
+    setDaySlotEditForm({ name: dish.name, desc: dish.desc, price: String(dish.price) });
+  };
+
+  const cancelDaySlotEdit = () => setEditingDaySlot(null);
+
+  const saveDaySlotEdit = () => {
+    if (!editingDaySlot) return;
+    const menu = editingDaySlot.service === 'Dinner' ? dinnerMenuForWeek(editingDaySlot.weekStart) : lunchMenuForWeek(editingDaySlot.weekStart);
+    const update = editingDaySlot.service === 'Dinner' ? updateDinnerCurryOption : updateLunchCurryOption;
+    const existing = menu[editingDaySlot.day].find(c => c.id === editingDaySlot.curryId);
+    const parsedPrice = parseInt(daySlotEditForm.price, 10);
+    const price = isNaN(parsedPrice) ? (existing?.price || 0) : parsedPrice;
+    // A dish picked from the Meal Library keeps its name/desc locked to the
+    // Main it was copied from — only price is ever editable here (that's
+    // the whole point of a special price). Only a legacy day-slot dish with
+    // no mainId (never picked through the Library) still allows editing its
+    // own name/desc directly.
+    update(editingDaySlot.weekStart, editingDaySlot.day, editingDaySlot.curryId,
+      existing?.mainId
+        ? { price }
+        : { name: daySlotEditForm.name.trim() || existing?.name || '', desc: daySlotEditForm.desc.trim(), price }
+    );
+    setEditingDaySlot(null);
+  };
+
+  // --- Add-on catalog management (Base / Dhal / Salad / Beverage / Dessert) ---
+
+  const CATALOG_META: Record<CatalogKey, { label: string; items: AddOnOption[]; add: (i: AddOnOption) => void; update: (id: string, u: Partial<AddOnOption>) => void; remove: (id: string) => void; hasGroup: boolean; hasPrice: boolean }> = {
+    base: { label: 'Base', items: bases, add: addBaseOption, update: updateBaseOption, remove: removeBaseOption, hasGroup: true, hasPrice: true },
+    dhal: { label: 'Dhal', items: dhals, add: addDhalOption, update: updateDhalOption, remove: removeDhalOption, hasGroup: false, hasPrice: false },
+    salad: { label: 'Salad', items: salads, add: addSaladOption, update: updateSaladOption, remove: removeSaladOption, hasGroup: false, hasPrice: false },
+    beverage: { label: 'Beverage', items: beverages, add: addBeverageOption, update: updateBeverageOption, remove: removeBeverageOption, hasGroup: false, hasPrice: true },
+    dessert: { label: 'Dessert', items: desserts, add: addDessertOption, update: updateDessertOption, remove: removeDessertOption, hasGroup: false, hasPrice: true },
+  };
+
+  const startEditAddOn = (catalog: CatalogKey, item: AddOnOption) => {
+    setEditingAddOn({ catalog, id: item.id });
+    setAddOnForm({ emoji: item.emoji, name: item.name, price: String(item.price ?? item.up ?? 0), group: item.group || '' });
+  };
+
+  const saveAddOnEdit = () => {
+    if (!editingAddOn) return;
+    const meta = CATALOG_META[editingAddOn.catalog];
+    const parsedPrice = parseFloat(addOnForm.price);
+    const priceField = editingAddOn.catalog === 'base' ? 'up' : 'price';
+    meta.update(editingAddOn.id, {
+      emoji: addOnForm.emoji.trim() || '•',
+      name: addOnForm.name.trim() || 'Untitled',
+      [priceField]: isNaN(parsedPrice) ? 0 : parsedPrice,
+      ...(meta.hasGroup ? { group: addOnForm.group.trim() || DEFAULT_BASE_GROUP } : {})
+    } as Partial<AddOnOption>);
+    setEditingAddOn(null);
+  };
+
+  const saveNewAddOn = (catalog: CatalogKey) => {
+    const draft = newAddOnForm[catalog];
+    if (!draft.name.trim()) return;
+    const meta = CATALOG_META[catalog];
+    const parsedPrice = parseFloat(draft.price);
+    const item: AddOnOption = {
+      id: `${catalog}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      emoji: draft.emoji.trim() || '•',
+      name: draft.name.trim(),
+    };
+    if (catalog === 'base') item.up = isNaN(parsedPrice) ? 0 : parsedPrice;
+    else item.price = isNaN(parsedPrice) ? 0 : parsedPrice;
+    if (meta.hasGroup) item.group = draft.group.trim() || DEFAULT_BASE_GROUP;
+    meta.add(item);
+    setNewAddOnForm(f => ({ ...f, [catalog]: { emoji: draft.emoji, name: '', price: catalog === 'dhal' || catalog === 'salad' ? '' : '0', group: meta.hasGroup ? draft.group : '' } }));
+  };
+
+  // --- Icon Library management (Settings → Icons) ---
+
+  const startEditIcon = (icon: IconEntry) => {
+    setEditingIcon(icon.id);
+    setIconForm({ emoji: icon.emoji, label: icon.label });
+  };
+
+  const saveIconEdit = () => {
+    if (!editingIcon) return;
+    updateIconEntry(editingIcon, { emoji: iconForm.emoji.trim() || '❓', label: iconForm.label.trim() || 'Untitled' });
+    setEditingIcon(null);
+  };
+
+  const saveNewIcon = () => {
+    if (!newIconForm.emoji.trim() || !newIconForm.label.trim()) return;
+    addIconEntry({
+      id: `ic-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      emoji: newIconForm.emoji.trim(),
+      label: newIconForm.label.trim()
+    });
+    setNewIconForm({ emoji: '', label: '' });
+  };
+
+  // --- Reuse a previous week's plan ---
+
+  const savedWeeksFor = (service: Service): string[] => {
+    const starts = service === 'Dinner' ? listDinnerWeekStarts() : listLunchWeekStarts();
+    // Menu tab only ever plans This/Next/Week+2 — offering to "reuse" the
+    // exact week you're already looking at isn't useful, so it's filtered
+    // out of its own picker (still reusable *into* from another week).
+    return starts;
+  };
+
+  const applyReuseWeek = (service: Service, destinationWeekStart: string, sourceWeekStart: string) => {
+    if (!sourceWeekStart) return;
+    const sourceMenu = service === 'Dinner' ? dinnerMenuForWeek(sourceWeekStart) : lunchMenuForWeek(sourceWeekStart);
+    const setMenu = service === 'Dinner' ? setDinnerWeekMenu : setLunchWeekMenu;
+    // sourceMenu is a plain snapshot object (forWeek() never returns a live
+    // reference into another week's override), so this is a one-time copy —
+    // editing the destination afterwards never changes the source week.
+    setMenu(destinationWeekStart, sourceMenu);
+    setReusePickerFor(null);
+    setReuseSourceWeek('');
+  };
+
+  // --- CSV import / export ---
+  // Format: one header row, then one row per dish —
+  // day,id,emoji,name,desc,price,baseGroup,dhalApplicable,saladApplicable
+  // day is MON/TUE/WED/THU/FRI. id is optional (blank = auto-generated on
+  // import, so an exported-then-reimported file round-trips its ids too).
+  // baseGroup/dhalApplicable/saladApplicable are optional — blank means
+  // "use the default" (rice / true / true), same fallback the data model
+  // itself uses for any dish that doesn't set them.
+
+  const csvEscape = (value: string): string => {
+    if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  };
+
+  const exportMenuCSV = (service: Service, weekStart: string) => {
+    const menu = service === 'Dinner' ? dinnerMenuForWeek(weekStart) : lunchMenuForWeek(weekStart);
+    const rows = ['day,id,emoji,name,desc,price,baseGroup,dhalApplicable,saladApplicable'];
+    WEEKDAY_KEYS.forEach(day => {
+      menu[day].forEach(dish => {
+        rows.push([
+          day,
+          dish.id,
+          dish.emoji,
+          csvEscape(dish.name),
+          csvEscape(dish.desc),
+          String(dish.price),
+          dishBaseGroup(dish),
+          String(dishDhalApplicable(dish)),
+          String(dishSaladApplicable(dish))
+        ].join(','));
+      });
+    });
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bonmanze-${service.toLowerCase()}-menu-${weekStart}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Minimal RFC4180-ish line splitter — handles quoted fields containing
+  // commas (name/desc are free text and occasionally have them) without
+  // pulling in a CSV library for a five-column import.
+  const parseCsvLine = (line: string): string[] => {
+    const fields: string[] = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (ch === '"') { inQuotes = false; }
+        else { cur += ch; }
+      } else {
+        if (ch === '"') inQuotes = true;
+        else if (ch === ',') { fields.push(cur); cur = ''; }
+        else cur += ch;
+      }
+    }
+    fields.push(cur);
+    return fields;
+  };
+
+  const parseMenuCSV = (text: string): { menu: Record<WeekdayKey, CurryOption[]>; error: string } => {
+    const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if (lines.length < 2) return { menu: {} as Record<WeekdayKey, CurryOption[]>, error: 'CSV has no data rows.' };
+    const header = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase());
+    const col = (name: string) => header.indexOf(name);
+    const dayCol = col('day'), idCol = col('id'), emojiCol = col('emoji'), nameCol = col('name'), descCol = col('desc'), priceCol = col('price'), baseGroupCol = col('basegroup'), dhalCol = col('dhalapplicable'), saladCol = col('saladapplicable');
+    if (dayCol === -1 || nameCol === -1 || priceCol === -1) {
+      return { menu: {} as Record<WeekdayKey, CurryOption[]>, error: 'CSV must have at least day, name, and price columns.' };
+    }
+    const menu: Record<WeekdayKey, CurryOption[]> = { MON: [], TUE: [], WED: [], THU: [], FRI: [] };
+    for (let i = 1; i < lines.length; i++) {
+      const fields = parseCsvLine(lines[i]);
+      const dayRaw = (fields[dayCol] || '').trim().toUpperCase();
+      if (!WEEKDAY_KEYS.includes(dayRaw as WeekdayKey)) {
+        return { menu: {} as Record<WeekdayKey, CurryOption[]>, error: `Row ${i + 1}: "${fields[dayCol]}" isn't a valid day (expected MON/TUE/WED/THU/FRI).` };
+      }
+      const day = dayRaw as WeekdayKey;
+      const name = (fields[nameCol] || '').trim();
+      if (!name) return { menu: {} as Record<WeekdayKey, CurryOption[]>, error: `Row ${i + 1}: name is required.` };
+      const parsedPrice = parseFloat(fields[priceCol] || '0');
+      const dhalRaw = (dhalCol !== -1 ? fields[dhalCol] : '')?.trim().toLowerCase();
+      const saladRaw = (saladCol !== -1 ? fields[saladCol] : '')?.trim().toLowerCase();
+      menu[day].push({
+        id: (idCol !== -1 && fields[idCol]?.trim()) || `dish-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${i}`,
+        emoji: (emojiCol !== -1 && fields[emojiCol]?.trim()) || '🍽️',
+        name,
+        desc: (descCol !== -1 && fields[descCol]) || '',
+        price: isNaN(parsedPrice) ? 0 : parsedPrice,
+        baseGroup: (baseGroupCol !== -1 && fields[baseGroupCol]?.trim()) || DEFAULT_BASE_GROUP,
+        dhalApplicable: dhalRaw === '' || dhalRaw === undefined ? true : dhalRaw === 'true',
+        saladApplicable: saladRaw === '' || saladRaw === undefined ? true : saladRaw === 'true'
+      });
+    }
+    return { menu, error: '' };
+  };
+
+  const handleCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !csvImportTarget) return;
+    const service = csvImportTarget;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = typeof reader.result === 'string' ? reader.result : '';
+      const { menu, error } = parseMenuCSV(text);
+      if (error) { setCsvError(error); return; }
+      setCsvError('');
+      const setMenu = service === 'Dinner' ? setDinnerWeekMenu : setLunchWeekMenu;
+      setMenu(activeMenuWeekStart, menu);
+      setCsvImportTarget(null);
+    };
+    reader.readAsText(file);
   };
 
   const todayCookCount = useMemo(() => {
@@ -638,16 +1198,175 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const renderMenuTab = () => {
-    const activeMenuDays = activeMenuWeek === 'Next' ? nextWeekDays : weekDays;
-    const activeMenuWeekStart = activeMenuDays[0].date;
+    // activeMenuDays/activeMenuWeekStart are computed at component scope
+    // above (shared with the CSV import handler) — not redeclared here.
     const activeLunchMenu = lunchMenuForWeek(activeMenuWeekStart);
     const activeDinnerMenu = dinnerMenuForWeek(activeMenuWeekStart);
-    
+
     const [y, m, d] = activeMenuWeekStart.split('-').map(Number);
     const weekDateStr = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    const weekLabel = activeMenuWeek === 'Next' ? "Next Week" : activeMenuWeek === 'Week+2' ? "Week After Next" : "This Week";
+
+    const renderServiceMenu = (service: Service, activeMenu: Record<WeekdayKey, CurryOption[]>) => {
+      const savedWeeks = savedWeeksFor(service).filter(w => w !== activeMenuWeekStart);
+      return (
+        <div key={service} className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+            <h2 className="text-base font-black text-slate-900">{weekLabel}'s Curry Menu — {service}</h2>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => { setReusePickerFor(reusePickerFor === service ? null : service); setReuseSourceWeek(''); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
+              >
+                <History className="size-3.5" /> Reuse a previous week
+              </button>
+              <button
+                onClick={() => exportMenuCSV(service, activeMenuWeekStart)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
+              >
+                <Download className="size-3.5" /> Export CSV
+              </button>
+              <button
+                onClick={() => { setCsvImportTarget(service); setCsvError(''); csvFileInputRef.current?.click(); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
+              >
+                <Upload className="size-3.5" /> Import CSV
+              </button>
+            </div>
+          </div>
+
+          {reusePickerFor === service && (
+            <div className="mb-4 p-4 bg-primary/5 border border-primary/20 rounded-2xl flex items-center gap-3 flex-wrap">
+              <p className="text-xs font-bold text-slate-600 shrink-0">Copy a saved week's {service.toLowerCase()} lineup into {weekLabel}:</p>
+              {savedWeeks.length === 0 ? (
+                <p className="text-[11px] text-slate-400 font-medium">No other saved weeks yet — edit, add, or remove a dish on a different week first to save one.</p>
+              ) : (
+                <>
+                  <select
+                    value={reuseSourceWeek}
+                    onChange={e => setReuseSourceWeek(e.target.value)}
+                    className="text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none"
+                  >
+                    <option value="">Choose a week…</option>
+                    {savedWeeks.map(w => <option key={w} value={w}>{w}</option>)}
+                  </select>
+                  <button
+                    disabled={!reuseSourceWeek}
+                    onClick={() => applyReuseWeek(service, activeMenuWeekStart, reuseSourceWeek)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-black bg-primary text-white disabled:opacity-40 transition-colors"
+                  >
+                    <Copy className="size-3.5" /> Copy into {weekLabel}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {csvImportTarget === service && csvError && (
+            <p className="mb-4 text-[11px] font-bold text-red-500">{csvError}</p>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+            {activeMenuDays.map(d => (
+              <div key={d.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{d.label}</p>
+                <div className="space-y-2.5">
+                  {activeMenu[d.key].map(c => {
+                    const isEditingSlot = editingDaySlot?.day === d.key && editingDaySlot.curryId === c.id && editingDaySlot.service === service && editingDaySlot.weekStart === activeMenuWeekStart;
+                    const special = specialPriceInfo(c);
+                    if (isEditingSlot) {
+                      const linkedMain = c.mainId ? mainDishes.find(m => m.id === c.mainId) : undefined;
+                      return (
+                        <div key={c.id} className="p-3 bg-white rounded-xl border-2 border-primary/30 space-y-2">
+                          {c.mainId ? (
+                            // Picked from the Meal Library — name & description
+                            // are locked to the Main; only the price can move,
+                            // so it stays the single lever for a day's special.
+                            <div className="flex items-center gap-2.5">
+                              <img src={dishPhotoFor(c)} alt={c.name} className="size-9 rounded-lg object-cover shrink-0" />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-bold text-slate-800 truncate">{c.emoji} {c.name}</p>
+                                <p className="text-[10px] text-slate-400 truncate">{c.desc}</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <input
+                                value={daySlotEditForm.name}
+                                onChange={e => setDaySlotEditForm(f => ({ ...f, name: e.target.value }))}
+                                placeholder="Name"
+                                className="w-full text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
+                              />
+                              <input
+                                value={daySlotEditForm.desc}
+                                onChange={e => setDaySlotEditForm(f => ({ ...f, desc: e.target.value }))}
+                                placeholder="Description"
+                                className="w-full text-[11px] px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
+                              />
+                            </>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-slate-400">Rs</span>
+                            <input
+                              type="number"
+                              value={daySlotEditForm.price}
+                              onChange={e => setDaySlotEditForm(f => ({ ...f, price: e.target.value }))}
+                              className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
+                            />
+                            <div className="flex-1" />
+                            <button onClick={saveDaySlotEdit} className="p-1.5 bg-primary text-white rounded-lg"><Check className="size-3.5" /></button>
+                            <button onClick={cancelDaySlotEdit} className="p-1.5 bg-slate-100 text-slate-400 rounded-lg"><X className="size-3.5" /></button>
+                          </div>
+                          {c.mainId && linkedMain && (
+                            <p className="text-[10px] text-slate-400 font-medium leading-snug pt-0.5">
+                              Regular price <span className="font-black text-slate-600">{formatCurrency(linkedMain.price)}</span>. Enter a lower price to run today's special — customers see it discounted.
+                            </p>
+                          )}
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={c.id} className="flex items-center gap-2">
+                        <img src={dishPhotoFor(c.id)} alt={c.name} className="size-9 rounded-lg object-cover shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-bold text-slate-800 truncate">{c.emoji} {c.name}</p>
+                          <p className="text-[10px] text-slate-400 truncate">{c.desc}</p>
+                          {special && (
+                            <p className="text-[9px] text-emerald-600 font-bold truncate">Special price — usually {formatCurrency(special.regularPrice)}</p>
+                          )}
+                        </div>
+                        <span className="text-[10px] font-black text-slate-400 shrink-0">{formatCurrency(c.price)}</span>
+                        <button onClick={() => startEditDaySlot(d.key, service, activeMenuWeekStart, c)} className="p-1 text-slate-300 hover:text-primary shrink-0">
+                          <Edit3 className="size-3.5" />
+                        </button>
+                        <button onClick={() => handleRemoveDish(d.key, service, activeMenuWeekStart, c.id)} className="p-1 text-slate-300 hover:text-red-500 shrink-0">
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  <button
+                    onClick={() => openMainPicker(d.key, service, activeMenuWeekStart)}
+                    className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border-2 border-dashed border-slate-200 text-slate-400 hover:border-primary/40 hover:text-primary text-[11px] font-bold transition-colors"
+                  >
+                    <Plus className="size-3.5" /> Add dish
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-4">
+            Pencil edits price (name & description come from the Meal Library once a dish is picked from it), trash removes it, "Add dish" picks a Main from the Meal Library — changes apply immediately on the Customer App.
+          </p>
+        </div>
+      );
+    };
 
     return (
       <div className="space-y-6">
+        <input ref={csvFileInputRef} type="file" accept=".csv" className="hidden" onChange={handleCsvFileChange} />
+
         {/* Week Switcher with Week Range Header */}
         <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6 flex items-center justify-between gap-4 flex-wrap">
           <div>
@@ -658,148 +1377,425 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </span>
             </h3>
             <p className="text-xs text-slate-400 font-medium mt-1 max-w-sm">
-              Customers can now browse and order a week ahead. Set Next week's menu apart here if you don't want it to just repeat This week's — otherwise it follows the same rotation automatically.
+              Customers can order This week and Next week. Week+2 is planning headroom only, so Bhimal always has a week's lead time — it's never shown or orderable in the Customer App.
             </p>
           </div>
           <div className="flex items-center gap-1 bg-slate-100 rounded-full p-1 shrink-0">
-            {(['This', 'Next'] as WeekChoice[]).map(w => (
+            {(['This', 'Next', 'Week+2'] as WeekChoice[]).map(w => (
               <button
                 key={w}
                 onClick={() => setActiveMenuWeek(w)}
                 className={`px-3.5 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${activeMenuWeek === w ? 'bg-primary text-white shadow-sm' : 'text-slate-500'}`}
               >
-                {w === 'This' ? 'This week' : 'Next week'}
+                {w === 'This' ? 'This week' : w === 'Next' ? 'Next week' : 'Week+2'}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Lunch menu */}
-        <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
-          <h2 className="text-base font-black text-slate-900 mb-4">{activeMenuWeek === 'Next' ? "Next Week's Curry Menu — Lunch" : "This Week's Curry Menu — Lunch"}</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-            {activeMenuDays.map(d => (
-              <div key={d.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{d.label}</p>
-                <div className="space-y-2.5">
-                  {activeLunchMenu[d.key].map(c => {
-                    const isEditing = editingCurry?.day === d.key && editingCurry.curryId === c.id && editingCurry.service === 'Lunch' && editingCurry.weekStart === activeMenuWeekStart;
-                    if (isEditing) {
-                      return (
-                        <div key={c.id} className="p-3 bg-white rounded-xl border-2 border-primary/30 space-y-2">
-                          <input
-                            value={editForm.name}
-                            onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
-                            placeholder="Name"
-                            className="w-full text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
-                          />
-                          <input
-                            value={editForm.desc}
-                            onChange={e => setEditForm(f => ({ ...f, desc: e.target.value }))}
-                            placeholder="Description"
-                            className="w-full text-[11px] px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
-                          />
-                          <div className="flex items-center gap-2">
-                             <span className="text-[10px] font-bold text-slate-400">Rs</span>
-                             <input
-                               type="number"
-                               value={editForm.price}
-                               onChange={e => setEditForm(f => ({ ...f, price: e.target.value }))}
-                               className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
-                             />
-                             <div className="flex-1" />
-                             <button onClick={saveCurryEdit} className="p-1.5 bg-primary text-white rounded-lg"><Check className="size-3.5" /></button>
-                             <button onClick={() => setEditingCurry(null)} className="p-1.5 bg-slate-100 text-slate-400 rounded-lg"><X className="size-3.5" /></button>
-                          </div>
-                        </div>
-                      );
-                    }
-                    return (
-                      <div key={c.id} className="flex items-center gap-2">
-                        <img src={dishPhotoFor(c.id)} alt={c.name} className="size-9 rounded-lg object-cover shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-bold text-slate-800 truncate">{c.emoji} {c.name}</p>
-                          <p className="text-[10px] text-slate-400 truncate">{c.desc}</p>
-                        </div>
-                        <span className="text-[10px] font-black text-slate-400 shrink-0">{formatCurrency(c.price)}</span>
-                        <button onClick={() => startEditCurry(d.key, c, 'Lunch', activeMenuWeekStart)} className="p-1 text-slate-300 hover:text-primary shrink-0">
-                          <Edit3 className="size-3.5" />
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-4">
-            Tap the pencil to edit a curry's name, description, or price — changes apply immediately on the Customer App.
-          </p>
-        </div>
+        {renderServiceMenu('Lunch', activeLunchMenu)}
+        {dinnerEnabled && renderServiceMenu('Dinner', activeDinnerMenu)}
 
-        {/* Dinner menu */}
-        {dinnerEnabled && (
-          <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
-            <h2 className="text-base font-black text-slate-900 mb-4">{activeMenuWeek === 'Next' ? "Next Week's Curry Menu — Dinner" : "This Week's Curry Menu — Dinner"}</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-              {activeMenuDays.map(d => (
-                <div key={d.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                  <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{d.label}</p>
-                  <div className="space-y-2.5">
-                    {activeDinnerMenu[d.key].map(c => {
-                      const isEditing = editingCurry?.day === d.key && editingCurry.curryId === c.id && editingCurry.service === 'Dinner' && editingCurry.weekStart === activeMenuWeekStart;
+        {/* Add-dish Main picker — search-and-select over the Meal Library.
+            Select-only by design: if the Main you want isn't here yet, add
+            it in the Meal Library tab first, then come back. */}
+        {mainPickerFor && (
+          <Portal>
+          <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={cancelMainPicker}>
+            <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+              <div className="p-5 border-b border-[#E7E0D0] flex items-center justify-between">
+                <h3 className="text-sm font-black text-slate-900">Add a dish from the Meal Library</h3>
+                <button onClick={cancelMainPicker} className="p-1.5 text-slate-400 hover:text-danger"><X className="size-4" /></button>
+              </div>
+              <div className="p-4 border-b border-[#E7E0D0]">
+                <input
+                  value={mainPickerSearch}
+                  onChange={e => setMainPickerSearch(e.target.value)}
+                  placeholder="Search Mains…"
+                  autoFocus
+                  className="w-full text-sm px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                {mainDishes.length === 0 ? (
+                  <div className="text-center py-10">
+                    <p className="text-sm font-bold text-slate-500 mb-2">No Mains in your Meal Library yet.</p>
+                    <button onClick={() => { cancelMainPicker(); setTab('library'); }} className="text-xs font-black text-primary underline">Go add one in Meal Library →</button>
+                  </div>
+                ) : filteredMainPickerResults.length === 0 ? (
+                  <p className="text-center text-xs text-slate-400 font-medium py-10">No Mains match "{mainPickerSearch}".</p>
+                ) : filteredMainPickerResults.map(m => (
+                  <button
+                    key={m.id}
+                    onClick={() => pickMainForDay(m)}
+                    className="w-full flex items-center gap-3 p-3 rounded-2xl border border-slate-100 hover:border-primary/30 hover:bg-primary/5 text-left transition-colors"
+                  >
+                    <img src={dishPhotoFor(m)} className="size-10 rounded-xl object-cover shrink-0" alt={m.name} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-slate-800 truncate">{m.emoji} {m.name}</p>
+                      <p className="text-[11px] text-slate-400 truncate">{m.desc}</p>
+                    </div>
+                    <span className="text-xs font-black text-slate-500 shrink-0">{formatCurrency(m.price)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          </Portal>
+        )}
+      </div>
+    );
+  };
+
+  const renderLibraryTab = () => {
+    const catalogKeys: CatalogKey[] = ['base', 'dhal', 'salad', 'beverage', 'dessert'];
+
+    const renderAddOnCatalogs = () => (
+      <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
+        <button onClick={() => setCatalogsOpen(o => !o)} className="w-full flex items-center justify-between text-left">
+          <div>
+            <h3 className="text-sm font-black text-slate-900">Add-On Catalogs</h3>
+            <p className="text-[11px] text-slate-400 font-medium mt-0.5">
+              Base, Dhal, Salad, Beverage & Dessert options — Mains below choose which of these apply.
+            </p>
+          </div>
+          {catalogsOpen ? <ChevronUp className="size-4 text-slate-400 shrink-0" /> : <ChevronDown className="size-4 text-slate-400 shrink-0" />}
+        </button>
+
+        {catalogsOpen && (
+          <div className="mt-6 space-y-6">
+            {catalogKeys.map(key => {
+              const meta = CATALOG_META[key];
+              const draft = newAddOnForm[key];
+              return (
+                <div key={key} className="border-t border-slate-100 pt-5 first:border-t-0 first:pt-0">
+                  <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{meta.label}</p>
+                  <div className="space-y-2 mb-3">
+                    {meta.items.map(item => {
+                      const isEditing = editingAddOn?.catalog === key && editingAddOn.id === item.id;
                       if (isEditing) {
                         return (
-                          <div key={c.id} className="p-3 bg-white rounded-xl border-2 border-primary/30 space-y-2">
-                            <input
-                              value={editForm.name}
-                              onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
-                              placeholder="Name"
-                              className="w-full text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
-                            />
-                            <input
-                              value={editForm.desc}
-                              onChange={e => setEditForm(f => ({ ...f, desc: e.target.value }))}
-                              placeholder="Description"
-                              className="w-full text-[11px] px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
-                            />
-                            <div className="flex items-center gap-2">
-                               <span className="text-[10px] font-bold text-slate-400">Rs</span>
-                               <input
-                                 type="number"
-                                 value={editForm.price}
-                                 onChange={e => setEditForm(f => ({ ...f, price: e.target.value }))}
-                                 className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
-                               />
-                               <div className="flex-1" />
-                               <button onClick={saveCurryEdit} className="p-1.5 bg-primary text-white rounded-lg"><Check className="size-3.5" /></button>
-                               <button onClick={() => setEditingCurry(null)} className="p-1.5 bg-slate-100 text-slate-400 rounded-lg"><X className="size-3.5" /></button>
-                            </div>
+                          <div key={item.id} className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-xl border border-primary/20">
+                            <IconPickerButton value={addOnForm.emoji} onChange={emoji => setAddOnForm(f => ({ ...f, emoji }))} className="w-10 h-9 flex items-center justify-center text-sm rounded-lg border border-slate-200 bg-white hover:border-primary/40 transition-colors shrink-0" />
+                            <input value={addOnForm.name} onChange={e => setAddOnForm(f => ({ ...f, name: e.target.value }))} placeholder="Name" className="flex-1 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
+                            {meta.hasGroup && (
+                              <input value={addOnForm.group} onChange={e => setAddOnForm(f => ({ ...f, group: e.target.value }))} placeholder="Group" className="w-24 text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
+                            )}
+                            {meta.hasPrice && (
+                              <input type="number" value={addOnForm.price} onChange={e => setAddOnForm(f => ({ ...f, price: e.target.value }))} className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
+                            )}
+                            <button onClick={saveAddOnEdit} className="p-1.5 bg-primary text-white rounded-lg shrink-0"><Check className="size-3.5" /></button>
+                            <button onClick={() => setEditingAddOn(null)} className="p-1.5 bg-slate-100 text-slate-400 rounded-lg shrink-0"><X className="size-3.5" /></button>
                           </div>
                         );
                       }
                       return (
-                        <div key={c.id} className="flex items-center gap-2">
-                          <img src={dishPhotoFor(c.id)} alt={c.name} className="size-9 rounded-lg object-cover shrink-0" />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs font-bold text-slate-800 truncate">{c.emoji} {c.name}</p>
-                            <p className="text-[10px] text-slate-400 truncate">{c.desc}</p>
-                          </div>
-                          <span className="text-[10px] font-black text-slate-400 shrink-0">{formatCurrency(c.price)}</span>
-                          <button onClick={() => startEditCurry(d.key, c, 'Dinner', activeMenuWeekStart)} className="p-1 text-slate-300 hover:text-primary shrink-0">
-                            <Edit3 className="size-3.5" />
-                          </button>
+                        <div key={item.id} className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-xl">
+                          <span className="text-sm">{item.emoji}</span>
+                          <span className="flex-1 text-xs font-bold text-slate-700 truncate">{item.name}</span>
+                          {meta.hasGroup && <span className="text-[10px] font-bold text-slate-400 bg-white px-2 py-0.5 rounded-full border border-slate-200 shrink-0">{item.group || DEFAULT_BASE_GROUP}</span>}
+                          {meta.hasPrice && <span className="text-[11px] font-black text-slate-500 shrink-0">{formatCurrency(item.price ?? item.up ?? 0)}</span>}
+                          <button onClick={() => startEditAddOn(key, item)} className="p-1 text-slate-300 hover:text-primary shrink-0"><Edit3 className="size-3.5" /></button>
+                          <button onClick={() => meta.remove(item.id)} className="p-1 text-slate-300 hover:text-red-500 shrink-0"><Trash2 className="size-3.5" /></button>
                         </div>
                       );
                     })}
+                    {meta.items.length === 0 && <p className="text-[11px] text-slate-400 font-medium py-1">No {meta.label.toLowerCase()} options yet.</p>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <IconPickerButton value={draft.emoji} onChange={emoji => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], emoji } }))} className="w-10 h-9 flex items-center justify-center text-sm rounded-lg border border-slate-200 bg-white hover:border-primary/40 transition-colors shrink-0" />
+                    <input value={draft.name} onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], name: e.target.value } }))} placeholder={`New ${meta.label.toLowerCase()} name`} className="flex-1 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
+                    {meta.hasGroup && (
+                      <input value={draft.group} onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], group: e.target.value } }))} placeholder="Group" className="w-24 text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
+                    )}
+                    {meta.hasPrice && (
+                      <input type="number" value={draft.price} onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], price: e.target.value } }))} className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
+                    )}
+                    <button
+                      onClick={() => saveNewAddOn(key)}
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-black bg-primary/10 text-primary hover:bg-primary/20 transition-colors shrink-0"
+                    >
+                      <Plus className="size-3.5" /> Add
+                    </button>
                   </div>
                 </div>
-              ))}
-            </div>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-4">
-              Tap the pencil to edit a curry's name, description, or price — changes apply immediately on the Customer App.
-            </p>
+              );
+            })}
           </div>
+        )}
+      </div>
+    );
+
+    return (
+      <div className="space-y-6 animate-fade-in">
+        <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+            <div>
+              <h2 className="text-base font-black text-slate-900">Meal Library — Mains</h2>
+              <p className="text-xs text-slate-400 font-medium mt-1 max-w-md">
+                Define each Main once — its base, dhal, salad, beverage & dessert options, general selling price, and cost. The Menu Planner picks Mains from here into each day.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={handleImportFromMenu}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
+                title="Create a Main for every distinct dish name already on the Menu Planner"
+              >
+                <Upload className="size-3.5" /> Import from existing menu
+              </button>
+              <button
+                onClick={startAddMain}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black bg-primary text-white hover:bg-primary/90 transition-colors shadow-sm"
+              >
+                <Plus className="size-4" /> Add Main
+              </button>
+            </div>
+          </div>
+
+          {libraryImportResult && (
+            <div className="mb-4 p-3.5 bg-primary/5 border border-primary/20 rounded-2xl flex items-start justify-between gap-3">
+              <p className="text-[11px] font-bold text-slate-600 leading-relaxed">
+                {libraryImportResult.created.length === 0 ? (
+                  <>Nothing new to import — every dish name already has a Main.</>
+                ) : (
+                  <>Added {libraryImportResult.created.length} Main{libraryImportResult.created.length === 1 ? '' : 's'}: {libraryImportResult.created.join(', ')}.</>
+                )}
+                {libraryImportResult.skipped.length > 0 && (
+                  <> Skipped {libraryImportResult.skipped.length} already in the Library: {libraryImportResult.skipped.join(', ')}.</>
+                )}
+                {' '}{libraryImportResult.linked > 0 ? `Linked ${libraryImportResult.linked} existing Menu Planner dish${libraryImportResult.linked === 1 ? '' : 'es'} to their Main.` : 'No existing Menu Planner dishes needed linking.'}
+                {' '}Prices/descriptions came from each dish's first appearance in the default rotation (or, failing that, the earliest saved week) — review and adjust below.
+              </p>
+              <button onClick={() => setLibraryImportResult(null)} className="p-1 text-slate-400 hover:text-slate-600 shrink-0"><X className="size-3.5" /></button>
+            </div>
+          )}
+
+          {mainDishes.length === 0 ? (
+            <div className="text-center py-14 border-2 border-dashed border-slate-200 rounded-2xl">
+              <ChefHat className="size-8 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm font-bold text-slate-500">No Mains yet.</p>
+              <p className="text-xs text-slate-400 font-medium mt-1">Add your first Main, or use "Import from existing menu" above to seed the Library from what's already on the Menu Planner.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {mainDishes.map(m => {
+                const baseOn = dishBaseApplicable(m);
+                const dhalOn = dishDhalApplicable(m);
+                const saladOn = dishSaladApplicable(m);
+                const bevOn = dishBeverageApplicable(m);
+                const desOn = dishDessertApplicable(m);
+                return (
+                  <div key={m.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                    <div className="flex items-start gap-3">
+                      <img src={dishPhotoFor(m)} alt={m.name} className="size-11 rounded-xl object-cover shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-bold text-slate-800 truncate">{m.emoji} {m.name}</p>
+                        <p className="text-[11px] text-slate-400 truncate">{m.desc}</p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button onClick={() => startEditMain(m)} className="p-1.5 text-slate-300 hover:text-primary"><Edit3 className="size-3.5" /></button>
+                        <button onClick={() => removeMainDish(m.id)} className="p-1.5 text-slate-300 hover:text-red-500"><Trash2 className="size-3.5" /></button>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 mt-3 flex-wrap">
+                      <span className="text-xs font-black text-slate-700">{formatCurrency(m.price)}</span>
+                      {m.cost !== undefined && <span className="text-[10px] font-bold text-slate-400">Cost {formatCurrency(m.cost)}</span>}
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                      <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border ${baseOn ? 'bg-white border-slate-200 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-300'}`}>{baseOn ? 'Base' : 'No base'}</span>
+                      <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border ${dhalOn ? 'bg-white border-slate-200 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-300'}`}>{dhalOn ? 'Dhal' : 'No dhal'}</span>
+                      <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border ${saladOn ? 'bg-white border-slate-200 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-300'}`}>{saladOn ? 'Salad' : 'No salad'}</span>
+                      <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border ${bevOn ? 'bg-white border-slate-200 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-300'}`}>{bevOn ? 'Beverage' : 'No beverage'}</span>
+                      <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border ${desOn ? 'bg-white border-slate-200 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-300'}`}>{desOn ? 'Dessert' : 'No dessert'}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {renderAddOnCatalogs()}
+
+        {/* Main Editor modal — the single place base/dhal/salad/beverage/
+            dessert applicability + price + cost are set for a Main. Day-slot
+            dishes copy this once when picked in the Menu Planner; editing a
+            Main afterwards never retroactively changes already-placed days.
+            Portaled to <body> — this sits inside the admin console's
+            overflow-hidden main column, which clips a plain "fixed inset-0"
+            child to that column instead of the full viewport (the sidebar
+            was showing through un-dimmed). See Portal.tsx. */}
+        {mainEditor && (
+          <Portal>
+          <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={cancelMainEditor}>
+            <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+              <div className="p-5 border-b border-[#E7E0D0] flex items-center justify-between shrink-0">
+                <h3 className="text-sm font-black text-slate-900">{mainEditor.mode === 'add' ? 'Add a Main' : 'Edit Main'}</h3>
+                <button onClick={cancelMainEditor} className="p-1.5 text-slate-400 hover:text-danger"><X className="size-4" /></button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+                <div className="flex items-center gap-2">
+                  <IconPickerButton value={mainForm.emoji} onChange={emoji => setMainForm(f => ({ ...f, emoji }))} />
+                  <input value={mainForm.name} onChange={e => setMainForm(f => ({ ...f, name: e.target.value }))} placeholder="Main name" className="flex-1 text-sm font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20" />
+                </div>
+                <textarea
+                  value={mainForm.desc}
+                  onChange={e => setMainForm(f => ({ ...f, desc: e.target.value }))}
+                  placeholder="Description"
+                  rows={2}
+                  className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+                />
+
+                {/* Photo — a real uploaded photo, distinct from the emoji
+                    icon above. Falls back to the built-in protein-family
+                    photo (see dishPhotoFor) until one is uploaded. */}
+                <div className="flex items-center gap-3">
+                  <img src={mainForm.photoUrl || dishPhotoFor({ id: mainEditor.mainId || '__new__', ...mainForm } as CurryOption)} alt="" className="size-14 rounded-xl object-cover border border-slate-200 shrink-0" />
+                  <div className="flex-1 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <button type="button" onClick={() => mainPhotoFileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors">
+                        <ImagePlus className="size-3.5" /> Upload photo
+                      </button>
+                      {mainForm.photoUrl && (
+                        <button type="button" onClick={() => setMainForm(f => ({ ...f, photoUrl: '' }))} className="text-[11px] font-bold text-slate-400 hover:text-red-500">Remove</button>
+                      )}
+                    </div>
+                    {mainPhotoError && <p className="text-[10px] font-bold text-red-500">{mainPhotoError}</p>}
+                  </div>
+                  <input ref={mainPhotoFileInputRef} type="file" accept="image/*" className="hidden" onChange={handleMainPhotoFileChange} />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Selling Price (Rs)</label>
+                    <input type="number" value={mainForm.price} onChange={e => setMainForm(f => ({ ...f, price: e.target.value }))} className="w-full text-sm font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Cost (Rs, optional)</label>
+                    <input type="number" value={mainForm.cost} onChange={e => setMainForm(f => ({ ...f, cost: e.target.value }))} className="w-full text-sm font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20" />
+                  </div>
+                </div>
+
+                {/* Base, Dhal, Salad, Beverage and Dessert all follow the
+                    same shape now: an "applicable" checkbox (does this
+                    category even apply to this dish?), and — only when
+                    applicable — a checkbox grid narrowing to specific
+                    catalog entries. Unset/all-checked means "no
+                    restriction", same convention as before. */}
+
+                {/* Base */}
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                    <input type="checkbox" checked={mainForm.baseApplicable} onChange={e => setMainForm(f => ({ ...f, baseApplicable: e.target.checked }))} className="size-4 accent-primary" />
+                    Base applicable
+                  </label>
+                  {mainForm.baseApplicable && bases.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pl-6">
+                      {bases.map(b => {
+                        const checked = mainForm.baseOptionIds === null || mainForm.baseOptionIds.includes(b.id);
+                        return (
+                          <label key={b.id} className={`flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1.5 rounded-lg border cursor-pointer ${checked ? 'bg-primary/5 border-primary/30 text-primary' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                            <input type="checkbox" checked={checked} onChange={() => toggleMainOption('baseOptionIds', bases, b.id)} className="size-3.5 accent-primary" />
+                            {b.emoji} {b.name}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Dhal */}
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                    <input type="checkbox" checked={mainForm.dhalApplicable} onChange={e => setMainForm(f => ({ ...f, dhalApplicable: e.target.checked }))} className="size-4 accent-primary" />
+                    Dhal applicable
+                  </label>
+                  {mainForm.dhalApplicable && dhals.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pl-6">
+                      {dhals.map(d => {
+                        const checked = mainForm.dhalOptionIds === null || mainForm.dhalOptionIds.includes(d.id);
+                        return (
+                          <label key={d.id} className={`flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1.5 rounded-lg border cursor-pointer ${checked ? 'bg-primary/5 border-primary/30 text-primary' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                            <input type="checkbox" checked={checked} onChange={() => toggleMainOption('dhalOptionIds', dhals, d.id)} className="size-3.5 accent-primary" />
+                            {d.emoji} {d.name}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Salad */}
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                    <input type="checkbox" checked={mainForm.saladApplicable} onChange={e => setMainForm(f => ({ ...f, saladApplicable: e.target.checked }))} className="size-4 accent-primary" />
+                    Salad applicable
+                  </label>
+                  {mainForm.saladApplicable && salads.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pl-6">
+                      {salads.map(s => {
+                        const checked = mainForm.saladOptionIds === null || mainForm.saladOptionIds.includes(s.id);
+                        return (
+                          <label key={s.id} className={`flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1.5 rounded-lg border cursor-pointer ${checked ? 'bg-primary/5 border-primary/30 text-primary' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                            <input type="checkbox" checked={checked} onChange={() => toggleMainOption('saladOptionIds', salads, s.id)} className="size-3.5 accent-primary" />
+                            {s.emoji} {s.name}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Beverage */}
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                    <input type="checkbox" checked={mainForm.beverageApplicable} onChange={e => setMainForm(f => ({ ...f, beverageApplicable: e.target.checked }))} className="size-4 accent-primary" />
+                    Beverage applicable
+                  </label>
+                  {mainForm.beverageApplicable && beverages.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pl-6">
+                      {beverages.map(b => {
+                        const checked = mainForm.beverageOptionIds === null || mainForm.beverageOptionIds.includes(b.id);
+                        return (
+                          <label key={b.id} className={`flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1.5 rounded-lg border cursor-pointer ${checked ? 'bg-primary/5 border-primary/30 text-primary' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                            <input type="checkbox" checked={checked} onChange={() => toggleMainOption('beverageOptionIds', beverages, b.id)} className="size-3.5 accent-primary" />
+                            {b.emoji} {b.name}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Dessert */}
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                    <input type="checkbox" checked={mainForm.dessertApplicable} onChange={e => setMainForm(f => ({ ...f, dessertApplicable: e.target.checked }))} className="size-4 accent-primary" />
+                    Dessert applicable
+                  </label>
+                  {mainForm.dessertApplicable && desserts.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pl-6">
+                      {desserts.map(ds => {
+                        const checked = mainForm.dessertOptionIds === null || mainForm.dessertOptionIds.includes(ds.id);
+                        return (
+                          <label key={ds.id} className={`flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1.5 rounded-lg border cursor-pointer ${checked ? 'bg-primary/5 border-primary/30 text-primary' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                            <input type="checkbox" checked={checked} onChange={() => toggleMainOption('dessertOptionIds', desserts, ds.id)} className="size-3.5 accent-primary" />
+                            {ds.emoji} {ds.name}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="p-4 border-t border-[#E7E0D0] flex items-center justify-end gap-2 shrink-0">
+                <button onClick={cancelMainEditor} className="px-4 py-2 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-50 transition-colors">Cancel</button>
+                <button onClick={saveMainEditor} disabled={!mainForm.name.trim()} className="px-4 py-2 rounded-xl text-xs font-black bg-primary text-white hover:bg-primary/90 disabled:opacity-40 transition-colors">Save Main</button>
+              </div>
+            </div>
+          </div>
+          </Portal>
         )}
       </div>
     );
@@ -808,6 +1804,63 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const renderSettingsTab = () => {
     return (
       <div className="space-y-8 animate-fade-in pb-24">
+        <div className="flex items-center gap-1 bg-slate-100 rounded-full p-1 w-fit">
+          {(['general', 'icons'] as const).map(t => (
+            <button
+              key={t}
+              onClick={() => setSettingsSubTab(t)}
+              className={`px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${settingsSubTab === t ? 'bg-primary text-white shadow-sm' : 'text-slate-500'}`}
+            >
+              {t === 'general' ? 'General' : 'Icons'}
+            </button>
+          ))}
+        </div>
+
+        {settingsSubTab === 'icons' ? (
+          <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
+            <div>
+              <h3 className="text-base font-black text-slate-900">Icon Library</h3>
+              <p className="text-xs text-slate-400 font-medium mt-1">
+                The emoji set every icon-picker modal in Operations searches — a Main's icon, an Add-on Catalog entry's icon. Add, rename, or remove entries here; nothing here is shown to customers directly.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+              {icons.map(icon => {
+                const isEditing = editingIcon === icon.id;
+                if (isEditing) {
+                  return (
+                    <div key={icon.id} className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-xl border border-primary/20">
+                      <input value={iconForm.emoji} onChange={e => setIconForm(f => ({ ...f, emoji: e.target.value }))} className="w-10 text-center text-lg px-1 py-1.5 rounded-lg border border-slate-200 outline-none" />
+                      <input value={iconForm.label} onChange={e => setIconForm(f => ({ ...f, label: e.target.value }))} placeholder="Label" className="flex-1 min-w-0 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
+                      <button onClick={saveIconEdit} className="p-1.5 bg-primary text-white rounded-lg shrink-0"><Check className="size-3.5" /></button>
+                      <button onClick={() => setEditingIcon(null)} className="p-1.5 bg-slate-100 text-slate-400 rounded-lg shrink-0"><X className="size-3.5" /></button>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={icon.id} className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-xl">
+                    <span className="text-lg shrink-0">{icon.emoji}</span>
+                    <span className="flex-1 min-w-0 text-xs font-bold text-slate-700 truncate">{icon.label}</span>
+                    <button onClick={() => startEditIcon(icon)} className="p-1 text-slate-300 hover:text-primary shrink-0"><Edit3 className="size-3.5" /></button>
+                    <button onClick={() => removeIconEntry(icon.id)} className="p-1 text-slate-300 hover:text-red-500 shrink-0"><Trash2 className="size-3.5" /></button>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+              <input value={newIconForm.emoji} onChange={e => setNewIconForm(f => ({ ...f, emoji: e.target.value }))} placeholder="🍽️" className="w-14 text-center text-lg px-1 py-2 rounded-xl border border-slate-200 outline-none" />
+              <input value={newIconForm.label} onChange={e => setNewIconForm(f => ({ ...f, label: e.target.value }))} placeholder="Label (e.g. Chicken)" className="flex-1 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20" />
+              <button
+                onClick={saveNewIcon}
+                disabled={!newIconForm.emoji.trim() || !newIconForm.label.trim()}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black bg-primary text-white hover:bg-primary/90 disabled:opacity-40 transition-colors shrink-0"
+              >
+                <Plus className="size-4" /> Add
+              </button>
+            </div>
+          </div>
+        ) : (
+      <div className="space-y-8">
         {/* Card 1: Brand Identity & Support */}
         <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
           <div>
@@ -984,6 +2037,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           </div>
         </div>
       </div>
+        )}
+      </div>
     );
   };
 
@@ -1117,6 +2172,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           {tab === 'dashboard' && renderDashboard()}
           
           {tab === 'menu' && renderMenuTab()}
+
+          {tab === 'library' && renderLibraryTab()}
 
           {tab === 'orders' && (
             <div className="space-y-4">
@@ -1395,8 +2452,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         </div>
       )}
 
-      {/* Collect Payment Modal */}
+      {/* Collect Payment Modal — portaled to <body>, same clipping issue as
+          the Meal Library modals (see Portal.tsx). */}
       {paymentDrop && (
+        <Portal>
         <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
             <div className="p-6 border-b border-slate-100 flex items-center justify-between">
@@ -1449,6 +2508,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </div>
           </div>
         </div>
+        </Portal>
       )}
     </div>
   );
