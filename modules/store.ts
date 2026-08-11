@@ -1,8 +1,17 @@
 
 import { MenuItem, LoyaltyTier, CustomerGroup, Order, OrderItem, PaymentMethod, Customer } from '../types';
 
-// Unified System Clock for Mocks
-export let MOCK_TODAY = '2026-01-27';
+// Helper to get real today's date in YYYY-MM-DD ISO format
+export const getRealTodayISO = (): string => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+// Unified System Clock for Mocks - defaults to real device date
+export let MOCK_TODAY = getRealTodayISO();
 
 const systemDateListeners = new Set<(date: string) => void>();
 
