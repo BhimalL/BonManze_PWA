@@ -1100,6 +1100,18 @@ export const bulkUpdateCustomers = (updates: Customer[]) => {
   customerListeners.forEach(l => l([...GLOBAL_CUSTOMERS]));
 };
 
+// Deliberate, admin-triggered reset (Settings → Danger Zone) — zeroes every
+// customer's loyalty points and store credit, alongside clearAllOrders
+// above. Deliberately leaves ltv (lifetime value), tier, contact details,
+// addresses, and every other field untouched — this clears the two
+// balances that accrue *from* orders, not the customer records or their
+// historical order-value reporting. Never runs itself; only fires from an
+// explicit confirmed button press.
+export const resetCustomerLoyalty = () => {
+  GLOBAL_CUSTOMERS = GLOBAL_CUSTOMERS.map(c => ({ ...c, points: 0, storeCredit: 0 }));
+  customerListeners.forEach(l => l([...GLOBAL_CUSTOMERS]));
+};
+
 // --- AUDIT LOG SYSTEM ---
 export interface AuditEntry {
   id: string;
@@ -1503,6 +1515,15 @@ export const subscribeToOrders = (listener: (orders: Order[]) => void) => {
 
 export const addOrder = (order: Order) => {
   ACTIVE_ORDERS = [order, ...ACTIVE_ORDERS];
+  notifyOrderListeners();
+};
+
+// Deliberate, admin-triggered reset (Settings → Danger Zone) for wiping
+// test/demo order history clean before going live — unlike the automatic
+// Meal Library migration/cleanup above, this is destructive and never
+// runs itself; it only fires from an explicit confirmed button press.
+export const clearAllOrders = () => {
+  ACTIVE_ORDERS = [];
   notifyOrderListeners();
 };
 
@@ -2048,6 +2069,8 @@ interface PersistedState {
   ICON_LIBRARY: IconEntry[];
   // See MENU_LIBRARY_MIGRATED above.
   MENU_LIBRARY_MIGRATED: boolean;
+  // See MAIN_DISH_CONTENT_CLEANED below.
+  MAIN_DISH_CONTENT_CLEANED: boolean;
 }
 
 const persistAll = () => {
@@ -2061,7 +2084,7 @@ const persistAll = () => {
       LUNCH_MENU_OVERRIDES: lunchMenuStore.getSnapshot(),
       DINNER_MENU_OVERRIDES: dinnerMenuStore.getSnapshot(),
       MEAL_BASES, MEAL_DHALS, MEAL_SALADS, MEAL_BEVERAGES, MEAL_DESSERTS,
-      MAIN_DISHES, ICON_LIBRARY, MENU_LIBRARY_MIGRATED,
+      MAIN_DISHES, ICON_LIBRARY, MENU_LIBRARY_MIGRATED, MAIN_DISH_CONTENT_CLEANED,
     };
     localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
   } catch (e) {
@@ -2103,10 +2126,61 @@ const runMenuLibraryMigrationOnce = () => {
   persistAll();
 };
 
+// One-time content cleanup for Mains the original migration created — it
+// disambiguated same-named Lunch/Dinner dishes by suffixing the Main's
+// name "(Lunch)"/"(Dinner)", which read as visual clutter once the whole
+// Library was visible at once, and it always copied the day-slot's short,
+// auto-generated description verbatim rather than writing something fuller
+// for a Library entry meant to be the definitive version of that dish.
+// This strips the suffix from every Main's name (and a stray "- speical"
+// typo found on one manually-added entry) and, for the specific Lunch/
+// Dinner pairs the migration is known to have produced, replaces the
+// description with a fuller one written to also read as the disambiguator
+// now that the name no longer is. A Main whose (stripped) name+service
+// doesn't match a known migrated pair — added by hand, or from a CSV
+// import — only gets the name cleanup; there's no confident source to
+// rewrite its description from, so it's left exactly as the admin wrote it.
+const MAIN_DISH_DESCRIPTION_REWRITES: Record<string, string> = {
+  'Veg Curry|Lunch': 'A comforting Creole-spiced vegetable curry with seasonal greens, carrots, and pumpkin, gently simmered for a light, fully vegan lunch.',
+  'Veg Curry|Dinner': 'Roasted seasonal vegetables finished in a fuller evening curry sauce — heartier than the lunch version, built for dinner.',
+  'Chicken Curry|Lunch': "Our everyday home-style Mauritian chicken curry, simmered in a fragrant onion-and-tomato masala the way it's cooked in most Mauritian kitchens.",
+  'Chicken Curry|Dinner': 'Chicken finished with butter and cream for a richer, restaurant-style evening curry.',
+  'Fish Curry|Lunch': "Fresh local fish gently poached in a light, ginger-forward curry sauce, kept simple so the fish stays the star of the plate.",
+  'Fish Curry|Dinner': "Fish grilled first, then glazed in a tangy tamarind sauce for extra depth — our dinner take on the classic.",
+  'Lentil Curry|Lunch': 'A warming, fully vegan lentil curry finished with roasted turmeric and cumin — a lighter option that still fills you up.',
+  'Lentil Curry|Dinner': 'A five-lentil dal, ghee-tempered for extra richness — a more indulgent evening version of the lunch dal.',
+  'Prawn Curry|Lunch': 'Plump prawns in a coconut-and-lemongrass curry, balancing sweetness and citrus for a bright midday plate.',
+  'Prawn Curry|Dinner': 'Prawns finished in garlic butter with a chilli kick — a bolder, more indulgent evening preparation.',
+  'Beef Curry|Lunch': 'Beef slow-cooked until tender in a rich Creole tomato sauce, built for a heartier lunch.',
+  'Beef Curry|Dinner': 'Beef slow-cooked overnight for maximum tenderness, in a rich, deeply reduced gravy.',
+  'Shrimp Curry|Lunch': 'Small shrimp in a mild coconut cream curry — gentle spicing, easy on the palate.',
+  'Shrimp Curry|Dinner': 'Shrimp in a coconut cream curry lifted with fresh curry leaf, a more fragrant evening variation.',
+  'Paneer Curry|Lunch': 'Soft paneer cubes in a spinach curry with a touch of spice — a vegetarian favourite with real bite.',
+  'Paneer Curry|Dinner': 'Paneer in a cashew-and-tomato sauce — creamier and richer than the lunch version, made for dinner.',
+};
+let MAIN_DISH_CONTENT_CLEANED = false;
+const cleanupMainDishContentOnce = () => {
+  if (MAIN_DISH_CONTENT_CLEANED) return;
+  MAIN_DISHES = MAIN_DISHES.map(m => {
+    const isLunch = /\(lunch\)\s*$/i.test(m.name);
+    const isDinner = /\(dinner\)\s*$/i.test(m.name);
+    const name = m.name
+      .replace(/\s*\((lunch|dinner)\)\s*$/i, '')
+      .replace(/\s*-\s*speical\s*$/i, '')
+      .trim();
+    const key = isLunch ? `${name}|Lunch` : isDinner ? `${name}|Dinner` : undefined;
+    const desc = (key && MAIN_DISH_DESCRIPTION_REWRITES[key]) || m.desc;
+    return name === m.name && desc === m.desc ? m : { ...m, name, desc };
+  });
+  mainDishListeners.forEach(l => l([...MAIN_DISHES]));
+  MAIN_DISH_CONTENT_CLEANED = true;
+  persistAll();
+};
+
 (() => {
   try {
     const raw = localStorage.getItem(PERSIST_KEY);
-    if (!raw) { runMenuLibraryMigrationOnce(); return; }
+    if (!raw) { runMenuLibraryMigrationOnce(); cleanupMainDishContentOnce(); return; }
     const saved: Partial<PersistedState> = JSON.parse(raw);
     if (saved.MOCK_TODAY !== undefined) MOCK_TODAY = saved.MOCK_TODAY;
     if (saved.PAYMENT_METHODS !== undefined) PAYMENT_METHODS = saved.PAYMENT_METHODS;
@@ -2135,7 +2209,9 @@ const runMenuLibraryMigrationOnce = () => {
     if (saved.MAIN_DISHES !== undefined) MAIN_DISHES = saved.MAIN_DISHES;
     if (saved.ICON_LIBRARY !== undefined) ICON_LIBRARY = saved.ICON_LIBRARY;
     if (saved.MENU_LIBRARY_MIGRATED !== undefined) MENU_LIBRARY_MIGRATED = saved.MENU_LIBRARY_MIGRATED;
+    if (saved.MAIN_DISH_CONTENT_CLEANED !== undefined) MAIN_DISH_CONTENT_CLEANED = saved.MAIN_DISH_CONTENT_CLEANED;
     runMenuLibraryMigrationOnce();
+    cleanupMainDishContentOnce();
   } catch (e) {
     console.warn('BonManzE: failed to restore persisted state', e);
   }

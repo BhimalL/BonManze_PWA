@@ -42,7 +42,9 @@ import {
   updateOrderItemStatus,
   updateOrderPayment,
   updateOrderItemsPayment,
+  clearAllOrders,
   subscribeToCustomers,
+  resetCustomerLoyalty,
   subscribeToPaymentMethods,
   subscribeToSystemDate,
   updateSystemDate,
@@ -369,6 +371,17 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const [customerSearch, setCustomerSearch] = useState('');
   const [confirmPaymentId, setConfirmPaymentId] = useState<string | null>(null);
+  // Settings → Danger Zone — same arm-then-confirm pattern as payment
+  // collection above, since this is destructive and, unlike everything
+  // else in this file, never happens automatically.
+  const [dangerConfirm, setDangerConfirm] = useState<'reset' | null>(null);
+  const [dangerResetDone, setDangerResetDone] = useState(false);
+  const handleDangerReset = () => {
+    clearAllOrders();
+    resetCustomerLoyalty();
+    setDangerConfirm(null);
+    setDangerResetDone(true);
+  };
 
   useEffect(() => {
     const u1 = subscribeToOrders(setOrders);
@@ -1026,6 +1039,39 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     return { menu, error: '' };
   };
 
+  // CSV import used to create pure freehand day-slot dishes with no mainId
+  // at all — bypassing the Meal Library entirely, unlike "Add dish" (which
+  // always picks a Main). That meant a CSV-imported dish's applicable/
+  // narrowing config could never be managed from the Library, and editing
+  // it there later had no effect. This links every imported row to a Main
+  // — an existing one if its name matches exactly (case-insensitive), or a
+  // freshly created one (seeded from the CSV row's own emoji/desc/price/
+  // baseGroup/dhal·saladApplicable) when nothing matches — so "the Menu
+  // Planner always pulls from the Meal Library" holds for CSV-imported
+  // weeks too, not just dishes added via the Main picker. A local name->id
+  // map (rather than the `mainDishes` React state, which won't reflect a
+  // Main created mid-loop until the next render) makes two rows sharing a
+  // name within the same import link to one Main, not two duplicates.
+  const linkMenuDishesToLibrary = (menu: Record<WeekdayKey, CurryOption[]>): Record<WeekdayKey, CurryOption[]> => {
+    const byName = new Map<string, string>();
+    mainDishes.forEach(m => byName.set(m.name.trim().toLowerCase(), m.id));
+    const result: Record<WeekdayKey, CurryOption[]> = { MON: [], TUE: [], WED: [], THU: [], FRI: [] };
+    WEEKDAY_KEYS.forEach(day => {
+      result[day] = menu[day].map(dish => {
+        const key = dish.name.trim().toLowerCase();
+        let mainId = byName.get(key);
+        if (!mainId) {
+          mainId = `main-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+          const { id, ...rest } = dish;
+          addMainDish({ id: mainId, ...rest });
+          byName.set(key, mainId);
+        }
+        return { ...dish, mainId };
+      });
+    });
+    return result;
+  };
+
   const handleCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -1038,7 +1084,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       if (error) { setCsvError(error); return; }
       setCsvError('');
       const setMenu = service === 'Dinner' ? setDinnerWeekMenu : setLunchWeekMenu;
-      setMenu(activeMenuWeekStart, menu);
+      setMenu(activeMenuWeekStart, linkMenuDishesToLibrary(menu));
       setCsvImportTarget(null);
     };
     reader.readAsText(file);
@@ -2000,6 +2046,38 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+
+        {/* Card 4: Danger Zone */}
+        <div className="bg-white rounded-3xl border border-red-200 p-8 shadow-sm space-y-5">
+          <div>
+            <h3 className="text-base font-black text-red-600">Danger Zone</h3>
+            <p className="text-xs text-slate-400 font-medium mt-1">
+              Wipes test/demo data clean before going live. Does not touch the Meal Library, Menu Planner, or any Settings above — only order history and customer loyalty balances.
+            </p>
+          </div>
+          {dangerResetDone && (
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3">
+              <p className="text-[11px] font-bold text-emerald-700">All orders cleared, and every customer's points and store credit reset to Rs 0.</p>
+              <button onClick={() => setDangerResetDone(false)} className="p-1 text-emerald-600 hover:text-emerald-800 shrink-0"><X className="size-3.5" /></button>
+            </div>
+          )}
+          <div className="flex items-center justify-between border-t border-slate-100 pt-5">
+            <div>
+              <h4 className="text-xs font-black text-slate-900">Clear all orders & reset customer loyalty</h4>
+              <p className="text-[11px] text-slate-400 font-medium mt-0.5 max-w-md">
+                Permanently deletes every order (Orders by Dish, Delivery List, Payments all go empty) and zeroes every customer's points and store credit. Customer records, addresses, and tiers are kept. Cannot be undone.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => dangerConfirm === 'reset' ? handleDangerReset() : setDangerConfirm('reset')}
+              onBlur={() => setDangerConfirm(null)}
+              className={`shrink-0 px-4 py-2.5 rounded-xl text-xs font-black transition-colors ${dangerConfirm === 'reset' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100'}`}
+            >
+              {dangerConfirm === 'reset' ? 'Confirm — this cannot be undone' : 'Clear orders & reset loyalty'}
+            </button>
           </div>
         </div>
       </div>
