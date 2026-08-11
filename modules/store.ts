@@ -24,7 +24,24 @@ export const updateSystemDate = (date: string) => {
 export const SYSTEM_CONFIG = {
   operatingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
   activeServices: ['Breakfast', 'Lunch', 'Dinner'],
-  cutoffTime: '14:00',
+  // Same-day cutoff (24h "HH:MM") — a delivery day locks for new orders,
+  // edits and cancels once the wall clock passes this time on that day.
+  // '09:00' matches the rule the app has always enforced (see isPastCutoff
+  // in CustomerPortal.tsx); it's editable here so Bhimal can change it
+  // without a code change, and the Customer App's copy (Home status card,
+  // "New here?" guide, lock toasts) reads this value live instead of
+  // hardcoding "9:00 AM"/"Sunday noon". Shared by Lunch and Dinner.
+  cutoffTime: '09:00',
+  // Which day the cutoff above falls on, relative to the delivery day: 0 =
+  // same day as delivery (the current rule), -1 = the day before delivery,
+  // -2 = two days before, and so on. Kept as a signed integer rather than a
+  // pair of enums so "3 days before" etc. just works without adding cases.
+  cutoffDayOffset: 0,
+  // Delivery arrival windows shown to customers — free text since it's
+  // display-only, not used for any scheduling logic. Dinner gets its own
+  // window since it naturally arrives later in the day than Lunch.
+  lunchDeliveryWindow: '11:30–12:00',
+  dinnerDeliveryWindow: '18:30–19:30',
   deadlinePolicy: '1 Day Before',
   currencySymbol: 'Rs',
   vatEnabled: true,
@@ -40,6 +57,8 @@ export const SYSTEM_CONFIG = {
   businessName: 'BonManzE',
   businessTagline: 'Homemade · Delivered fresh',
   businessLogoUrl: '',
+  supportPhone: '59412131',
+  supportEmail: 'bhimalonly@gmail.com',
   // Dinner is a second, independently toggleable offering that otherwise
   // works exactly like Lunch — same weekly-menu pattern, same cart/checkout
   // flow, same 9AM same-day cutoff. See WEEKLY_DINNER_MENU below.
@@ -255,11 +274,48 @@ export interface CurryOption {
 export const WEEKDAY_KEYS = ['MON', 'TUE', 'WED', 'THU', 'FRI'] as const;
 export type WeekdayKey = typeof WEEKDAY_KEYS[number];
 
-// `let`, not `const` — Operations needs to edit this week's curries (name,
-// description, price), so it follows the same mutable-store pattern as
-// LOYALTY_TIERS/CUSTOMER_GROUPS below: a module-level binding plus a
-// listener set, rather than local component state.
-export let WEEKLY_CURRY_MENU: Record<WeekdayKey, CurryOption[]> = {
+// Menus are week-specific: each calendar week (keyed by that week's Monday,
+// e.g. "2026-08-17") can have its own curry lineup. A week with no override
+// just falls back to the DEFAULT rotation below — so nothing changes unless
+// a specific week is deliberately set apart (e.g. planning a different menu
+// for next week), and the mechanism isn't limited to "next week" specifically:
+// any week, any number of weeks out, can get its own menu the same way.
+// Shared by both Lunch and Dinner (two independent instances) via this
+// factory, same mutable-store pattern as LOYALTY_TIERS/CUSTOMER_GROUPS —
+// a module-level binding plus a listener set, rather than local component
+// state.
+function createWeeklyMenuStore(defaultMenu: Record<WeekdayKey, CurryOption[]>) {
+  let overrides: Record<string, Record<WeekdayKey, CurryOption[]>> = {};
+  const listeners = new Set<(overrides: Record<string, Record<WeekdayKey, CurryOption[]>>) => void>();
+
+  const forWeek = (weekStart: string): Record<WeekdayKey, CurryOption[]> => overrides[weekStart] || defaultMenu;
+
+  const subscribe = (listener: (overrides: Record<string, Record<WeekdayKey, CurryOption[]>>) => void) => {
+    listeners.add(listener);
+    listener({ ...overrides });
+    return () => { listeners.delete(listener); };
+  };
+
+  // Edits one curry option's name/description/price for a given weekday
+  // within a given week — scoped to editing what's already on the menu, not
+  // adding/removing curry slots (that would touch dishPhotoFor's id-based
+  // photo family mapping and the builder's assumptions about fixed option
+  // counts, a bigger change than "the price went up this week"). The first
+  // edit to a week seeds its override from whatever it currently shows
+  // (the default, or an earlier override), so only the touched week diverges.
+  const update = (weekStart: string, day: WeekdayKey, curryId: string, updates: Partial<Pick<CurryOption, 'name' | 'desc' | 'price' | 'emoji'>>) => {
+    const base = overrides[weekStart] || defaultMenu;
+    overrides = {
+      ...overrides,
+      [weekStart]: { ...base, [day]: base[day].map(c => c.id === curryId ? { ...c, ...updates } : c) }
+    };
+    listeners.forEach(l => l({ ...overrides }));
+  };
+
+  return { forWeek, subscribe, update };
+}
+
+const WEEKLY_LUNCH_MENU_DEFAULT: Record<WeekdayKey, CurryOption[]> = {
   MON: [
     { id: 'veg', emoji: '🥦', name: 'Veg Curry', desc: 'Creole spices · Vegan', price: 130 },
     { id: 'chk', emoji: '🍗', name: 'Chicken Curry', desc: 'Home-style Mauritian', price: 150 },
@@ -287,32 +343,16 @@ export let WEEKLY_CURRY_MENU: Record<WeekdayKey, CurryOption[]> = {
   ],
 };
 
-const weeklyMenuListeners = new Set<(menu: Record<WeekdayKey, CurryOption[]>) => void>();
-
-export const subscribeToWeeklyMenu = (listener: (menu: Record<WeekdayKey, CurryOption[]>) => void) => {
-  weeklyMenuListeners.add(listener);
-  listener({ ...WEEKLY_CURRY_MENU });
-  return () => { weeklyMenuListeners.delete(listener); };
-};
-
-// Edits one curry option's name/description/price for a given weekday —
-// scoped to editing what's already on the menu, not adding/removing curry
-// slots (that would touch dishPhotoFor's id-based photo family mapping and
-// the builder's assumptions about fixed option counts, a bigger change than
-// "the price went up this week").
-export const updateCurryOption = (day: WeekdayKey, curryId: string, updates: Partial<Pick<CurryOption, 'name' | 'desc' | 'price' | 'emoji'>>) => {
-  WEEKLY_CURRY_MENU = {
-    ...WEEKLY_CURRY_MENU,
-    [day]: WEEKLY_CURRY_MENU[day].map(c => c.id === curryId ? { ...c, ...updates } : c)
-  };
-  weeklyMenuListeners.forEach(l => l({ ...WEEKLY_CURRY_MENU }));
-};
+const lunchMenuStore = createWeeklyMenuStore(WEEKLY_LUNCH_MENU_DEFAULT);
+export const lunchMenuForWeek = lunchMenuStore.forWeek;
+export const subscribeToLunchMenu = lunchMenuStore.subscribe;
+export const updateLunchCurryOption = lunchMenuStore.update;
 
 // Dinner — a second offering, toggled on/off via SYSTEM_CONFIG.dinnerEnabled,
-// that otherwise mirrors WEEKLY_CURRY_MENU exactly: same shape, same
-// subscribe/update pattern, same curry ids (so dishPhotoFor's protein-family
-// photo mapping just works for these too, no new photos needed).
-export let WEEKLY_DINNER_MENU: Record<WeekdayKey, CurryOption[]> = {
+// that otherwise mirrors Lunch exactly: same shape, same week-override
+// mechanism, same curry ids (so dishPhotoFor's protein-family photo mapping
+// just works for these too, no new photos needed).
+const WEEKLY_DINNER_MENU_DEFAULT: Record<WeekdayKey, CurryOption[]> = {
   MON: [
     { id: 'beef', emoji: '🥩', name: 'Beef Curry', desc: 'Slow-cooked overnight · Rich gravy', price: 240 },
     { id: 'chk', emoji: '🍗', name: 'Chicken Curry', desc: 'Butter & cream finish', price: 180 },
@@ -340,21 +380,10 @@ export let WEEKLY_DINNER_MENU: Record<WeekdayKey, CurryOption[]> = {
   ],
 };
 
-const dinnerMenuListeners = new Set<(menu: Record<WeekdayKey, CurryOption[]>) => void>();
-
-export const subscribeToDinnerMenu = (listener: (menu: Record<WeekdayKey, CurryOption[]>) => void) => {
-  dinnerMenuListeners.add(listener);
-  listener({ ...WEEKLY_DINNER_MENU });
-  return () => { dinnerMenuListeners.delete(listener); };
-};
-
-export const updateDinnerCurryOption = (day: WeekdayKey, curryId: string, updates: Partial<Pick<CurryOption, 'name' | 'desc' | 'price' | 'emoji'>>) => {
-  WEEKLY_DINNER_MENU = {
-    ...WEEKLY_DINNER_MENU,
-    [day]: WEEKLY_DINNER_MENU[day].map(c => c.id === curryId ? { ...c, ...updates } : c)
-  };
-  dinnerMenuListeners.forEach(l => l({ ...WEEKLY_DINNER_MENU }));
-};
+const dinnerMenuStore = createWeeklyMenuStore(WEEKLY_DINNER_MENU_DEFAULT);
+export const dinnerMenuForWeek = dinnerMenuStore.forWeek;
+export const subscribeToDinnerMenu = dinnerMenuStore.subscribe;
+export const updateDinnerCurryOption = dinnerMenuStore.update;
 
 export interface AddOnOption { id: string; emoji: string; name: string; price?: number; up?: number; }
 
@@ -1214,6 +1243,9 @@ export const updateSystemConfig = (updates: Partial<typeof SYSTEM_CONFIG>) => {
   if (updates.operatingDays) SYSTEM_CONFIG.operatingDays = updates.operatingDays;
   if (updates.activeServices) SYSTEM_CONFIG.activeServices = updates.activeServices;
   if (updates.cutoffTime) SYSTEM_CONFIG.cutoffTime = updates.cutoffTime;
+  if (updates.cutoffDayOffset !== undefined) SYSTEM_CONFIG.cutoffDayOffset = updates.cutoffDayOffset;
+  if (updates.lunchDeliveryWindow !== undefined) SYSTEM_CONFIG.lunchDeliveryWindow = updates.lunchDeliveryWindow;
+  if (updates.dinnerDeliveryWindow !== undefined) SYSTEM_CONFIG.dinnerDeliveryWindow = updates.dinnerDeliveryWindow;
   if (updates.currencySymbol) SYSTEM_CONFIG.currencySymbol = updates.currencySymbol;
   if (updates.vatEnabled !== undefined) SYSTEM_CONFIG.vatEnabled = updates.vatEnabled;
   if (updates.vatRate !== undefined) SYSTEM_CONFIG.vatRate = updates.vatRate;
@@ -1224,6 +1256,8 @@ export const updateSystemConfig = (updates: Partial<typeof SYSTEM_CONFIG>) => {
   if (updates.businessName !== undefined) SYSTEM_CONFIG.businessName = updates.businessName;
   if (updates.businessTagline !== undefined) SYSTEM_CONFIG.businessTagline = updates.businessTagline;
   if (updates.businessLogoUrl !== undefined) SYSTEM_CONFIG.businessLogoUrl = updates.businessLogoUrl;
+  if (updates.supportPhone !== undefined) SYSTEM_CONFIG.supportPhone = updates.supportPhone;
+  if (updates.supportEmail !== undefined) SYSTEM_CONFIG.supportEmail = updates.supportEmail;
   if (updates.dinnerEnabled !== undefined) SYSTEM_CONFIG.dinnerEnabled = updates.dinnerEnabled;
   configListeners.forEach(l => l());
 };

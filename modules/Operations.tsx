@@ -31,15 +31,15 @@ import {
   subscribeToPaymentMethods,
   subscribeToSystemDate,
   updateSystemDate,
-  subscribeToWeeklyMenu,
-  updateCurryOption,
+  subscribeToLunchMenu,
+  updateLunchCurryOption,
+  lunchMenuForWeek,
   subscribeToDinnerMenu,
   updateDinnerCurryOption,
-  WEEKLY_DINNER_MENU,
+  dinnerMenuForWeek,
   MOCK_TODAY,
   WEEKDAY_KEYS,
   WeekdayKey,
-  WEEKLY_CURRY_MENU,
   CurryOption,
   dishPhotoFor,
   formatCurrency,
@@ -58,6 +58,11 @@ type Tab = 'menu' | 'orders' | 'delivery' | 'payments' | 'customers';
 // Which offering a curry-menu edit applies to — Dinner is a second,
 // independently toggleable offering that otherwise mirrors Lunch exactly.
 type Service = 'Lunch' | 'Dinner';
+
+// Which of the two currently-orderable calendar weeks the Menu tab is
+// editing — 'This' is whatever week the date control up top is in, 'Next'
+// is the week after. Matches the Customer App's own This/Next switcher.
+type WeekChoice = 'This' | 'Next';
 
 const TABS: { id: Tab; label: string; icon: any }[] = [
   { id: 'menu', label: "This Week's Menu", icon: BookOpen },
@@ -112,20 +117,33 @@ const getThisWeekDays = (systemDateStr: string): OpsWeekDay[] => {
   });
 };
 
+// Adds/subtracts whole days to a 'YYYY-MM-DD' string — used to get from
+// "this week's" Monday to "next week's" Monday (7 days ahead).
+const addDays = (dateStr: string, days: number): string => {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, (m || 1) - 1, (d || 1) + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+};
+
 const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [tab, setTab] = useState<Tab>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [systemDate, setSystemDate] = useState(MOCK_TODAY);
-  const [weeklyMenu, setWeeklyMenu] = useState(WEEKLY_CURRY_MENU);
-  const [dinnerMenu, setDinnerMenu] = useState(WEEKLY_DINNER_MENU);
+  // Menus are looked up live via lunchMenuForWeek(weekStart)/dinnerMenuForWeek
+  // (weekStart) rather than held in state directly — this tick just forces a
+  // re-render whenever either menu changes, same pattern as configTick below.
+  const [menuTick, setMenuTick] = useState(0);
+  // Which week the Menu tab is currently browsing/editing — matches the
+  // Customer App's own This week/Next week switcher.
+  const [activeMenuWeek, setActiveMenuWeek] = useState<WeekChoice>('This');
   const [paymentDrop, setPaymentDrop] = useState<DropTask | null>(null);
 
   // Which curry is being edited inline on the Menu tab, plus its draft
-  // values — Save calls updateCurryOption/updateDinnerCurryOption depending
-  // on `service`, Cancel just clears this.
-  const [editingCurry, setEditingCurry] = useState<{ day: WeekdayKey; curryId: string; service: Service } | null>(null);
+  // values — Save calls updateLunchCurryOption/updateDinnerCurryOption
+  // depending on `service`, scoped to `weekStart`, Cancel just clears this.
+  const [editingCurry, setEditingCurry] = useState<{ day: WeekdayKey; curryId: string; service: Service; weekStart: string } | null>(null);
   const [editForm, setEditForm] = useState({ name: '', desc: '', price: '' });
 
   // Dinner is a second, independently toggleable offering (same pattern as
@@ -155,7 +173,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [brandForm, setBrandForm] = useState({
     name: SYSTEM_CONFIG.businessName,
     tagline: SYSTEM_CONFIG.businessTagline,
-    logoUrl: SYSTEM_CONFIG.businessLogoUrl
+    logoUrl: SYSTEM_CONFIG.businessLogoUrl,
+    supportPhone: SYSTEM_CONFIG.supportPhone,
+    supportEmail: SYSTEM_CONFIG.supportEmail
+  });
+
+  // Order cutoff & delivery windows — previously hardcoded into the
+  // Customer App's copy ("Sunday noon", "11:30–12:00"), now editable here so
+  // the app's own claims stay accurate. Edited as a draft, pushed on Save,
+  // same pattern as branding/VAT above.
+  const [deliveryForm, setDeliveryForm] = useState({
+    cutoffTime: SYSTEM_CONFIG.cutoffTime,
+    cutoffDayOffset: String(SYSTEM_CONFIG.cutoffDayOffset),
+    lunchDeliveryWindow: SYSTEM_CONFIG.lunchDeliveryWindow,
+    dinnerDeliveryWindow: SYSTEM_CONFIG.dinnerDeliveryWindow
   });
 
   useEffect(() => {
@@ -163,15 +194,22 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     const u2 = subscribeToCustomers(setCustomers);
     const u3 = subscribeToPaymentMethods(setPaymentMethods);
     const u4 = subscribeToSystemDate(setSystemDate);
-    const u5 = subscribeToWeeklyMenu(setWeeklyMenu);
+    const u5 = subscribeToLunchMenu(() => setMenuTick(t => t + 1));
     const u6 = subscribeToConfig(() => {
       setVatEnabledLocal(SYSTEM_CONFIG.vatEnabled);
       setVatRateInput(String(SYSTEM_CONFIG.vatRate));
       setVatNumberInput(SYSTEM_CONFIG.vatNumber);
-      setBrandForm({ name: SYSTEM_CONFIG.businessName, tagline: SYSTEM_CONFIG.businessTagline, logoUrl: SYSTEM_CONFIG.businessLogoUrl });
+      setBrandForm({
+        name: SYSTEM_CONFIG.businessName,
+        tagline: SYSTEM_CONFIG.businessTagline,
+        logoUrl: SYSTEM_CONFIG.businessLogoUrl,
+        supportPhone: SYSTEM_CONFIG.supportPhone,
+        supportEmail: SYSTEM_CONFIG.supportEmail
+      });
       setDinnerEnabledLocal(SYSTEM_CONFIG.dinnerEnabled);
+      setDeliveryForm({ cutoffTime: SYSTEM_CONFIG.cutoffTime, cutoffDayOffset: String(SYSTEM_CONFIG.cutoffDayOffset), lunchDeliveryWindow: SYSTEM_CONFIG.lunchDeliveryWindow, dinnerDeliveryWindow: SYSTEM_CONFIG.dinnerDeliveryWindow });
     });
-    const u7 = subscribeToDinnerMenu(setDinnerMenu);
+    const u7 = subscribeToDinnerMenu(() => setMenuTick(t => t + 1));
     return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); };
   }, []);
 
@@ -188,7 +226,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     updateSystemConfig({
       businessName: brandForm.name.trim() || SYSTEM_CONFIG.businessName,
       businessTagline: brandForm.tagline.trim(),
-      businessLogoUrl: brandForm.logoUrl.trim()
+      businessLogoUrl: brandForm.logoUrl.trim(),
+      supportPhone: brandForm.supportPhone.trim() || SYSTEM_CONFIG.supportPhone,
+      supportEmail: brandForm.supportEmail.trim() || SYSTEM_CONFIG.supportEmail
+    });
+  };
+  const saveDeliverySettings = () => {
+    const parsedOffset = parseInt(deliveryForm.cutoffDayOffset, 10);
+    updateSystemConfig({
+      cutoffTime: deliveryForm.cutoffTime || SYSTEM_CONFIG.cutoffTime,
+      cutoffDayOffset: isNaN(parsedOffset) ? SYSTEM_CONFIG.cutoffDayOffset : parsedOffset,
+      lunchDeliveryWindow: deliveryForm.lunchDeliveryWindow.trim() || SYSTEM_CONFIG.lunchDeliveryWindow,
+      dinnerDeliveryWindow: deliveryForm.dinnerDeliveryWindow.trim() || SYSTEM_CONFIG.dinnerDeliveryWindow
     });
   };
 
@@ -221,6 +270,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const weekDays = useMemo(() => getThisWeekDays(systemDate), [systemDate]);
+  // Only used by the Menu tab's "Next week" editor — Orders by Dish,
+  // Delivery, and Payments deliberately stay scoped to weekDays (the
+  // operationally-current week); an order placed for next week simply won't
+  // show up there until that week actually arrives, which is correct for a
+  // kitchen-prep tool.
+  const nextWeekDays = useMemo(() => getThisWeekDays(addDays(systemDate, 7)), [systemDate]);
   const weekDateKeys = useMemo(() => new Set(weekDays.map(d => d.date)), [weekDays]);
   const todayKey = useMemo(() => weekDays.find(d => d.date === systemDate)?.key ?? null, [weekDays, systemDate]);
   const activeDeliveryDay = deliveryDayOverride ?? todayKey ?? weekDays[0].key;
@@ -361,18 +416,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setPaymentDrop(null);
   };
 
-  const startEditCurry = (day: WeekdayKey, curry: CurryOption, service: Service = 'Lunch') => {
-    setEditingCurry({ day, curryId: curry.id, service });
+  const startEditCurry = (day: WeekdayKey, curry: CurryOption, service: Service, weekStart: string) => {
+    setEditingCurry({ day, curryId: curry.id, service, weekStart });
     setEditForm({ name: curry.name, desc: curry.desc, price: String(curry.price) });
   };
 
   const saveCurryEdit = () => {
     if (!editingCurry) return;
-    const menu = editingCurry.service === 'Dinner' ? dinnerMenu : weeklyMenu;
-    const update = editingCurry.service === 'Dinner' ? updateDinnerCurryOption : updateCurryOption;
+    const menu = editingCurry.service === 'Dinner' ? dinnerMenuForWeek(editingCurry.weekStart) : lunchMenuForWeek(editingCurry.weekStart);
+    const update = editingCurry.service === 'Dinner' ? updateDinnerCurryOption : updateLunchCurryOption;
     const existing = menu[editingCurry.day].find(c => c.id === editingCurry.curryId);
     const parsedPrice = parseInt(editForm.price, 10);
-    update(editingCurry.day, editingCurry.curryId, {
+    update(editingCurry.weekStart, editingCurry.day, editingCurry.curryId, {
       name: editForm.name.trim() || existing?.name || '',
       desc: editForm.desc.trim(),
       price: isNaN(parsedPrice) ? (existing?.price || 0) : parsedPrice
@@ -420,7 +475,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       </nav>
 
       <main className="p-6 space-y-6">
-        {tab === 'menu' && (
+        {tab === 'menu' && (() => {
+          const activeMenuDays = activeMenuWeek === 'Next' ? nextWeekDays : weekDays;
+          const activeMenuWeekStart = activeMenuDays[0].date;
+          const activeLunchMenu = lunchMenuForWeek(activeMenuWeekStart);
+          const activeDinnerMenu = dinnerMenuForWeek(activeMenuWeekStart);
+          return (
           <div className="space-y-6">
             <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
               <div className="flex items-start justify-between gap-4">
@@ -440,15 +500,35 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
             </div>
 
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <h3 className="text-sm font-black text-slate-900">Which week are you editing?</h3>
+                <p className="text-xs text-slate-400 font-medium mt-1 max-w-sm">
+                  Customers can now browse and order a week ahead. Set Next week's menu apart here if you don't want it to just repeat This week's — otherwise it follows the same rotation automatically.
+                </p>
+              </div>
+              <div className="flex items-center gap-1 bg-slate-100 rounded-full p-1 shrink-0">
+                {(['This', 'Next'] as WeekChoice[]).map(w => (
+                  <button
+                    key={w}
+                    onClick={() => setActiveMenuWeek(w)}
+                    className={`px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${activeMenuWeek === w ? 'bg-primary text-white' : 'text-slate-500'}`}
+                  >
+                    {w === 'This' ? 'This week' : 'Next week'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-              <h2 className="text-base font-black text-slate-900 mb-4">This Week's Curry Menu — Lunch</h2>
+              <h2 className="text-base font-black text-slate-900 mb-4">{activeMenuWeek === 'Next' ? "Next Week's Curry Menu — Lunch" : "This Week's Curry Menu — Lunch"}</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-                {weekDays.map(d => (
+                {activeMenuDays.map(d => (
                   <div key={d.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                     <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{d.label}</p>
                     <div className="space-y-2">
-                      {weeklyMenu[d.key].map(c => {
-                        const isEditing = editingCurry?.day === d.key && editingCurry.curryId === c.id && editingCurry.service === 'Lunch';
+                      {activeLunchMenu[d.key].map(c => {
+                        const isEditing = editingCurry?.day === d.key && editingCurry.curryId === c.id && editingCurry.service === 'Lunch' && editingCurry.weekStart === activeMenuWeekStart;
                         if (isEditing) {
                           return (
                             <div key={c.id} className="p-3 bg-white rounded-xl border-2 border-primary/30 space-y-2">
@@ -487,7 +567,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               <p className="text-[10px] text-slate-400 truncate">{c.desc}</p>
                             </div>
                             <span className="text-[10px] font-black text-slate-400 shrink-0">{formatCurrency(c.price)}</span>
-                            <button onClick={() => startEditCurry(d.key, c, 'Lunch')} className="p-1 text-slate-300 hover:text-primary shrink-0">
+                            <button onClick={() => startEditCurry(d.key, c, 'Lunch', activeMenuWeekStart)} className="p-1 text-slate-300 hover:text-primary shrink-0">
                               <Edit3 className="size-3.5" />
                             </button>
                           </div>
@@ -504,14 +584,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
             {dinnerEnabled && (
               <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-                <h2 className="text-base font-black text-slate-900 mb-4">This Week's Curry Menu — Dinner</h2>
+                <h2 className="text-base font-black text-slate-900 mb-4">{activeMenuWeek === 'Next' ? "Next Week's Curry Menu — Dinner" : "This Week's Curry Menu — Dinner"}</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-                  {weekDays.map(d => (
+                  {activeMenuDays.map(d => (
                     <div key={d.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                       <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{d.label}</p>
                       <div className="space-y-2">
-                        {dinnerMenu[d.key].map(c => {
-                          const isEditing = editingCurry?.day === d.key && editingCurry.curryId === c.id && editingCurry.service === 'Dinner';
+                        {activeDinnerMenu[d.key].map(c => {
+                          const isEditing = editingCurry?.day === d.key && editingCurry.curryId === c.id && editingCurry.service === 'Dinner' && editingCurry.weekStart === activeMenuWeekStart;
                           if (isEditing) {
                             return (
                               <div key={c.id} className="p-3 bg-white rounded-xl border-2 border-primary/30 space-y-2">
@@ -550,7 +630,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 <p className="text-[10px] text-slate-400 truncate">{c.desc}</p>
                               </div>
                               <span className="text-[10px] font-black text-slate-400 shrink-0">{formatCurrency(c.price)}</span>
-                              <button onClick={() => startEditCurry(d.key, c, 'Dinner')} className="p-1 text-slate-300 hover:text-primary shrink-0">
+                              <button onClick={() => startEditCurry(d.key, c, 'Dinner', activeMenuWeekStart)} className="p-1 text-slate-300 hover:text-primary shrink-0">
                                 <Edit3 className="size-3.5" />
                               </button>
                             </div>
@@ -566,7 +646,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
             )}
           </div>
-        )}
+          );
+        })()}
 
         {tab === 'orders' && (
           <div className="space-y-4">
@@ -715,10 +796,81 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
                     />
                   </div>
+                  <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Support Phone (WhatsApp)</label>
+                      <input
+                        value={brandForm.supportPhone}
+                        onChange={e => setBrandForm(f => ({ ...f, supportPhone: e.target.value }))}
+                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Support Email</label>
+                      <input
+                        value={brandForm.supportEmail}
+                        onChange={e => setBrandForm(f => ({ ...f, supportEmail: e.target.value }))}
+                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                      />
+                    </div>
+                  </div>
                   <button onClick={saveBranding} className="sm:col-span-2 py-2.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest">
                     Save branding
                   </button>
                 </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+              <h3 className="text-sm font-black text-slate-900 mb-1">Order cutoff & delivery windows</h3>
+              <p className="text-xs text-slate-400 font-medium mb-4 max-w-md">
+                Drives the "New here?" guide, Home status card, and lock messages in the Customer App — change these here instead of in code so the app's copy always matches reality.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Order cutoff (shared)</label>
+                  <input
+                    type="time"
+                    value={deliveryForm.cutoffTime}
+                    onChange={e => setDeliveryForm(f => ({ ...f, cutoffTime: e.target.value }))}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Cutoff day</label>
+                  <input
+                    type="number"
+                    step={1}
+                    max={0}
+                    value={deliveryForm.cutoffDayOffset}
+                    onChange={e => setDeliveryForm(f => ({ ...f, cutoffDayOffset: e.target.value }))}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                  <p className="text-[10px] text-slate-400 font-medium mt-1">0 = same day as delivery, -1 = the day before, and so on.</p>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Lunch arrival window</label>
+                  <input
+                    value={deliveryForm.lunchDeliveryWindow}
+                    onChange={e => setDeliveryForm(f => ({ ...f, lunchDeliveryWindow: e.target.value }))}
+                    placeholder="e.g. 11:30–12:00"
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+                {dinnerEnabled && (
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Dinner arrival window</label>
+                    <input
+                      value={deliveryForm.dinnerDeliveryWindow}
+                      onChange={e => setDeliveryForm(f => ({ ...f, dinnerDeliveryWindow: e.target.value }))}
+                      placeholder="e.g. 18:30–19:30"
+                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                )}
+                <button onClick={saveDeliverySettings} className="sm:col-span-4 py-2.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest">
+                  Save cutoff & delivery windows
+                </button>
               </div>
             </div>
 
