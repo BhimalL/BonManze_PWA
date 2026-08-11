@@ -1042,7 +1042,14 @@ export const removeIconEntry = (id: string) => {
 // over the dish's own — a day-slot dish never has a photo-upload UI of its
 // own, so without this a Main's photo would never actually show anywhere
 // it's been placed on the menu.
-export const dishPhotoFor = (dish: CurryOption | string): string => {
+export const dishPhotoFor = (dish: CurryOption | string | undefined | null): string => {
+  // Defensive: a caller can legitimately have no dish to show — e.g. a
+  // Home-screen shortcut tile for a day/week whose Menu Planner slot is
+  // currently empty (nothing planned yet, or freshly cleared) — so this
+  // must degrade to a sensible default rather than crash. Previously
+  // assumed a dish or id string was always passed; not true once an empty
+  // day became a reachable state.
+  if (!dish) return '/dishes/chicken.jpg';
   const id = typeof dish === 'string' ? dish : dish.id;
   let photoUrl = typeof dish === 'string' ? undefined : dish.photoUrl;
   if (typeof dish !== 'string' && dish.mainId) {
@@ -2106,6 +2113,8 @@ interface PersistedState {
   DINNER_DEFAULT_LINK_MAP: Record<string, string>;
   // See MENU_PLANNER_CLEARED_ONCE below.
   MENU_PLANNER_CLEARED_ONCE: boolean;
+  // See DINNER_OVERRIDE_FIX_ONCE below.
+  DINNER_OVERRIDE_FIX_ONCE: boolean;
 }
 
 const persistAll = () => {
@@ -2121,6 +2130,7 @@ const persistAll = () => {
       MEAL_BASES, MEAL_DHALS, MEAL_SALADS, MEAL_BEVERAGES, MEAL_DESSERTS,
       MAIN_DISHES, ICON_LIBRARY, MENU_LIBRARY_MIGRATED, MAIN_DISH_CONTENT_CLEANED,
       LUNCH_DEFAULT_LINK_MAP, DINNER_DEFAULT_LINK_MAP, MENU_PLANNER_CLEARED_ONCE,
+      DINNER_OVERRIDE_FIX_ONCE,
     };
     localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
   } catch (e) {
@@ -2295,6 +2305,34 @@ const clearMenuPlannerOnce = () => {
   persistAll();
 };
 
+// Follow-up, second one-time patch. clearMenuPlannerOnce above was supposed
+// to leave Dinner's This Week/Next Week/Week+2 slots just as empty as
+// Lunch's — same three weekStarts, same setWeekMenu call, same code path —
+// but a live check of an actual installation on 2026-08-11 found Dinner's
+// overrides for two of those three weeks missing entirely (silently
+// falling through to the hardcoded default rotation, which is why Dinner
+// still showed real dish names/prices after the "clear") and the third
+// full of a stale multi-dish override instead of the intended empty one,
+// while all three of Lunch's forced weeks came out correctly empty. The
+// asymmetry didn't reproduce from reading the code — the Lunch/Dinner
+// paths are byte-for-byte identical — so rather than keep chasing a cause
+// that isn't visible in the source, this just re-applies the same
+// forced-empty write to Dinner's three current weeks a second time. Gated
+// by its own flag so it only ever fires once, and only on an installation
+// where the first clear already ran (a fresh install has nothing to fix).
+let DINNER_OVERRIDE_FIX_ONCE = false;
+const fixDinnerOverridesOnce = () => {
+  if (DINNER_OVERRIDE_FIX_ONCE) return;
+  if (!MENU_PLANNER_CLEARED_ONCE) { DINNER_OVERRIDE_FIX_ONCE = true; return; }
+  const EMPTY_WEEK: Record<WeekdayKey, CurryOption[]> = { MON: [], TUE: [], WED: [], THU: [], FRI: [] };
+  [0, 7, 14].forEach(offsetDays => {
+    const weekStart = mondayOfWeek(MOCK_TODAY, offsetDays);
+    setDinnerWeekMenu(weekStart, { ...EMPTY_WEEK });
+  });
+  DINNER_OVERRIDE_FIX_ONCE = true;
+  persistAll();
+};
+
 (() => {
   try {
     const raw = localStorage.getItem(PERSIST_KEY);
@@ -2331,6 +2369,7 @@ const clearMenuPlannerOnce = () => {
     if (saved.LUNCH_DEFAULT_LINK_MAP !== undefined) LUNCH_DEFAULT_LINK_MAP = saved.LUNCH_DEFAULT_LINK_MAP;
     if (saved.DINNER_DEFAULT_LINK_MAP !== undefined) DINNER_DEFAULT_LINK_MAP = saved.DINNER_DEFAULT_LINK_MAP;
     if (saved.MENU_PLANNER_CLEARED_ONCE !== undefined) MENU_PLANNER_CLEARED_ONCE = saved.MENU_PLANNER_CLEARED_ONCE;
+    if (saved.DINNER_OVERRIDE_FIX_ONCE !== undefined) DINNER_OVERRIDE_FIX_ONCE = saved.DINNER_OVERRIDE_FIX_ONCE;
     runMenuLibraryMigrationOnce();
     cleanupMainDishContentOnce();
     // Unconditional (not just on the fresh-install path above) — see
@@ -2341,6 +2380,10 @@ const clearMenuPlannerOnce = () => {
     // for why this only ever runs from this branch (existing installation),
     // never the fresh-install branch above.
     clearMenuPlannerOnce();
+    // See fixDinnerOverridesOnce's comment above — a targeted second pass
+    // that only touches Dinner's three current weeks, once, to correct
+    // what the first clear left inconsistent.
+    fixDinnerOverridesOnce();
   } catch (e) {
     console.warn('BonManzE: failed to restore persisted state', e);
   }
