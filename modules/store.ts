@@ -325,13 +325,17 @@ export interface CurryOption {
   // Which Meal Library Main (see MainDish/MAIN_DISHES below) this day-slot
   // entry was copied from, if any — set automatically when Menu Planner's
   // "Add dish" picks a Main from the Library, left unset for a dish that
-  // predates the Library or was never linked to one. This is a one-time
-  // copy, not a live reference: editing the Main in the Library later never
-  // retroactively changes an already-planned day (same snapshot philosophy
-  // as the weekly menu overrides themselves). It exists so a day's price
-  // can be compared against the Main's *current* general price to detect
-  // a promo (see specialPriceInfo below) without needing to duplicate that
-  // comparison value onto every day-slot copy.
+  // predates the Library or was never linked to one. Name/description and
+  // price stay the day-slot's own value (price is deliberately overridable
+  // per day — see specialPriceInfo — and name/desc are locked-but-frozen in
+  // the Menu Planner's editor). Every Base/Dhal/Salad/Beverage/Dessert
+  // applicable+narrowing setting and the dish photo, however, are resolved
+  // LIVE from the linked Main via resolveDish() below — editing those in
+  // the Library immediately applies to every day that references it,
+  // rather than requiring every already-planned day to be re-picked. This
+  // supersedes an earlier "one-time copy, never live" design for those
+  // fields, which turned out to mean unticking a category in the Library
+  // silently had no effect on days already planned from that Main.
   mainId?: string;
 }
 
@@ -413,6 +417,40 @@ export const specialPriceInfo = (dish: CurryOption): { regularPrice: number } | 
   const main = MAIN_DISHES.find(m => m.id === dish.mainId);
   if (!main || main.price === dish.price) return null;
   return { regularPrice: main.price };
+};
+
+// Resolves a day-slot dish's Meal-Library-governed configuration through
+// its linked Main (mainId), live — every Base/Dhal/Salad/Beverage/Dessert
+// applicable+narrowing field, plus baseGroup, reflects the Main's *current*
+// definition rather than whatever was copied onto the day when it was
+// first picked. Editing a Main in the Library (unticking a category,
+// narrowing its options) now immediately applies everywhere that Main is
+// used, in both Operations and the Customer App meal builder. `price`,
+// `id`, `mainId`, `name`, `desc`, and `emoji` deliberately stay the
+// day-slot's own value — those are either intentionally per-day (price)
+// or already locked-but-frozen elsewhere (name/desc, Menu Planner's
+// editor). A dish with no mainId, or whose linked Main was since deleted,
+// is returned unchanged. Every consumer that checks applicability or
+// option-narrowing (meal builder sections, sectionComplete, the free-item
+// forfeiture check) should look up the dish through this first.
+export const resolveDish = (dish: CurryOption): CurryOption => {
+  if (!dish.mainId) return dish;
+  const main = MAIN_DISHES.find(m => m.id === dish.mainId);
+  if (!main) return dish;
+  return {
+    ...dish,
+    baseGroup: main.baseGroup,
+    baseApplicable: main.baseApplicable,
+    baseOptionIds: main.baseOptionIds,
+    dhalApplicable: main.dhalApplicable,
+    dhalOptionIds: main.dhalOptionIds,
+    saladApplicable: main.saladApplicable,
+    saladOptionIds: main.saladOptionIds,
+    beverageApplicable: main.beverageApplicable,
+    beverageOptionIds: main.beverageOptionIds,
+    dessertApplicable: main.dessertApplicable,
+    dessertOptionIds: main.dessertOptionIds,
+  };
 };
 
 // Narrows a full add-on catalog (MEAL_DHALS, MEAL_SALADS, MEAL_BEVERAGES,
@@ -992,10 +1030,18 @@ export const removeIconEntry = (id: string) => {
 // win) or a bare id string (for call sites that only ever had an id on
 // hand, e.g. a historical order line's itemId) — every existing call site
 // that passes just an id keeps working unchanged, falling back to the
-// protein-family guess exactly as before.
+// protein-family guess exactly as before. When a full dish is linked to a
+// Meal Library Main (mainId), the Main's own uploaded photo takes priority
+// over the dish's own — a day-slot dish never has a photo-upload UI of its
+// own, so without this a Main's photo would never actually show anywhere
+// it's been placed on the menu.
 export const dishPhotoFor = (dish: CurryOption | string): string => {
   const id = typeof dish === 'string' ? dish : dish.id;
-  const photoUrl = typeof dish === 'string' ? undefined : dish.photoUrl;
+  let photoUrl = typeof dish === 'string' ? undefined : dish.photoUrl;
+  if (typeof dish !== 'string' && dish.mainId) {
+    const main = MAIN_DISHES.find(m => m.id === dish.mainId);
+    if (main?.photoUrl) photoUrl = main.photoUrl;
+  }
   if (photoUrl) return photoUrl;
   if (['fsh', 'prn', 'shp'].includes(id)) return '/dishes/fish.jpg';
   if (['veg', 'len', 'pan'].includes(id)) return '/dishes/veg.jpg';
@@ -1953,6 +1999,16 @@ export const deleteCustomerGroup = (id: string) => {
 
 const PERSIST_KEY = 'bonmanze_rms_state_v1';
 
+// Whether the one-time Menu Planner → Meal Library migration (see
+// migrateMenuToLibrary below) has already run on this installation.
+// Persisted so it runs itself automatically, exactly once, right after
+// hydration — the admin "Import from existing menu" button has been
+// removed now that this is automatic; this flag is what replaces it. A
+// fresh browser profile/origin (empty localStorage) or one where this
+// flag never got saved will auto-run the migration on next load, same as
+// clicking the old button once used to do.
+let MENU_LIBRARY_MIGRATED = false;
+
 interface PersistedState {
   MOCK_TODAY: string;
   PAYMENT_METHODS: PaymentMethod[];
@@ -1990,6 +2046,8 @@ interface PersistedState {
   MAIN_DISHES: MainDish[];
   // Icon Library — see ICON_LIBRARY above.
   ICON_LIBRARY: IconEntry[];
+  // See MENU_LIBRARY_MIGRATED above.
+  MENU_LIBRARY_MIGRATED: boolean;
 }
 
 const persistAll = () => {
@@ -2003,7 +2061,7 @@ const persistAll = () => {
       LUNCH_MENU_OVERRIDES: lunchMenuStore.getSnapshot(),
       DINNER_MENU_OVERRIDES: dinnerMenuStore.getSnapshot(),
       MEAL_BASES, MEAL_DHALS, MEAL_SALADS, MEAL_BEVERAGES, MEAL_DESSERTS,
-      MAIN_DISHES, ICON_LIBRARY,
+      MAIN_DISHES, ICON_LIBRARY, MENU_LIBRARY_MIGRATED,
     };
     localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
   } catch (e) {
@@ -2034,10 +2092,21 @@ export const clearPersistedState = () => {
   try { localStorage.removeItem(PERSIST_KEY); } catch (e) { /* ignore */ }
 };
 
+// Runs the Menu Planner → Meal Library migration exactly once per
+// installation (see MENU_LIBRARY_MIGRATED above) and immediately persists
+// the result, so a page reload right after never re-runs it or loses it.
+// No-ops if the flag is already set.
+const runMenuLibraryMigrationOnce = () => {
+  if (MENU_LIBRARY_MIGRATED) return;
+  migrateMenuToLibrary();
+  MENU_LIBRARY_MIGRATED = true;
+  persistAll();
+};
+
 (() => {
   try {
     const raw = localStorage.getItem(PERSIST_KEY);
-    if (!raw) return;
+    if (!raw) { runMenuLibraryMigrationOnce(); return; }
     const saved: Partial<PersistedState> = JSON.parse(raw);
     if (saved.MOCK_TODAY !== undefined) MOCK_TODAY = saved.MOCK_TODAY;
     if (saved.PAYMENT_METHODS !== undefined) PAYMENT_METHODS = saved.PAYMENT_METHODS;
@@ -2065,6 +2134,8 @@ export const clearPersistedState = () => {
     if (saved.MEAL_DESSERTS !== undefined) MEAL_DESSERTS = saved.MEAL_DESSERTS;
     if (saved.MAIN_DISHES !== undefined) MAIN_DISHES = saved.MAIN_DISHES;
     if (saved.ICON_LIBRARY !== undefined) ICON_LIBRARY = saved.ICON_LIBRARY;
+    if (saved.MENU_LIBRARY_MIGRATED !== undefined) MENU_LIBRARY_MIGRATED = saved.MENU_LIBRARY_MIGRATED;
+    runMenuLibraryMigrationOnce();
   } catch (e) {
     console.warn('BonManzE: failed to restore persisted state', e);
   }

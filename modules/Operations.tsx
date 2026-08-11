@@ -106,7 +106,6 @@ import {
   updateMainDish,
   removeMainDish,
   specialPriceInfo,
-  migrateMenuToLibrary,
   IconEntry,
   subscribeToIconLibrary,
   addIconEntry,
@@ -251,13 +250,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Meal Library Mains — subscribed the same way the five add-on catalogs
   // are below.
   const [mainDishes, setMainDishes] = useState<MainDish[]>([]);
-
-  // One-time "Import from existing menu" — result of the last run, shown
-  // inline under the button rather than a blocking alert(), same "quiet
-  // inline feedback" convention as csvError/logoError elsewhere. Safe to
-  // click more than once: migrateMenuToLibrary() skips names that already
-  // have a Main, so a second run only reports what's new (usually nothing).
-  const [libraryImportResult, setLibraryImportResult] = useState<{ created: string[]; skipped: string[]; linked: number } | null>(null);
 
   // Day-slot dish editing is back to a lightweight inline form (name/desc/
   // price only) — base/dhal/salad/beverage/dessert settings now live on the
@@ -670,11 +662,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   // --- Meal Library: Main add/edit/remove ---
-
-  const handleImportFromMenu = () => {
-    const result = migrateMenuToLibrary();
-    setLibraryImportResult(result);
-  };
+  // The one-time Menu Planner → Library migration (migrateMenuToLibrary in
+  // store.ts) now runs itself automatically on first load — see
+  // MENU_LIBRARY_MIGRATED / runMenuLibraryMigrationOnce there — so there's
+  // no admin button here to trigger it manually anymore.
 
   const startAddMain = () => {
     setMainEditor({ mode: 'add' });
@@ -1327,7 +1318,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     }
                     return (
                       <div key={c.id} className="flex items-center gap-2">
-                        <img src={dishPhotoFor(c.id)} alt={c.name} className="size-9 rounded-lg object-cover shrink-0" />
+                        <img src={dishPhotoFor(c)} alt={c.name} className="size-9 rounded-lg object-cover shrink-0" />
                         <div className="min-w-0 flex-1">
                           <p className="text-xs font-bold text-slate-800 truncate">{c.emoji} {c.name}</p>
                           <p className="text-[10px] text-slate-400 truncate">{c.desc}</p>
@@ -1538,13 +1529,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={handleImportFromMenu}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
-                title="Create a Main for every distinct dish name already on the Menu Planner"
-              >
-                <Upload className="size-3.5" /> Import from existing menu
-              </button>
-              <button
                 onClick={startAddMain}
                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black bg-primary text-white hover:bg-primary/90 transition-colors shadow-sm"
               >
@@ -1553,29 +1537,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </div>
           </div>
 
-          {libraryImportResult && (
-            <div className="mb-4 p-3.5 bg-primary/5 border border-primary/20 rounded-2xl flex items-start justify-between gap-3">
-              <p className="text-[11px] font-bold text-slate-600 leading-relaxed">
-                {libraryImportResult.created.length === 0 ? (
-                  <>Nothing new to import — every dish name already has a Main.</>
-                ) : (
-                  <>Added {libraryImportResult.created.length} Main{libraryImportResult.created.length === 1 ? '' : 's'}: {libraryImportResult.created.join(', ')}.</>
-                )}
-                {libraryImportResult.skipped.length > 0 && (
-                  <> Skipped {libraryImportResult.skipped.length} already in the Library: {libraryImportResult.skipped.join(', ')}.</>
-                )}
-                {' '}{libraryImportResult.linked > 0 ? `Linked ${libraryImportResult.linked} existing Menu Planner dish${libraryImportResult.linked === 1 ? '' : 'es'} to their Main.` : 'No existing Menu Planner dishes needed linking.'}
-                {' '}Prices/descriptions came from each dish's first appearance in the default rotation (or, failing that, the earliest saved week) — review and adjust below.
-              </p>
-              <button onClick={() => setLibraryImportResult(null)} className="p-1 text-slate-400 hover:text-slate-600 shrink-0"><X className="size-3.5" /></button>
-            </div>
-          )}
-
           {mainDishes.length === 0 ? (
             <div className="text-center py-14 border-2 border-dashed border-slate-200 rounded-2xl">
               <ChefHat className="size-8 text-slate-300 mx-auto mb-2" />
               <p className="text-sm font-bold text-slate-500">No Mains yet.</p>
-              <p className="text-xs text-slate-400 font-medium mt-1">Add your first Main, or use "Import from existing menu" above to seed the Library from what's already on the Menu Planner.</p>
+              <p className="text-xs text-slate-400 font-medium mt-1">Add your first Main to seed the Library.</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

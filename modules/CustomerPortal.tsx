@@ -53,6 +53,7 @@ import {
   dishBeverageApplicable,
   dishDessertApplicable,
   filterAddOnOptions,
+  resolveDish,
   dishPhotoFor,
   CREOLE_PHRASES,
   SYSTEM_CONFIG,
@@ -360,13 +361,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     setBuilderSel({ [field]: id } as Partial<MealSelection>);
   };
 
-  // Dhal and salad are included at no extra cost (unlike beverage/dessert,
-  // which are paid add-ons) — this confirms once, at commit time, listing
-  // every applicable free category the customer is about to forfeit, so
-  // nothing free is lost by accident without one clear final chance to go
-  // back. `apply` is the real commit (performCommit) to run once confirmed;
-  // when nothing applicable is being skipped, commitBuilder below calls
-  // performCommit directly and this never appears.
+  // Any applicable category left on "none" that has at least one free
+  // (price 0/undefined) option available — Dhal/Salad usually, but also
+  // Beverage/Dessert when the specific dish offers a free item there (e.g.
+  // Mineral Water, Coconut Cake) — gets confirmed once, at commit time,
+  // listing everything the customer is about to forfeit, so nothing free
+  // is lost by accident without one clear final chance to go back. `apply`
+  // is the real commit (performCommit) to run once confirmed; when nothing
+  // free is being skipped, commitBuilder below calls performCommit
+  // directly and this never appears.
   const [forfeitConfirm, setForfeitConfirm] = useState<{ labels: string[]; apply: () => void } | null>(null);
 
   const [payTarget, setPayTarget] = useState<{
@@ -534,7 +537,12 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // paged wizard.
   const selectCurry = (id: string) => setBuilder(b => {
     if (!b) return b;
-    const dish = menuFor(b.service, b.weekStart)[b.day.key].find(x => x.id === id);
+    // Resolved through its linked Meal Library Main (if any) — see
+    // resolveDish in store.ts — so applicable/narrowing checks below always
+    // reflect the Main's *current* configuration, not a frozen copy from
+    // whenever this dish was placed on the Menu Planner.
+    const rawDish = menuFor(b.service, b.weekStart)[b.day.key].find(x => x.id === id);
+    const dish = rawDish ? resolveDish(rawDish) : undefined;
     // A previous selection stays only if it's still in the newly-picked
     // dish's *allowed* set — covers both "different base group entirely"
     // (old behavior) and "same group, but this dish narrowed to a specific
@@ -574,14 +582,23 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // at all (see the Section 3 JSX below), so it would otherwise never
   // leave '' and permanently block the Add-to-order button.
   const sectionComplete = (b: NonNullable<typeof builder>) => {
-    const dish = menuFor(b.service, b.weekStart)[b.day.key].find(x => x.id === b.sel.curryId);
+    const rawDish = menuFor(b.service, b.weekStart)[b.day.key].find(x => x.id === b.sel.curryId);
+    const dish = rawDish ? resolveDish(rawDish) : undefined;
     const dhalOk = !dish || !dishDhalApplicable(dish) || b.sel.dhalId !== '';
     const saladOk = !dish || !dishSaladApplicable(dish) || b.sel.saladId !== '';
+    // A dish can also have Base *applicable* but narrowed down to zero
+    // actual catalog entries (every specific item unticked, or the global
+    // Base catalog itself is empty) — Base has no "None" escape valve like
+    // Dhal/Salad do, so without this check there'd be nothing to pick and
+    // Add-to-order would be permanently blocked. Treat "nothing to offer"
+    // the same as "not applicable".
+    const baseOptionCount = dish ? filterAddOnOptions(MEAL_BASES, dishBaseOptionIds(dish, MEAL_BASES)).length : MEAL_BASES.length;
     return {
       1: !!b.sel.curryId,
-      // A dish with Base turned off entirely doesn't need one picked —
-      // same "inapplicable category is auto-complete" rule as Dhal/Salad.
-      2: !dish || !dishBaseApplicable(dish) || !!b.sel.baseId,
+      // A dish with Base turned off entirely (or with nothing left to
+      // offer after narrowing) doesn't need one picked — same
+      // "inapplicable category is auto-complete" rule as Dhal/Salad.
+      2: !dish || !dishBaseApplicable(dish) || baseOptionCount === 0 || !!b.sel.baseId,
       3: dhalOk && saladOk
     };
   };
@@ -622,17 +639,25 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   };
 
   // Fired by the "Add to order"/"Save changes" button. Checks every
-  // *applicable* free category (Dhal/Salad only — Beverage/Dessert are paid
-  // add-ons, never free, so never part of this) for a "none" selection and,
-  // if any are found, opens one consolidated confirmation listing all of
-  // them instead of committing immediately. Commits straight away, exactly
-  // as before, when nothing applicable is being skipped.
+  // *applicable* category left on "none"/skipped and flags it if that
+  // category actually has a free (price 0/undefined) option available to
+  // this dish — data-driven rather than a hardcoded "Dhal/Salad are always
+  // free, Beverage/Dessert are always paid" assumption, since individual
+  // catalog items can be free either way (e.g. Mineral Water or Coconut
+  // Cake at Rs 0 while other beverages/desserts carry a price). Opens one
+  // consolidated confirmation listing everything forfeited instead of
+  // committing immediately; commits straight away when nothing free is
+  // being left behind.
   const commitBuilder = () => {
     if (!builder) return;
-    const dish = menuFor(builder.service, builder.weekStart)[builder.day.key].find(x => x.id === builder.sel.curryId);
+    const rawDish = menuFor(builder.service, builder.weekStart)[builder.day.key].find(x => x.id === builder.sel.curryId);
+    const dish = rawDish ? resolveDish(rawDish) : undefined;
+    const hasFreeOption = (opts: { price?: number }[]) => opts.some(o => !o.price);
     const forfeited: string[] = [];
-    if (dish && dishDhalApplicable(dish) && builder.sel.dhalId === 'none') forfeited.push('Dhal');
-    if (dish && dishSaladApplicable(dish) && builder.sel.saladId === 'none') forfeited.push('Salad');
+    if (dish && dishDhalApplicable(dish) && builder.sel.dhalId === 'none' && hasFreeOption(filterAddOnOptions(MEAL_DHALS, dish.dhalOptionIds))) forfeited.push('Dhal');
+    if (dish && dishSaladApplicable(dish) && builder.sel.saladId === 'none' && hasFreeOption(filterAddOnOptions(MEAL_SALADS, dish.saladOptionIds))) forfeited.push('Salad');
+    if (dish && dishBeverageApplicable(dish) && builder.sel.beverageId === 'none' && hasFreeOption(filterAddOnOptions(MEAL_BEVERAGES, dish.beverageOptionIds))) forfeited.push('Beverage');
+    if (dish && dishDessertApplicable(dish) && builder.sel.dessertId === 'none' && hasFreeOption(filterAddOnOptions(MEAL_DESSERTS, dish.dessertOptionIds))) forfeited.push('Dessert');
     if (forfeited.length > 0) {
       setForfeitConfirm({ labels: forfeited, apply: performCommit });
     } else {
@@ -1860,8 +1885,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       {/* --- MEAL BUILDER --- */}
       {builder && (() => {
         const complete = sectionComplete(builder);
-        const selectedCurry = menuFor(builder.service, builder.weekStart)[builder.day.key].find(c => c.id === builder.sel.curryId);
+        // Resolved through the linked Meal Library Main — see resolveDish
+        // in store.ts — so every applicable/narrowing check below (Base
+        // visibility, Dhal/Salad/Beverage/Dessert ChipRows) reflects the
+        // Main's current configuration live, not a frozen copy from
+        // whenever this dish was placed on the Menu Planner.
+        const rawSelectedCurry = menuFor(builder.service, builder.weekStart)[builder.day.key].find(c => c.id === builder.sel.curryId);
+        const selectedCurry = rawSelectedCurry ? resolveDish(rawSelectedCurry) : undefined;
         const selectedBase = MEAL_BASES.find(b => b.id === builder.sel.baseId);
+        const baseOptions = filterAddOnOptions(MEAL_BASES, selectedCurry ? dishBaseOptionIds(selectedCurry, MEAL_BASES) : undefined);
         const extrasList = [
           builder.sel.dhalId && builder.sel.dhalId !== 'none' ? MEAL_DHALS.find(x => x.id === builder.sel.dhalId)?.name : null,
           builder.sel.saladId && builder.sel.saladId !== 'none' ? MEAL_SALADS.find(x => x.id === builder.sel.saladId)?.name : null,
@@ -1927,7 +1959,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 </div>
               </SectionCard>
 
-              {(!selectedCurry || dishBaseApplicable(selectedCurry)) && (
+              {(!selectedCurry || (dishBaseApplicable(selectedCurry) && baseOptions.length > 0)) && (
               <SectionCard
                 index={2} title="Choose your base"
                 isOpen={builder.openSection === 2} isComplete={complete[2]}
@@ -1935,7 +1967,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 onToggle={() => toggleSection(2)}
               >
                 <div className="grid grid-cols-2 gap-2">
-                  {filterAddOnOptions(MEAL_BASES, selectedCurry ? dishBaseOptionIds(selectedCurry, MEAL_BASES) : undefined).map(b => (
+                  {baseOptions.map(b => (
                     <button key={b.id} onClick={() => selectBase(b.id)} className={`p-4 rounded-2xl border-2 transition-all active:scale-[0.98] ${builder.sel.baseId === b.id ? 'border-primary bg-primary/[0.04] ring-4 ring-primary/10 shadow-[0_0_20px_rgba(62,125,34,0.08)]' : 'border-transparent bg-[#F4EFE4]'}`}>
                       <p className="text-2xl mb-1">{b.emoji}</p>
                       <p className="text-xs font-bold text-slate-900">{b.name}</p>
@@ -1962,10 +1994,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               >
                 <div className="space-y-3">
                   {(!selectedCurry || dishDhalApplicable(selectedCurry)) && (
-                    <ChipRow label="🫘 Dhal" options={filterAddOnOptions(MEAL_DHALS, selectedCurry?.dhalOptionIds)} selected={builder.sel.dhalId} onSelect={id => requestExtraChange('dhalId', id)} noneLabel="No dhal" />
+                    <ChipRow label="🫘 Dhal" options={filterAddOnOptions(MEAL_DHALS, selectedCurry?.dhalOptionIds)} selected={builder.sel.dhalId} onSelect={id => requestExtraChange('dhalId', id)} noneLabel="None" />
                   )}
                   {(!selectedCurry || dishSaladApplicable(selectedCurry)) && (
-                    <ChipRow label="🥗 Salad" options={filterAddOnOptions(MEAL_SALADS, selectedCurry?.saladOptionIds)} selected={builder.sel.saladId} onSelect={id => requestExtraChange('saladId', id)} noneLabel="No salad" />
+                    <ChipRow label="🥗 Salad" options={filterAddOnOptions(MEAL_SALADS, selectedCurry?.saladOptionIds)} selected={builder.sel.saladId} onSelect={id => requestExtraChange('saladId', id)} noneLabel="None" />
                   )}
                   {(!selectedCurry || dishBeverageApplicable(selectedCurry)) && (
                     <ChipRow label="🥤 Beverage" options={filterAddOnOptions(MEAL_BEVERAGES, selectedCurry?.beverageOptionIds)} selected={builder.sel.beverageId} onSelect={id => setBuilderSel({ beverageId: id })} noneLabel="None" showPrice />
