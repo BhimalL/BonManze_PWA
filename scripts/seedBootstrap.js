@@ -40,9 +40,9 @@ const db = getFirestore();
 const auth = getAuth();
 
 // ---- Edit these before running if you want different values ----
-const OWNER_EMAIL = 'bhimal@bonmanze.local';
-const OWNER_PASSWORD = 'ChangeMe123!'; // local emulator only — not a real account, change freely
-const OWNER_NAME = 'Bhimal';
+const OWNER_EMAIL = 'bhimalonly@gmail.com';
+const OWNER_PASSWORD = 'ChangeMe123!'; // placeholder — change this by hand in the emulator's Auth UI after running
+const OWNER_NAME = 'BhimalL';
 // -------------------------------------------------------------------
 
 const ALL_PERMISSIONS = {
