@@ -1,12 +1,186 @@
 rules_version = '2';
 
-// Starting point: locked down by default. No collections exist yet — rules
-// get opened up per-collection, deliberately, as the schema is designed and
-// reviewed (see BonManzE_Working_Agreement.md), never left permissive as a
-// placeholder. "demo-bonmanze" (see .firebaserc) means this only ever
-// applies to the local emulator right now, not a real Firebase project.
+// BonManzE v1 Firestore security rules — written against
+// BonManzE_Firestore_Schema.md (Claude Project doc). "demo-bonmanze" (see
+// .firebaserc) means this only ever applies to the local emulator right
+// now, not a real Firebase project.
+//
+// Two kinds of signed-in user, told apart by which top-level doc exists for
+// their UID: customers/{uid} or staff/{uid}. Staff actions are gated by a
+// configurable roles/{roleId} permission map (see the Roles & Permissions
+// Settings tab) rather than a fixed role enum — isStaffAllowed() below is
+// the one place that logic lives, so every collection's rules stay short.
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ---- Shared helpers ----
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isCustomer(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function staffDoc() {
+      return get(/databases/$(database)/documents/staff/$(request.auth.uid));
+    }
+
+    function isActiveStaff() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/staff/$(request.auth.uid))
+        && staffDoc().data.active == true;
+    }
+
+    // Resolves the signed-in staff member's role live (never trust a copy —
+    // see the schema doc's note on why roleId stays a pointer, not a
+    // denormalized permission snapshot) and checks a single permission key.
+    function isStaffAllowed(permissionKey) {
+      return isActiveStaff()
+        && get(/databases/$(database)/documents/roles/$(staffDoc().data.roleId))
+             .data.permissions.get(permissionKey, false) == true;
+    }
+
+    // ---- customers/{uid} ----
+    // A customer reads/writes only their own doc. Financial/loyalty fields
+    // (points, storeCredit, tier, ltv) are NOT directly writable by anyone
+    // here — those only ever change via a Cloud Function using the Admin
+    // SDK, which bypasses these rules entirely. Staff with manageCustomers
+    // can read/update the directory (e.g. fixing a typo'd address), but the
+    // same financial-field lockout applies to them too.
+    match /customers/{uid} {
+      allow read: if isCustomer(uid) || isStaffAllowed('manageCustomers');
+      allow create: if isCustomer(uid)
+        && !('points' in request.resource.data)
+        && !('storeCredit' in request.resource.data)
+        && !('tier' in request.resource.data)
+        && !('ltv' in request.resource.data);
+      allow update: if (isCustomer(uid) || isStaffAllowed('manageCustomers'))
+        && request.resource.data.points == resource.data.points
+        && request.resource.data.storeCredit == resource.data.storeCredit
+        && request.resource.data.tier == resource.data.tier
+        && request.resource.data.ltv == resource.data.ltv;
+      allow delete: if false; // no hard-delete from the client, ever
+    }
+
+    // ---- usernames/{username} ----
+    // Must be readable while signed out (the login screen resolves a typed
+    // username to an email before auth happens) — see the schema doc's
+    // trade-off note. Only the account it points at may claim it, and only
+    // once; no renaming in v1.
+    match /usernames/{username} {
+      allow get: if true;
+      allow list: if false; // no enumerating the collection, only exact-id lookups
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.uid;
+      allow update, delete: if false;
+    }
+
+    // ---- staff/{uid} ----
+    // Only manageRoles can create/edit staff records or reassign roles —
+    // this is the one place a privilege-escalation path would open up if
+    // it were folded into a broader permission instead of its own key.
+    match /staff/{uid} {
+      allow read: if request.auth.uid == uid || isStaffAllowed('manageRoles');
+      allow write: if isStaffAllowed('manageRoles');
+    }
+
+    // ---- roles/{roleId} ----
+    match /roles/{roleId} {
+      allow read: if isActiveStaff();
+      allow write: if isStaffAllowed('manageRoles');
+    }
+
+    // ---- auditLog/{id} ----
+    // Append-only from the app's point of view: written by Cloud Functions
+    // (Admin SDK, bypasses these rules) when they perform the action being
+    // logged, plus direct writes from staff with manageConfig for config
+    // changes made straight from the client. Never editable or deletable
+    // once written — that's the point of an audit log.
+    match /auditLog/{id} {
+      allow read: if isStaffAllowed('manageConfig') || isStaffAllowed('manageOrders');
+      allow create: if isStaffAllowed('manageConfig');
+      allow update, delete: if false;
+    }
+
+    // ---- Meal Library / Menu Planner (manageMenu) ----
+    match /mains/{mainId} {
+      allow read: if true; // public menu content
+      allow write: if isStaffAllowed('manageMenu');
+    }
+    match /menuWeeks/{weekStart} {
+      allow read: if true;
+      allow write: if isStaffAllowed('manageMenu');
+    }
+    match /menuDefaults/{docId} {
+      allow read: if true;
+      allow write: if isStaffAllowed('manageMenu');
+    }
+    match /mealBases/{docId} {
+      allow read: if true;
+      allow write: if isStaffAllowed('manageMenu');
+    }
+    match /mealDhals/{docId} {
+      allow read: if true;
+      allow write: if isStaffAllowed('manageMenu');
+    }
+    match /mealSalads/{docId} {
+      allow read: if true;
+      allow write: if isStaffAllowed('manageMenu');
+    }
+    match /mealBeverages/{docId} {
+      allow read: if true;
+      allow write: if isStaffAllowed('manageMenu');
+    }
+    match /mealDesserts/{docId} {
+      allow read: if true;
+      allow write: if isStaffAllowed('manageMenu');
+    }
+    match /iconLibrary/{docId} {
+      allow read: if isActiveStaff(); // admin-only picker content, not customer-facing
+      allow write: if isStaffAllowed('manageMenu');
+    }
+
+    // ---- Config (manageConfig) ----
+    match /config/{docId} {
+      allow read: if true; // customers need cutoff/delivery-window/branding copy
+      allow write: if isStaffAllowed('manageConfig');
+    }
+    match /loyaltyTiers/{docId} {
+      allow read: if true; // Customer App shows tier perks
+      allow write: if isStaffAllowed('manageConfig');
+    }
+    match /customerGroups/{docId} {
+      allow read: if isActiveStaff(); // internal segmentation, not customer-facing
+      allow write: if isStaffAllowed('manageConfig');
+    }
+
+    // ---- orders/{orderId} and its items subcollection (manageOrders) ----
+    // A customer may read/create their own orders but never edit one after
+    // the fact (no client-side changing of totals/status) — everything an
+    // order needs to become after checkout (recomputed total, status
+    // transitions) is a Cloud Function's job, not a client write.
+    match /orders/{orderId} {
+      allow read: if isCustomer(resource.data.customerId) || isStaffAllowed('manageOrders');
+      allow create: if isCustomer(request.resource.data.customerId);
+      allow update, delete: if false;
+
+      match /items/{itemId} {
+        allow read: if isCustomer(resource.data.customerId) || isStaffAllowed('manageOrders');
+        allow create: if isCustomer(request.resource.data.customerId);
+        // Staff may update status/paymentStatus fields (mark delivered /
+        // mark paid) — never price/qty/name, and never from the customer.
+        allow update: if isStaffAllowed('manageOrders')
+          && request.resource.data.price == resource.data.price
+          && request.resource.data.qty == resource.data.qty
+          && request.resource.data.name == resource.data.name
+          && request.resource.data.customerId == resource.data.customerId;
+        allow delete: if false;
+      }
+    }
+
+    // Everything else stays locked down by default — same starting
+    // posture as before any collection existed.
     match /{document=**} {
       allow read, write: if false;
     }
