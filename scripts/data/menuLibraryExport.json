@@ -1,0 +1,431 @@
+{
+  "MAIN_DISHES": [
+    {
+      "id": "main-msowxy9r-2apo-1",
+      "emoji": "\ud83e\udd66",
+      "name": "Veg Curry",
+      "desc": "A comforting Creole-spiced vegetable curry with seasonal greens, carrots, and pumpkin, gently simmered for a light, fully vegan lunch.",
+      "price": 130,
+      "baseApplicable": true,
+      "dhalApplicable": false,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true,
+      "baseOptionIds": [
+        "wrice",
+        "brice",
+        "quin",
+        "cous"
+      ],
+      "beverageOptionIds": [
+        "alouda",
+        "water"
+      ],
+      "dessertOptionIds": [
+        "gateau",
+        "cake"
+      ]
+    },
+    {
+      "id": "main-msowxy9t-n5uf-2",
+      "emoji": "\ud83e\udd66",
+      "name": "Veg Curry",
+      "desc": "Roasted seasonal vegetables finished in a fuller evening curry sauce \u2014 heartier than the lunch version, built for dinner.",
+      "price": 155,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxy9v-b399-3",
+      "emoji": "\ud83c\udf57",
+      "name": "Chicken Curry",
+      "desc": "Our everyday home-style Mauritian chicken curry, simmered in a fragrant onion-and-tomato masala the way it's cooked in most Mauritian kitchens.",
+      "price": 150,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxy9w-9sev-4",
+      "emoji": "\ud83c\udf57",
+      "name": "Chicken Curry",
+      "desc": "Chicken finished with butter and cream for a richer, restaurant-style evening curry.",
+      "price": 180,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxy9y-4lba-5",
+      "emoji": "\ud83d\udc1f",
+      "name": "Fish Curry",
+      "desc": "Fresh local fish gently poached in a light, ginger-forward curry sauce, kept simple so the fish stays the star of the plate.",
+      "price": 190,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxya0-f4w3-6",
+      "emoji": "\ud83d\udc1f",
+      "name": "Fish Curry",
+      "desc": "Fish grilled first, then glazed in a tangy tamarind sauce for extra depth \u2014 our dinner take on the classic.",
+      "price": 220,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxya2-g6u5-7",
+      "emoji": "\ud83e\udd66",
+      "name": "Lentil Curry",
+      "desc": "A warming, fully vegan lentil curry finished with roasted turmeric and cumin \u2014 a lighter option that still fills you up.",
+      "price": 125,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxya3-rhfs-8",
+      "emoji": "\ud83e\udd66",
+      "name": "Lentil Curry",
+      "desc": "A five-lentil dal, ghee-tempered for extra richness \u2014 a more indulgent evening version of the lunch dal.",
+      "price": 150,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxya4-ilea-9",
+      "emoji": "\ud83e\udd90",
+      "name": "Prawn Curry",
+      "desc": "Plump prawns in a coconut-and-lemongrass curry, balancing sweetness and citrus for a bright midday plate.",
+      "price": 210,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxya6-ynl5-10",
+      "emoji": "\ud83e\udd90",
+      "name": "Prawn Curry",
+      "desc": "Prawns finished in garlic butter with a chilli kick \u2014 a bolder, more indulgent evening preparation.",
+      "price": 250,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxya7-eft9-11",
+      "emoji": "\ud83e\udd69",
+      "name": "Beef Curry",
+      "desc": "Beef slow-cooked until tender in a rich Creole tomato sauce, built for a heartier lunch.",
+      "price": 220,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxya8-7sl5-12",
+      "emoji": "\ud83e\udd69",
+      "name": "Beef Curry",
+      "desc": "Beef slow-cooked overnight for maximum tenderness, in a rich, deeply reduced gravy.",
+      "price": 240,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxyaa-zmsz-13",
+      "emoji": "\ud83e\udd90",
+      "name": "Shrimp Curry",
+      "desc": "Small shrimp in a mild coconut cream curry \u2014 gentle spicing, easy on the palate.",
+      "price": 205,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxyab-yojo-14",
+      "emoji": "\ud83e\udd90",
+      "name": "Shrimp Curry",
+      "desc": "Shrimp in a coconut cream curry lifted with fresh curry leaf, a more fragrant evening variation.",
+      "price": 235,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxyac-nkby-15",
+      "emoji": "\ud83e\uddc0",
+      "name": "Paneer Curry",
+      "desc": "Soft paneer cubes in a spinach curry with a touch of spice \u2014 a vegetarian favourite with real bite.",
+      "price": 160,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxyae-pna0-16",
+      "emoji": "\ud83e\uddc0",
+      "name": "Paneer Curry",
+      "desc": "Paneer in a cashew-and-tomato sauce \u2014 creamier and richer than the lunch version, made for dinner.",
+      "price": 175,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msowxyaf-pnqk-17",
+      "emoji": "\ud83c\udf57",
+      "name": "Chicken Curry",
+      "desc": "Home-style Mauritian",
+      "price": 150,
+      "baseApplicable": true,
+      "dhalApplicable": true,
+      "saladApplicable": true,
+      "beverageApplicable": true,
+      "dessertApplicable": true
+    },
+    {
+      "id": "main-msq22wrd-f3q0",
+      "emoji": "\ud83c\udf5e",
+      "name": "DiPain Sausice",
+      "desc": "Grilled DiPain Sausice",
+      "price": 100,
+      "cost": 50,
+      "baseApplicable": true,
+      "baseOptionIds": [
+        "base-msq23g73-yq2h",
+        "base-msq23rg3-ecwl"
+      ],
+      "dhalApplicable": false,
+      "saladApplicable": false,
+      "beverageApplicable": true,
+      "dessertApplicable": true,
+      "dessertOptionIds": [
+        "gateau",
+        "cake"
+      ],
+      "_hadPhoto": true
+    }
+  ],
+  "LUNCH_MENU_OVERRIDES": {
+    "2026-08-17": {
+      "MON": [],
+      "TUE": [],
+      "WED": [],
+      "THU": [],
+      "FRI": []
+    },
+    "2026-08-10": {
+      "MON": [
+        {
+          "id": "dish-msq1xmxl-jnj0",
+          "emoji": "\ud83c\udf57",
+          "name": "Chicken Curry",
+          "desc": "Our everyday home-style Mauritian chicken curry, simmered in a fragrant onion-and-tomato masala the way it's cooked in most Mauritian kitchens.",
+          "price": 120,
+          "baseApplicable": true,
+          "dhalApplicable": true,
+          "saladApplicable": true,
+          "beverageApplicable": true,
+          "dessertApplicable": true,
+          "mainId": "main-msowxy9v-b399-3"
+        },
+        {
+          "id": "dish-msq1xv0g-b5pb",
+          "emoji": "\ud83d\udc1f",
+          "name": "Fish Curry",
+          "desc": "Fresh local fish gently poached in a light, ginger-forward curry sauce, kept simple so the fish stays the star of the plate.",
+          "price": 190,
+          "baseApplicable": true,
+          "dhalApplicable": true,
+          "saladApplicable": true,
+          "beverageApplicable": true,
+          "dessertApplicable": true,
+          "mainId": "main-msowxy9y-4lba-5"
+        }
+      ],
+      "TUE": [
+        {
+          "id": "dish-msq2610u-wv2r",
+          "emoji": "\ud83c\udf5e",
+          "name": "DiPain Sausice",
+          "desc": "Grilled DiPain Sausice",
+          "price": 90,
+          "baseApplicable": true,
+          "baseOptionIds": [
+            "base-msq23g73-yq2h",
+            "base-msq23rg3-ecwl"
+          ],
+          "dhalApplicable": false,
+          "saladApplicable": false,
+          "beverageApplicable": true,
+          "dessertApplicable": true,
+          "dessertOptionIds": [
+            "gateau",
+            "cake"
+          ],
+          "mainId": "main-msq22wrd-f3q0",
+          "_hadPhoto": true
+        }
+      ],
+      "WED": [
+        {
+          "id": "dish-msq1xz74-7itf",
+          "emoji": "\ud83e\udd66",
+          "name": "Lentil Curry",
+          "desc": "A warming, fully vegan lentil curry finished with roasted turmeric and cumin \u2014 a lighter option that still fills you up.",
+          "price": 125,
+          "baseApplicable": true,
+          "dhalApplicable": true,
+          "saladApplicable": true,
+          "beverageApplicable": true,
+          "dessertApplicable": true,
+          "mainId": "main-msowxya2-g6u5-7"
+        },
+        {
+          "id": "dish-msq1y0pl-wsz5",
+          "emoji": "\ud83c\udf57",
+          "name": "Chicken Curry",
+          "desc": "Chicken finished with butter and cream for a richer, restaurant-style evening curry.",
+          "price": 180,
+          "baseApplicable": true,
+          "dhalApplicable": true,
+          "saladApplicable": true,
+          "beverageApplicable": true,
+          "dessertApplicable": true,
+          "mainId": "main-msowxy9w-9sev-4"
+        }
+      ],
+      "THU": [],
+      "FRI": []
+    },
+    "2026-08-24": {
+      "MON": [],
+      "TUE": [],
+      "WED": [],
+      "THU": [],
+      "FRI": []
+    },
+    "2026-08-09": {
+      "MON": [],
+      "TUE": [],
+      "WED": [],
+      "THU": [],
+      "FRI": []
+    },
+    "2026-08-16": {
+      "MON": [],
+      "TUE": [],
+      "WED": [],
+      "THU": [],
+      "FRI": []
+    },
+    "2026-08-23": {
+      "MON": [],
+      "TUE": [],
+      "WED": [],
+      "THU": [],
+      "FRI": []
+    }
+  },
+  "DINNER_MENU_OVERRIDES": {
+    "2026-08-09": {
+      "MON": [],
+      "TUE": [],
+      "WED": [],
+      "THU": [],
+      "FRI": []
+    },
+    "2026-08-16": {
+      "MON": [],
+      "TUE": [],
+      "WED": [],
+      "THU": [],
+      "FRI": []
+    },
+    "2026-08-23": {
+      "MON": [],
+      "TUE": [],
+      "WED": [],
+      "THU": [],
+      "FRI": []
+    },
+    "2026-08-24": {
+      "MON": [],
+      "TUE": [],
+      "WED": [],
+      "THU": [],
+      "FRI": []
+    },
+    "2026-08-17": {
+      "MON": [],
+      "TUE": [],
+      "WED": [],
+      "THU": [],
+      "FRI": []
+    },
+    "2026-08-10": {
+      "MON": [],
+      "TUE": [],
+      "WED": [],
+      "THU": [],
+      "FRI": []
+    }
+  },
+  "LUNCH_DEFAULT_LINK_MAP": {
+    "veg curry": "main-msowxy9r-2apo-1",
+    "chicken curry": "main-msowxy9v-b399-3",
+    "fish curry": "main-msowxy9y-4lba-5",
+    "lentil curry": "main-msowxya2-g6u5-7",
+    "prawn curry": "main-msowxya4-ilea-9",
+    "beef curry": "main-msowxya7-eft9-11",
+    "shrimp curry": "main-msowxyaa-zmsz-13",
+    "paneer curry": "main-msowxyac-nkby-15",
+    "chicken curry - speical": "main-msowxyaf-pnqk-17",
+    "veg curry (lunch)": "main-msowxy9r-2apo-1"
+  },
+  "DINNER_DEFAULT_LINK_MAP": {
+    "veg curry": "main-msowxy9t-n5uf-2",
+    "chicken curry": "main-msowxy9w-9sev-4",
+    "fish curry": "main-msowxya0-f4w3-6",
+    "lentil curry": "main-msowxya3-rhfs-8",
+    "prawn curry": "main-msowxya6-ynl5-10",
+    "beef curry": "main-msowxya8-7sl5-12",
+    "shrimp curry": "main-msowxyab-yojo-14",
+    "paneer curry": "main-msowxyae-pna0-16"
+  }
+}
