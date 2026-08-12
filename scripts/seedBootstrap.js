@@ -22,13 +22,17 @@
 //
 // Safe to re-run — it looks for an existing Owner role / staff account
 // first and leaves them alone rather than creating duplicates.
+//
+// Uses ES module import syntax (not require) because this repo's
+// package.json has "type": "module", which makes Node treat every .js
+// file as an ES module.
 
 process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
 process.env.FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9099';
 
-const { initializeApp } = require('firebase-admin/app');
-const { getFirestore, Timestamp } = require('firebase-admin/firestore');
-const { getAuth } = require('firebase-admin/auth');
+import { initializeApp } from 'firebase-admin/app';
+import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 
 initializeApp({ projectId: 'demo-bonmanze' });
 
