@@ -1,0 +1,14 @@
+rules_version = '2';
+
+// Starting point: locked down by default. No collections exist yet — rules
+// get opened up per-collection, deliberately, as the schema is designed and
+// reviewed (see BonManzE_Working_Agreement.md), never left permissive as a
+// placeholder. "demo-bonmanze" (see .firebaserc) means this only ever
+// applies to the local emulator right now, not a real Firebase project.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
