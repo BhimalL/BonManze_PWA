@@ -2322,15 +2322,28 @@ const clearMenuPlannerOnce = () => {
 // where the first clear already ran (a fresh install has nothing to fix).
 let DINNER_OVERRIDE_FIX_ONCE = false;
 const fixDinnerOverridesOnce = () => {
-  if (DINNER_OVERRIDE_FIX_ONCE) return;
+  if (DINNER_OVERRIDE_FIX_ONCE) {
+    console.log('BonManzE: fixDinnerOverridesOnce already ran on this installation — skipping.');
+    return;
+  }
   if (!MENU_PLANNER_CLEARED_ONCE) { DINNER_OVERRIDE_FIX_ONCE = true; return; }
   const EMPTY_WEEK: Record<WeekdayKey, CurryOption[]> = { MON: [], TUE: [], WED: [], THU: [], FRI: [] };
-  [0, 7, 14].forEach(offsetDays => {
+  // Belt-and-suspenders: clear every existing Dinner override key first, not
+  // just the three "current" weeks below — in case a stray week outside
+  // those three is also carrying stale content (mirrors the first step of
+  // clearMenuPlannerOnce above, which did the same for Lunch).
+  Object.keys(dinnerMenuStore.getSnapshot()).forEach(w => setDinnerWeekMenu(w, { ...EMPTY_WEEK }));
+  const weeksFixed = [0, 7, 14].map(offsetDays => {
     const weekStart = mondayOfWeek(MOCK_TODAY, offsetDays);
     setDinnerWeekMenu(weekStart, { ...EMPTY_WEEK });
+    return weekStart;
   });
   DINNER_OVERRIDE_FIX_ONCE = true;
   persistAll();
+  // Visible confirmation this actually ran, and with which weeks — so the
+  // next person checking the console doesn't have to guess whether this
+  // fired or silently no-op'd/threw before reaching here.
+  console.warn('BonManzE: fixDinnerOverridesOnce ran — Dinner overrides forced empty for', weeksFixed);
 };
 
 (() => {
