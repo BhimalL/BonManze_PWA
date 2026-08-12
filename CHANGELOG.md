@@ -383,3 +383,19 @@ A second source read confirmed the write mechanics themselves are genuinely symm
 **Next step (unchanged):** migrate the small "whole-list" config docs into Firestore — see the entry above.
 
 ---
+
+## 2026-08-12 — Config Docs Migrated to Firestore: system config, loyalty tiers, customer groups, five add-on catalogs, icon library (Claude + Bhimal, committed by Antigravity)
+
+**Commit:** [`0c5585c`](https://github.com/BhimalL/BonManze_PWA/commit/0c5585c) "Add migration script for system config, loyalty tiers, customer groups, add-on catalogs, and icon library", pushed to `main` by Antigravity.
+**Verified (the commit):** independently confirmed by Claude directly against the device — diff contains only `scripts/migrateConfigDocs.js` (new file), working tree clean afterward.
+**Confirmed working (live):** Bhimal ran `node scripts/migrateConfigDocs.js` against the running emulator and got all 9 expected `Wrote ...` lines plus `Done. 9 config docs written to the emulator.`, then spot-checked two of the nine directly in the Firestore emulator UI: `loyaltyTiers/current.items[0]` shows `birthdayDiscount: 5`, `color: "bg-orange-600"`, `id: "t1"`, `multiplier: 1`, `name: "Bronze"` — an exact match for the Bronze tier in `modules/store.ts`'s `LOYALTY_TIERS`; `config/system` shows `activeServices: ["Breakfast","Lunch","Dinner"]`, `bulkDiscountEnabled: true`, `bulkDiscountRate: 5`, `businessLogoUrl: ""`, `businessName: "BonManzE"` — an exact match for `SYSTEM_CONFIG`. The emulator UI sidebar also confirmed all 9 target collections exist (`config`, `customerGroups`, `iconLibrary`, `loyaltyTiers`, `mealBases`, `mealBeverages`, `mealDesserts`, `mealDhals`, `mealSalads`), alongside the `staff`/`roles` docs from the earlier bootstrap step.
+
+**Context:** step 3 of the build sequence in `BonManzE_Firestore_Schema.md` — the simplest pieces of the schema, chosen to go first. `scripts/migrateConfigDocs.js` is a one-time, safe-to-re-run script (fixed document IDs, plain `.set()`, no auto-generated IDs to guard against duplicating) that copies 9 "whole-list" config values verbatim from their current hardcoded home in `modules/store.ts` into 9 fixed-ID Firestore documents: `config/system`, and a `{ items: [...] }` shape for `loyaltyTiers/current`, `customerGroups/current`, `mealBases/current`, `mealDhals/current`, `mealSalads/current`, `mealBeverages/current`, `mealDesserts/current`, and `iconLibrary/current` (30 icon entries). Source values were read fresh from the device immediately before writing the script, not from memory, specifically to avoid the kind of stale-copy mistake that's bitten this migration work before.
+
+**Why the visual spot-check mattered, not just the script's own "Wrote ..." log lines:** a `.set()` call reports success even if the shape written doesn't match what the security rules or client code actually expect — no error would ever surface a wrong field name or a flattened array that should have been nested under `items`. Checking the actual documents in the emulator UI against the real `store.ts` source, field by field, is what turns "the script ran" into "the data is right."
+
+**Assessment against v1 scope:** Backend architecture work, not a Customer App or Operator Console feature — no scope impact. Third piece of the Firestore build sequence now shipped and confirmed working (after rules/indexes/bootstrap, then persistence tooling); config content that customers and staff read every session is no longer solely a hardcoded constant.
+
+**Next step:** migrate the Meal Library and Menu Planner content (`mains`, `menuDefaults`, `menuWeeks`) into Firestore — step 4 of the build sequence.
+
+---
