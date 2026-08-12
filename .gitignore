@@ -28,8 +28,11 @@ dist-ssr
 # this whole folder manually.
 _deleted_modules/
 
-# Firebase Local Emulator Suite's saved state (npm run emulators exports here
-# on exit and re-imports on next start, so the bootstrapped Owner
-# role/account and any other emulator data survive a restart). Local dev
-# data only — never meant to be committed.
+# Firebase Local Emulator Suite's saved state used to live at ./.emulator-data
+# (repo-relative), but exporting there failed on this machine: this repo sits
+# inside a OneDrive-synced Desktop folder, and OneDrive's sync driver blocks
+# the atomic rename Firebase's export does on exit (EPERM). Moved to
+# %LOCALAPPDATA%\BonManzE\emulator-data instead (see package.json's
+# "emulators" script) — outside anything OneDrive backs up, so this line is
+# now just a safety net in case a future run ever falls back to the old path.
 .emulator-data/
