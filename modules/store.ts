@@ -2115,6 +2115,8 @@ interface PersistedState {
   MENU_PLANNER_CLEARED_ONCE: boolean;
   // See DINNER_OVERRIDE_FIX_ONCE below.
   DINNER_OVERRIDE_FIX_ONCE: boolean;
+  // See DINNER_OVERRIDE_FIX_V2_ONCE below.
+  DINNER_OVERRIDE_FIX_V2_ONCE: boolean;
 }
 
 const persistAll = () => {
@@ -2130,7 +2132,7 @@ const persistAll = () => {
       MEAL_BASES, MEAL_DHALS, MEAL_SALADS, MEAL_BEVERAGES, MEAL_DESSERTS,
       MAIN_DISHES, ICON_LIBRARY, MENU_LIBRARY_MIGRATED, MAIN_DISH_CONTENT_CLEANED,
       LUNCH_DEFAULT_LINK_MAP, DINNER_DEFAULT_LINK_MAP, MENU_PLANNER_CLEARED_ONCE,
-      DINNER_OVERRIDE_FIX_ONCE,
+      DINNER_OVERRIDE_FIX_ONCE, DINNER_OVERRIDE_FIX_V2_ONCE,
     };
     localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
   } catch (e) {
@@ -2346,6 +2348,38 @@ const fixDinnerOverridesOnce = () => {
   console.warn('BonManzE: fixDinnerOverridesOnce ran — Dinner overrides forced empty for', weeksFixed);
 };
 
+// Third pass. Confirmed directly from source (not guessed): the "hardened"
+// broadened-clear body added to fixDinnerOverridesOnce above never actually
+// ran on Bhimal's real installation, because it shares DINNER_OVERRIDE_FIX_ONCE
+// with the original, narrower version of this same function (the one shipped
+// in 0b96b2c). That flag was already persisted true from that first run, so
+// every later reload — including with the hardened body in place — hit the
+// early-return guard at the top of fixDinnerOverridesOnce and skipped
+// straight past the broadened clear logic without ever executing it. Live
+// evidence: a full restart + fresh tab on 2026-08-12 still showed Dinner's
+// This Week fully populated (Lunch correctly empty), matching exactly what
+// this bug predicts. Fixed with an independent flag so the broadened clear
+// gets to run once regardless of whether the original narrower version
+// already fired and persisted its own flag as done.
+let DINNER_OVERRIDE_FIX_V2_ONCE = false;
+const fixDinnerOverridesOnceV2 = () => {
+  if (DINNER_OVERRIDE_FIX_V2_ONCE) {
+    console.log('BonManzE: fixDinnerOverridesOnceV2 already ran on this installation — skipping.');
+    return;
+  }
+  if (!MENU_PLANNER_CLEARED_ONCE) { DINNER_OVERRIDE_FIX_V2_ONCE = true; return; }
+  const EMPTY_WEEK: Record<WeekdayKey, CurryOption[]> = { MON: [], TUE: [], WED: [], THU: [], FRI: [] };
+  Object.keys(dinnerMenuStore.getSnapshot()).forEach(w => setDinnerWeekMenu(w, { ...EMPTY_WEEK }));
+  const weeksFixed = [0, 7, 14].map(offsetDays => {
+    const weekStart = mondayOfWeek(MOCK_TODAY, offsetDays);
+    setDinnerWeekMenu(weekStart, { ...EMPTY_WEEK });
+    return weekStart;
+  });
+  DINNER_OVERRIDE_FIX_V2_ONCE = true;
+  persistAll();
+  console.warn('BonManzE: fixDinnerOverridesOnceV2 ran — Dinner overrides forced empty for', weeksFixed);
+};
+
 (() => {
   try {
     const raw = localStorage.getItem(PERSIST_KEY);
@@ -2383,6 +2417,7 @@ const fixDinnerOverridesOnce = () => {
     if (saved.DINNER_DEFAULT_LINK_MAP !== undefined) DINNER_DEFAULT_LINK_MAP = saved.DINNER_DEFAULT_LINK_MAP;
     if (saved.MENU_PLANNER_CLEARED_ONCE !== undefined) MENU_PLANNER_CLEARED_ONCE = saved.MENU_PLANNER_CLEARED_ONCE;
     if (saved.DINNER_OVERRIDE_FIX_ONCE !== undefined) DINNER_OVERRIDE_FIX_ONCE = saved.DINNER_OVERRIDE_FIX_ONCE;
+    if (saved.DINNER_OVERRIDE_FIX_V2_ONCE !== undefined) DINNER_OVERRIDE_FIX_V2_ONCE = saved.DINNER_OVERRIDE_FIX_V2_ONCE;
     runMenuLibraryMigrationOnce();
     cleanupMainDishContentOnce();
     // Unconditional (not just on the fresh-install path above) — see
@@ -2397,6 +2432,10 @@ const fixDinnerOverridesOnce = () => {
     // that only touches Dinner's three current weeks, once, to correct
     // what the first clear left inconsistent.
     fixDinnerOverridesOnce();
+    // See fixDinnerOverridesOnceV2's comment above — the hardened body in
+    // the function above never got to run because it shared a flag that
+    // was already persisted true; this is the actual fix, on its own flag.
+    fixDinnerOverridesOnceV2();
   } catch (e) {
     console.warn('BonManzE: failed to restore persisted state', e);
   }
