@@ -1,0 +1,63 @@
+rules_version = '2';
+
+// BonManzE v1 Firebase Storage security rules.
+//
+// New this round: a Meal Library Main (or a day-slot dish) with a custom-
+// uploaded photo used to store it as a base64 data URL directly inside its
+// Firestore document — fine for a couple of dishes, but Firestore hard-caps
+// every document at 1MiB, and a single photo can already eat most of that
+// budget on its own (the "DiPain Sausice" Main's photo alone is ~740KB
+// base64-encoded). Storage is the correct home for the actual image bytes;
+// Firestore documents keep only a `photoStoragePath` string pointing at the
+// file here — see BonManzE_Firestore_Schema.md's Storage section for the
+// full reasoning.
+//
+// Mirrors firestore.rules' isStaffAllowed() pattern exactly, via Storage
+// Rules' cross-service access to Firestore (firestore.get()/firestore.exists()
+// — a real Google Cloud feature, not something specific to this project) so
+// there's exactly one place ("does this staff member have manageMenu?")
+// that permission logic lives, not two separately-maintained copies.
+//
+// NOT YET LIVE-VERIFIED against the local Storage emulator as of writing —
+// cross-service rules are a newer feature and local emulator support for
+// them needs to be confirmed empirically (see CHANGELOG.md for the result)
+// before this is trusted the way firestore.rules already has been.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function staffDoc() {
+      return firestore.get(/databases/(default)/documents/staff/$(request.auth.uid));
+    }
+
+    function isActiveStaff() {
+      return isSignedIn()
+        && firestore.exists(/databases/(default)/documents/staff/$(request.auth.uid))
+        && staffDoc().data.active == true;
+    }
+
+    function isStaffAllowed(permissionKey) {
+      return isActiveStaff()
+        && firestore.get(/databases/(default)/documents/roles/$(staffDoc().data.roleId))
+             .data.permissions.get(permissionKey, false) == true;
+    }
+
+    // Dish/Main photos — public read (the Customer App needs to display
+    // them), manageMenu-gated write, same access shape as mains/{mainId} in
+    // Firestore. Path convention: dishPhotos/mains/{mainId} for a Meal
+    // Library Main's photo, dishPhotos/days/{dishId} for a day-slot dish's
+    // own photo when it isn't just inheriting its linked Main's.
+    match /dishPhotos/{allPaths=**} {
+      allow read: if true;
+      allow write: if isStaffAllowed('manageMenu');
+    }
+
+    // Everything else stays locked down by default.
+    match /{allOtherPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
