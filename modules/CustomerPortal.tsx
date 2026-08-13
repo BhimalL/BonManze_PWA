@@ -37,7 +37,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, collectionGroup, query, where, onSnapshot } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from '../firebaseClient';
 import { Customer, Order, OrderItem, PaymentMethod } from '../types';
@@ -374,6 +374,20 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [regLastName, setRegLastName] = useState('');
   const [regPhone, setRegPhone] = useState('');
 
+  // --- Real order history (replaces nothing — supplements the existing
+  // mock `orders`/myOrders below). A real checkout (see handleCheckout)
+  // now writes to Firestore's orders/{orderId} + items subcollection via
+  // confirmCheckout, not the local store — so without this, a customer
+  // who places a real order would never see it again anywhere in the app.
+  // Two raw listeners (order envelopes, and a collectionGroup query across
+  // every order's items) are combined into full Order objects below, rather
+  // than nesting a per-order items listener, so a new order's items show up
+  // in one query instead of needing to know every orderId up front.
+  const [fsOrderDocs, setFsOrderDocs] = useState<Record<string, any>>({});
+  const [fsItemDocs, setFsItemDocs] = useState<Record<string, any[]>>({});
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+
   const [builder, setBuilder] = useState<{
     day: WeekDay; service: Service; weekStart: string; openSection: 1 | 2 | 3; sel: MealSelection; editIndex: number | null;
     // Set only when editing an already-confirmed meal (as opposed to a
@@ -539,6 +553,99 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       dietaryPreferences: customerDocRaw.dietaryPreferences,
     });
   }, [customerDocRaw, loyaltyTiers, customerGroups]);
+
+  // Live listeners for this customer's REAL Firestore orders — separate
+  // from the mock `subscribeToOrders` above, which only ever reflects the
+  // local store's pre-seeded/demo order history. Two queries rather than
+  // one: order envelopes (orders/{orderId} where customerId == uid) and a
+  // COLLECTION GROUP query across every order's items subcollection
+  // (orders/*/items where customerId == uid) — the same customerId is
+  // duplicated onto every item precisely so this query doesn't need to
+  // already know which orderIds exist (see
+  // BonManzE_Firestore_Schema.md's `orders/{orderId}/items/{itemId}` note).
+  // Both listeners tear down on sign-out/unmount, same as every other
+  // subscription in this file.
+  useEffect(() => {
+    const uid = customerDocRaw?.id;
+    if (!uid) { setFsOrderDocs({}); setFsItemDocs({}); return; }
+    const ordersQuery = query(collection(db, 'orders'), where('customerId', '==', uid));
+    const unsubOrders = onSnapshot(ordersQuery, snap => {
+      const map: Record<string, any> = {};
+      snap.forEach(d => { map[d.id] = d.data(); });
+      setFsOrderDocs(map);
+    }, err => console.error('orders listener failed', err));
+    const itemsQuery = query(collectionGroup(db, 'items'), where('customerId', '==', uid));
+    const unsubItems = onSnapshot(itemsQuery, snap => {
+      const grouped: Record<string, any[]> = {};
+      snap.forEach(d => {
+        const orderId = d.ref.parent.parent?.id;
+        if (!orderId) return;
+        if (!grouped[orderId]) grouped[orderId] = [];
+        grouped[orderId].push(d.data());
+      });
+      setFsItemDocs(grouped);
+    }, err => console.error('order items listener failed', err));
+    return () => { unsubOrders(); unsubItems(); };
+  }, [customerDocRaw?.id]);
+
+  // Reshapes the two raw Firestore listeners above into the SAME `Order`
+  // shape every other screen in this file already knows how to render
+  // (groupByOrderServiceDay, the receipt sheet, My Order, Profile's order
+  // history) — so none of that existing rendering code needs to change to
+  // understand a real order, it just needs an `Order` object. `status`/
+  // `paymentStatus` don't exist at the order-envelope level in Firestore
+  // (only per item, see the schema doc) — derived here from whether every
+  // item is Paid, a reasonable summary for the handful of places that read
+  // the order-level field rather than iterating items directly.
+  const firestoreOrders: Order[] = useMemo(() => {
+    return Object.keys(fsOrderDocs).map(orderId => {
+      const o = fsOrderDocs[orderId] || {};
+      const rawItems: any[] = fsItemDocs[orderId] || [];
+      const items: OrderItem[] = rawItems.map(it => ({
+        itemId: it.itemId,
+        name: it.name,
+        qty: it.qty,
+        price: it.price,
+        notes: it.notes,
+        deliveryDate: it.deliveryDate,
+        deliveryDay: it.deliveryDay,
+        serviceSlot: it.serviceSlot,
+        paymentStatus: it.paymentStatus,
+        status: it.status,
+      }));
+      const allPaid = items.length > 0 && items.every(i => i.paymentStatus === 'Paid');
+      const createdAtIso = o.createdAt && typeof o.createdAt.toDate === 'function'
+        ? o.createdAt.toDate().toISOString()
+        : new Date().toISOString();
+      return {
+        id: orderId,
+        customerName: o.customerName || currentUser?.name || '',
+        type: o.type || 'Meal Plan',
+        status: allPaid ? 'Completed' : 'Pending',
+        paymentStatus: allPaid ? 'Paid' : 'Pending',
+        tenderType: o.tenderType || undefined,
+        paymentMethodName: o.paymentMethodName || undefined,
+        paymentScheme: o.paymentScheme,
+        items,
+        total: o.total ?? 0,
+        timestamp: createdAtIso,
+        discount: o.discount,
+        discountReason: o.discountReason,
+      } as Order;
+    });
+  }, [fsOrderDocs, fsItemDocs, currentUser]);
+
+  // Which order ids are real (Firestore) vs. the local mock's pre-seeded
+  // demo history — used below to hide Edit/Cancel/Pay controls on real
+  // orders. Those controls (editOrderItem, cancelOrderItem,
+  // openPayItem/openPayOrder's submitPaymentClaim) all mutate the local
+  // mock store by looking up an order id there — a real order's Firestore
+  // id would never be found, so rather than ship buttons that silently do
+  // nothing (or worse), they're hidden for real orders this round, with a
+  // short explanatory note instead. Wiring these actions to real Cloud
+  // Functions is separate follow-up work, not done here — see the schema
+  // doc's open items.
+  const firestoreOrderIds = useMemo(() => new Set(firestoreOrders.map(o => o.id)), [firestoreOrders]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -895,68 +1002,80 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return { subtotal, discount: totalDiscount, standardDiscount, birthdayDiscount, standardLabel, bulkDiscount, vat, total };
   }, [cart, dinnerCart, currentUser, loyaltyTiers, customerGroups, orderableWeeks, menuTick, configTick]);
 
-  const handleCheckout = () => {
-    if (!currentUser || cartCount === 0) return;
-    const items: OrderItem[] = [];
+  // Real checkout (2026-08-13) — calls the confirmCheckout Cloud Function
+  // instead of building an Order locally and pushing it into the mock
+  // store. The client submits WHAT was ordered (dish/add-on selections,
+  // date, service, a same-day slot index) — never a price or a total; the
+  // Function recomputes both server-side from the live menu + the
+  // customer's actual tier/group/birthday (see BonManzE_Firestore_Schema.md
+  // §4). `note` is still built client-side via mealNotesLine — dhal/salad
+  // choices carry no price and confirmCheckout doesn't need them, but
+  // they're still worth recording as text for kitchen prep, same as before.
+  const handleCheckout = async () => {
+    if (!currentUser || cartCount === 0 || checkoutLoading) return;
+    const payloadItems: {
+      curryId: string; baseId: string; beverageId: string; dessertId: string;
+      note: string; deliveryDate: string; service: Service; slotIndex: number;
+    }[] = [];
     orderableWeeks.forEach(week => {
       week.days.forEach(d => {
         (cart[d.date] || []).forEach((m, idx) => {
-          const c = menuFor('Lunch', week.start)[d.key].find(x => x.id === m.curryId);
-          items.push({
-            itemId: m.curryId,
-            name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
-            qty: 1,
-            price: mealPrice(m, d.key, 'Lunch', week.start),
-            notes: mealNotesLine(m),
-            deliveryDate: d.date,
-            deliveryDay: d.label,
-            serviceSlot: idx === 0 ? 'Lunch' : `Lunch-${idx + 1}`,
-            paymentStatus: 'Pending',
-            status: 'Active'
+          payloadItems.push({
+            curryId: m.curryId, baseId: m.baseId, beverageId: m.beverageId, dessertId: m.dessertId,
+            note: mealNotesLine(m), deliveryDate: d.date, service: 'Lunch', slotIndex: idx,
           });
         });
         (dinnerCart[d.date] || []).forEach((m, idx) => {
-          const c = menuFor('Dinner', week.start)[d.key].find(x => x.id === m.curryId);
-          items.push({
-            itemId: m.curryId,
-            name: `${c?.emoji || ''} ${c?.name || 'Meal'}`,
-            qty: 1,
-            price: mealPrice(m, d.key, 'Dinner', week.start),
-            notes: mealNotesLine(m),
-            deliveryDate: d.date,
-            deliveryDay: d.label,
-            serviceSlot: idx === 0 ? 'Dinner' : `Dinner-${idx + 1}`,
-            paymentStatus: 'Pending',
-            status: 'Active'
+          payloadItems.push({
+            curryId: m.curryId, baseId: m.baseId, beverageId: m.beverageId, dessertId: m.dessertId,
+            note: mealNotesLine(m), deliveryDate: d.date, service: 'Dinner', slotIndex: idx,
           });
         });
       });
     });
-    if (!items.length) return;
-    const newOrder: Order = {
-      id: `BMZ-${Date.now().toString(36).toUpperCase()}`,
-      customerName: currentUser.name,
-      type: 'Meal Plan',
-      status: 'Pending',
-      paymentStatus: 'Pending',
-      paymentScheme: 'Per-Delivery',
-      items,
-      total: cartTotals.total,
-      timestamp: new Date().toISOString(),
-      isReconciled: false,
-      discount: cartTotals.discount
-    };
-    addOrder(newOrder);
-    setCart({});
-    setDinnerCart({});
-    setView('order');
-    toast(`Order confirmed · ${items.length} meal${items.length !== 1 ? 's' : ''} · ${formatCurrency(cartTotals.total)} outstanding`);
+    if (!payloadItems.length) return;
+    setCheckoutError(null);
+    setCheckoutLoading(true);
+    try {
+      const confirmCheckoutFn = httpsCallable(functions, 'confirmCheckout');
+      const result = await confirmCheckoutFn({
+        items: payloadItems,
+        type: 'Meal Plan',
+        paymentScheme: 'Per-Delivery',
+      });
+      const data = result.data as { total?: number } | undefined;
+      const confirmedTotal = typeof data?.total === 'number' ? data.total : cartTotals.total;
+      setCart({});
+      setDinnerCart({});
+      setView('order');
+      toast(`Order confirmed · ${payloadItems.length} meal${payloadItems.length !== 1 ? 's' : ''} · ${formatCurrency(confirmedTotal)} outstanding`);
+      // The new order/items appear in myOrders automatically once the
+      // Firestore listeners above pick up what confirmCheckout just wrote —
+      // no local state push needed here, unlike the old mock addOrder().
+    } catch (err: any) {
+      console.error('Checkout failed', err);
+      const message = typeof err?.message === 'string' ? err.message : 'Please try again.';
+      setCheckoutError(message);
+      toast(`Checkout failed — ${message}`);
+    } finally {
+      setCheckoutLoading(false);
+    }
   };
 
   // --- MY ORDER (this week's confirmed meals) ---
+  // Two sources, concatenated: the local mock's pre-seeded/demo order
+  // history (matched by customerName, the same string-match the mock has
+  // always used) plus this customer's REAL Firestore orders (firestoreOrders,
+  // already scoped to just their uid by the query itself — see the listener
+  // effect above). A real checkout only ever adds to the second source now;
+  // the first stays exactly as it was for backward compatibility with
+  // whatever demo history already existed before Firestore did.
   const myOrders = useMemo(
-    () => orders.filter(o => o.customerName === currentUser?.name && o.type === 'Meal Plan'),
-    [orders, currentUser]
+    () => [
+      ...orders.filter(o => o.customerName === currentUser?.name && o.type === 'Meal Plan'),
+      ...firestoreOrders.filter(o => o.type === 'Meal Plan'),
+    ],
+    [orders, firestoreOrders, currentUser]
   );
 
   // Every date currently orderable/visible in My Order — both weeks, not
@@ -1790,8 +1909,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     <div className="flex justify-between font-bold text-slate-500"><span>VAT ({SYSTEM_CONFIG.vatRate}%)</span><span>{formatCurrency(cartTotals.vat)}</span></div>
                     <div className="pt-2 border-t border-[#E7E0D0] flex justify-between text-base font-black text-slate-900"><span>Total</span><span>{formatCurrency(cartTotals.total)}</span></div>
                   </div>
-                  <button onClick={handleCheckout} className="w-full mt-4 py-4 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-primary/20">
-                    Confirm order
+                  {checkoutError && (
+                    <div className="mt-3 flex items-start gap-2 p-3 rounded-xl bg-danger/10 text-danger text-xs font-bold">
+                      <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                      <span>{checkoutError}</span>
+                    </div>
+                  )}
+                  <button onClick={handleCheckout} disabled={checkoutLoading} className="w-full mt-4 py-4 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-primary/20 disabled:opacity-60 flex items-center justify-center gap-2">
+                    {checkoutLoading && <Loader2 className="size-4 animate-spin" />}
+                    {checkoutLoading ? 'Confirming...' : 'Confirm order'}
                   </button>
                 </div>
               </div>
@@ -1839,10 +1965,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             </button>
                           ) : orderPaid ? (
                             <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success">Paid</span>
-                          ) : orderUnclaimed.length > 0 ? (
+                          ) : orderUnclaimed.length > 0 && !firestoreOrderIds.has(order.id) ? (
                             <button onClick={() => openPayOrder(lines)} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger">
                               Pay order · {formatCurrency(orderUnclaimedTotal)}
                             </button>
+                          ) : orderUnclaimed.length > 0 ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-slate-100 text-slate-400" title="Payment for real orders isn't wired up yet — contact us to pay this one.">
+                              {formatCurrency(orderUnclaimedTotal)} due · contact us
+                            </span>
                           ) : (
                             <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-warning/10 text-warning">Awaiting confirmation</span>
                           )}
@@ -1884,9 +2014,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                               </div>
                                               <div className="flex gap-2">
                                                 {line.item.paymentStatus === 'Paid' && <button onClick={() => openReceipt(line)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Receipt className="size-3" /> Receipt</button>}
-                                                {isUnclaimed(line.item) && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
-                                                {isActive && !locked && <button onClick={() => openEditConfirmed(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest">Edit</button>}
-                                                {isActive && !locked && <button onClick={() => handleCancel(line)} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Cancel</button>}
+                                                {isUnclaimed(line.item) && !firestoreOrderIds.has(line.order.id) && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
+                                                {isActive && !locked && !firestoreOrderIds.has(line.order.id) && <button onClick={() => openEditConfirmed(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest">Edit</button>}
+                                                {isActive && !locked && !firestoreOrderIds.has(line.order.id) && <button onClick={() => handleCancel(line)} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Cancel</button>}
+                                                {isActive && firestoreOrderIds.has(line.order.id) && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-slate-400" title="Editing/cancelling real orders isn't wired up yet — contact us for changes.">Contact us to change</span>}
                                                 {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
                                                 {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
                                               </div>

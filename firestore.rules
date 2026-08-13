@@ -167,19 +167,36 @@ service cloud.firestore {
       allow read: if isCustomer(resource.data.customerId) || isStaffAllowed('manageOrders');
       allow create: if false; // Cloud Function only — see confirmCheckout
       allow update, delete: if false;
+    }
 
-      match /items/{itemId} {
-        allow read: if isCustomer(resource.data.customerId) || isStaffAllowed('manageOrders');
-        allow create: if false; // Cloud Function only — see confirmCheckout
-        // Staff may update status/paymentStatus fields (mark delivered /
-        // mark paid) — never price/qty/name, and never from the customer.
-        allow update: if isStaffAllowed('manageOrders')
-          && request.resource.data.price == resource.data.price
-          && request.resource.data.qty == resource.data.qty
-          && request.resource.data.name == resource.data.name
-          && request.resource.data.customerId == resource.data.customerId;
-        allow delete: if false;
-      }
+    // items lives as a subcollection of orders/{orderId}, but is matched
+    // here at the TOP LEVEL with {path=**} rather than nested inside the
+    // orders/{orderId} match above. Found live 2026-08-13: a nested rule
+    // (match /orders/{orderId} { match /items/{itemId} {...} } }) only
+    // covers direct, single-document access where orderId is already
+    // known — it does NOT apply to a COLLECTION GROUP query (the Customer
+    // App's real order-history listener queries every order's items at
+    // once via collectionGroup('items'), without knowing orderIds up
+    // front, precisely so a new order's items show up without a
+    // per-order listener). A collection-group `list` request instead fell
+    // through to the deny-everything catch-all at the bottom of this file
+    // — the real error was "FirebaseError: false for 'list' @ [the
+    // catch-all's line]", even though this exact rule (just nested) looked
+    // correct on paper. Writing it with {path=**} at the top level covers
+    // BOTH the collection-group query and ordinary direct get/update
+    // access to a single item — this is Firestore's documented pattern
+    // for rules meant to apply across a whole collection group.
+    match /{path=**}/items/{itemId} {
+      allow read: if isCustomer(resource.data.customerId) || isStaffAllowed('manageOrders');
+      allow create: if false; // Cloud Function only — see confirmCheckout
+      // Staff may update status/paymentStatus fields (mark delivered /
+      // mark paid) — never price/qty/name, and never from the customer.
+      allow update: if isStaffAllowed('manageOrders')
+        && request.resource.data.price == resource.data.price
+        && request.resource.data.qty == resource.data.qty
+        && request.resource.data.name == resource.data.name
+        && request.resource.data.customerId == resource.data.customerId;
+      allow delete: if false;
     }
 
     // Everything else stays locked down by default — same starting
