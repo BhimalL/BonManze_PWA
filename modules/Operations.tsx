@@ -32,8 +32,13 @@ import {
   Copy,
   History,
   ChefHat,
-  ImagePlus
+  ImagePlus,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { doc, getDoc, collection, collectionGroup, onSnapshot } from 'firebase/firestore';
+import { auth, db } from '../firebaseClient';
 import { Order, OrderItem, Customer, PaymentMethod } from '../types';
 import { Portal } from './Portal';
 import { IconPickerButton } from './IconPicker';
@@ -45,6 +50,8 @@ import {
   clearAllOrders,
   subscribeToCustomers,
   resetCustomerLoyalty,
+  LOYALTY_TIERS,
+  CUSTOMER_GROUPS,
   subscribeToPaymentMethods,
   subscribeToSystemDate,
   updateSystemDate,
@@ -206,6 +213,33 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [tab, setTab] = useState<Tab>('dashboard');
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+
+  // --- Real staff Firebase Auth (new, 2026-08-13) — Operations has never
+  // had ANY login concept before this; App.tsx's "Operations" button
+  // dropped straight into the full console for anyone. firestore.rules
+  // requires request.auth.uid to resolve to an active staff/{uid} doc for
+  // every gated read/write (see BonManzE_Firestore_Schema.md §2's staff-
+  // login note), so without this gate every Firestore call below would
+  // fail with permission-denied. Staff sign in with email+password, no
+  // registration flow — accounts are provisioned once via
+  // scripts/seedBootstrap.js, same as the schema doc's "bootstrap problem"
+  // describes.
+  const [staffAuthUser, setStaffAuthUser] = useState<any | null>(null);
+  const [staffDocRaw, setStaffDocRaw] = useState<any | null>(null);
+  const [staffAuthChecking, setStaffAuthChecking] = useState(true);
+  const [staffLoginEmail, setStaffLoginEmail] = useState('');
+  const [staffLoginPassword, setStaffLoginPassword] = useState('');
+  const [staffAuthLoading, setStaffAuthLoading] = useState(false);
+  const [staffAuthError, setStaffAuthError] = useState<string | null>(null);
+
+  // Raw Firestore listener output for orders/items, organization-wide (no
+  // customerId filter, unlike CustomerPortal.tsx's single-customer
+  // listeners) — reshaped into Order[] below (fsOrders memo) so every
+  // existing memo (lines, dishesByDay, drops, paymentDrops) keeps working
+  // completely unchanged; they only ever needed an Order[] to iterate.
+  const [fsOrderDocs, setFsOrderDocs] = useState<Record<string, any>>({});
+  const [fsItemDocs, setFsItemDocs] = useState<Record<string, any[]>>({});
+
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [systemDate, setSystemDate] = useState(MOCK_TODAY);
   // Menus are looked up live via lunchMenuForWeek(weekStart)/dinnerMenuForWeek
@@ -383,9 +417,187 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setDangerResetDone(true);
   };
 
+  // Staff auth listener — mirrors CustomerPortal.tsx's onAuthStateChanged
+  // pattern. Verifies an active staff/{uid} doc exists before treating
+  // anyone as signed in; a Firebase-authenticated user with no such doc
+  // (or active: false) is immediately signed back out rather than left in
+  // a half-authenticated state that would just 403 on every read below.
   useEffect(() => {
-    const u1 = subscribeToOrders(setOrders);
-    const u2 = subscribeToCustomers(setCustomers);
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setStaffAuthUser(null);
+        setStaffDocRaw(null);
+        setStaffAuthChecking(false);
+        return;
+      }
+      try {
+        const snap = await getDoc(doc(db, 'staff', user.uid));
+        if (snap.exists() && snap.data().active === true) {
+          setStaffAuthUser(user);
+          setStaffDocRaw({ id: user.uid, ...snap.data() });
+        } else {
+          setStaffAuthError('This account is not set up as active staff.');
+          await signOut(auth);
+          setStaffAuthUser(null);
+          setStaffDocRaw(null);
+        }
+      } catch (e) {
+        console.error('staff doc lookup failed', e);
+        setStaffAuthError('Could not verify staff access.');
+        await signOut(auth);
+        setStaffAuthUser(null);
+        setStaffDocRaw(null);
+      } finally {
+        setStaffAuthChecking(false);
+      }
+    });
+    return unsub;
+  }, []);
+
+  const handleStaffLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setStaffAuthError(null);
+    setStaffAuthLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, staffLoginEmail.trim(), staffLoginPassword);
+      // onAuthStateChanged above picks up from here.
+    } catch (err: any) {
+      const code = err?.code || '';
+      setStaffAuthError(
+        code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found')
+          ? 'Incorrect email or password.'
+          : 'Could not sign in. Please try again.'
+      );
+    } finally {
+      setStaffAuthLoading(false);
+    }
+  };
+
+  const handleStaffSignOut = () => {
+    signOut(auth).finally(() => {
+      setStaffAuthUser(null);
+      setStaffDocRaw(null);
+      onExit();
+    });
+  };
+
+  // Real customers/orders/items — organization-wide Firestore listeners,
+  // gated on a validated staff session above. Replaces the old
+  // subscribeToOrders/subscribeToCustomers mock subscriptions entirely
+  // (not merged with them) — Operations now shows real business data, the
+  // same "swap, not merge" call CustomerPortal.tsx already made for its
+  // own order history. tier/group come back from Firestore as schema ids
+  // ("t4"/"g3"); LOYALTY_TIERS/CUSTOMER_GROUPS (the local mock constants,
+  // reused purely as a static id->name lookup table) translate them to
+  // display names, exactly the same trick CustomerPortal.tsx already uses.
+  useEffect(() => {
+    if (!staffAuthUser) {
+      setOrders([]);
+      setCustomers([]);
+      setFsOrderDocs({});
+      setFsItemDocs({});
+      return;
+    }
+    const unsubCustomers = onSnapshot(collection(db, 'customers'), snap => {
+      const list: Customer[] = snap.docs.map(d => {
+        const raw: any = d.data();
+        return {
+          id: d.id,
+          firstName: raw.firstName || '',
+          lastName: raw.lastName || '',
+          name: raw.name || '',
+          email: raw.email || '',
+          phone: raw.phone || '',
+          segment: raw.segment,
+          group: CUSTOMER_GROUPS.find(g => g.id === raw.group)?.name ?? raw.group,
+          lastOrder: raw.lastOrder,
+          ltv: raw.ltv ?? 0,
+          points: raw.points ?? 0,
+          storeCredit: raw.storeCredit ?? 0,
+          tier: LOYALTY_TIERS.find(t => t.id === raw.tier)?.name ?? raw.tier,
+          birthday: raw.birthday,
+          avatar: raw.avatar || `https://picsum.photos/seed/${d.id}/100/100`,
+          referenceCode: raw.referenceCode,
+          gdprConsent: raw.gdprConsent,
+          addresses: raw.addresses || [],
+          dietaryPreferences: raw.dietaryPreferences,
+        };
+      });
+      setCustomers(list);
+    }, err => console.error('customers listener failed', err));
+
+    const unsubOrders = onSnapshot(collection(db, 'orders'), snap => {
+      const map: Record<string, any> = {};
+      snap.forEach(d => { map[d.id] = d.data(); });
+      setFsOrderDocs(map);
+    }, err => console.error('orders listener failed', err));
+
+    const unsubItems = onSnapshot(collectionGroup(db, 'items'), snap => {
+      const grouped: Record<string, any[]> = {};
+      snap.forEach(d => {
+        const orderId = d.ref.parent.parent?.id;
+        if (!orderId) return;
+        if (!grouped[orderId]) grouped[orderId] = [];
+        grouped[orderId].push(d.data());
+      });
+      setFsItemDocs(grouped);
+    }, err => console.error('order items listener failed', err));
+
+    return () => { unsubCustomers(); unsubOrders(); unsubItems(); };
+  }, [staffAuthUser]);
+
+  // Reshapes the two raw listeners above into Order[] -- every downstream
+  // memo (lines, dishesByDay, drops, paymentDrops) only ever needed this
+  // shape, so nothing else in this file has to change. Kept as a separate
+  // memo + bridging effect (rather than computing orders directly) so the
+  // orders/items listeners can update independently without racing each
+  // other -- same decoupling CustomerPortal.tsx's firestoreOrders uses.
+  const fsOrders: Order[] = useMemo(() => {
+    return Object.keys(fsOrderDocs).map(orderId => {
+      const o = fsOrderDocs[orderId] || {};
+      const rawItems: any[] = fsItemDocs[orderId] || [];
+      const items: OrderItem[] = rawItems.map(it => ({
+        itemId: it.itemId,
+        name: it.name,
+        qty: it.qty,
+        price: it.price,
+        notes: it.notes,
+        deliveryDate: it.deliveryDate,
+        deliveryDay: it.deliveryDay,
+        serviceSlot: it.serviceSlot,
+        paymentStatus: it.paymentStatus,
+        status: it.status,
+        paymentMethodName: it.paymentMethodName,
+        paymentReference: it.paymentReference,
+        isReconciled: it.isReconciled,
+      }));
+      const allPaid = items.length > 0 && items.every(i => i.paymentStatus === 'Paid');
+      const createdAtIso = o.createdAt && typeof o.createdAt.toDate === 'function'
+        ? o.createdAt.toDate().toISOString()
+        : new Date().toISOString();
+      return {
+        id: orderId,
+        customerName: o.customerName || '',
+        type: o.type || 'Meal Plan',
+        status: allPaid ? 'Completed' : 'Pending',
+        paymentStatus: allPaid ? 'Paid' : 'Pending',
+        tenderType: o.tenderType,
+        paymentMethodName: o.paymentMethodName,
+        paymentScheme: o.paymentScheme,
+        items,
+        total: o.total ?? 0,
+        timestamp: createdAtIso,
+        discount: o.discount,
+        discountReason: o.discountReason,
+      } as Order;
+    });
+  }, [fsOrderDocs, fsItemDocs]);
+
+  useEffect(() => {
+    setOrders(fsOrders);
+  }, [fsOrders]);
+
+  useEffect(() => {
     const u3 = subscribeToPaymentMethods(setPaymentMethods);
     const u4 = subscribeToSystemDate(setSystemDate);
     const u5 = subscribeToLunchMenu(() => setMenuTick(t => t + 1));
@@ -411,7 +623,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     const u12 = subscribeToDesserts(setDesserts);
     const u13 = subscribeToMainDishes(setMainDishes);
     const u14 = subscribeToIconLibrary(setIcons);
-    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); u9(); u10(); u11(); u12(); u13(); u14(); };
+    return () => { u3(); u4(); u5(); u6(); u7(); u8(); u9(); u10(); u11(); u12(); u13(); u14(); };
   }, []);
 
   const toggleVat = (next: boolean) => setVatEnabledLocal(next);
@@ -2094,6 +2306,71 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [y, m, d] = weekDays[0].date.split('-').map(Number);
   const deliveryWeekDateStr = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 
+  // Staff login gate — every read/write below this point talks to
+  // Firestore collections gated by firestore.rules' isStaffAllowed()/
+  // isActiveStaff(), which require request.auth.uid to resolve to an
+  // active staff/{uid} doc. Safe to early-return here: every hook in this
+  // component (useState/useEffect/useMemo) is declared above, unconditionally,
+  // so React's rules of hooks are satisfied regardless of which branch below
+  // actually renders.
+  if (staffAuthChecking) {
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-[#FAF6EE]">
+        <Loader2 className="size-8 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  if (!staffAuthUser) {
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-[#FAF6EE] p-6">
+        <div className="max-w-sm w-full bg-white rounded-[32px] border border-[#E7E0D0] shadow-sm p-8">
+          <div className="size-12 bg-primary/10 text-primary rounded-2xl flex items-center justify-center mb-4">
+            <LayoutDashboard className="size-6" />
+          </div>
+          <h1 className="text-lg font-black text-slate-900 mb-1">Staff Sign In</h1>
+          <p className="text-xs text-slate-500 font-medium mb-6">Sign in with your BonManzE staff account to open Operations.</p>
+          <form onSubmit={handleStaffLogin} className="space-y-3">
+            <input
+              type="email"
+              autoComplete="username"
+              placeholder="Email"
+              value={staffLoginEmail}
+              onChange={e => setStaffLoginEmail(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+              required
+            />
+            <input
+              type="password"
+              autoComplete="current-password"
+              placeholder="Password"
+              value={staffLoginPassword}
+              onChange={e => setStaffLoginPassword(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+              required
+            />
+            {staffAuthError && (
+              <p className="text-xs font-bold text-rose-600 flex items-center gap-1.5">
+                <AlertCircle className="size-3.5 shrink-0" /> {staffAuthError}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={staffAuthLoading}
+              className="w-full py-3 bg-primary text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+            >
+              {staffAuthLoading ? <Loader2 className="size-4 animate-spin" /> : null}
+              {staffAuthLoading ? 'Signing in...' : 'Sign In'}
+            </button>
+          </form>
+          <button onClick={onExit} className="w-full mt-4 text-[11px] font-bold text-slate-400 hover:text-slate-600 transition-colors">
+            Back to home
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-full w-full flex bg-[#FAF6EE] text-slate-800 font-sans overflow-hidden">
       {/* PERSISTENT LEFT SIDEBAR */}
@@ -2113,7 +2390,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">Operations</p>
             </div>
           </div>
-          <button onClick={onExit} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-900 transition-colors" title="Exit Console">
+          <button onClick={handleStaffSignOut} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-900 transition-colors" title="Sign Out">
             <LogOut className="size-4" />
           </button>
         </div>
@@ -2313,8 +2590,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           )}
                         </div>
                         <button
-                          onClick={() => handleMarkDelivered(drop)}
-                          className="shrink-0 px-6 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2"
+                          disabled
+                          title="Not wired up yet — delivery status updates for real orders are coming in a future update."
+                          className="shrink-0 px-6 py-3 bg-slate-200 text-slate-400 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-not-allowed flex items-center justify-center gap-2"
                         >
                           <CheckCircle2 className="size-4" /> Mark Delivered
                         </button>
@@ -2364,8 +2642,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               )}
                             </div>
                             <button
-                              onClick={() => setPaymentDrop(drop)}
-                              className="shrink-0 px-6 py-3 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-warning/95 active:scale-95 transition-all flex items-center justify-center gap-2"
+                              disabled
+                              title="Not wired up yet — payment confirmation for real orders is coming in a future update."
+                              className="shrink-0 px-6 py-3 bg-slate-200 text-slate-400 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-not-allowed flex items-center justify-center gap-2"
                             >
                               <Banknote className="size-4" /> Mark Paid
                             </button>

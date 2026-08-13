@@ -457,3 +457,186 @@ A second source read confirmed the write mechanics themselves are genuinely symm
 **Next step:** step 6 of the build sequence — `orders`/`orders/{id}/items` + the checkout-confirmation and payment-confirmation Cloud Functions. Also outstanding: wiring the rest of the Customer App (orders, cart, menu) to Firestore, and giving Operations' Customer CRM tab visibility into real Firestore customers — both explicitly deferred, not forgotten, per this entry's scope note above.
 
 ---
+
+## 2026-08-13 — Step 6 Backend Delivered: confirmCheckout + onItemPaymentConfirmed Cloud Functions, firestore.rules Tightened (Claude, pending Bhimal's live emulator run)
+
+**Files changed (not yet committed by Antigravity):** `firestore.rules`, `functions/index.js` (2 new exports added: `confirmCheckout`, `onItemPaymentConfirmed`), `scripts/testCheckoutFlow.js` (new).
+
+**A real security gap found while scoping this step, fixed before writing any new Function code:** `orders/{orderId}` and its `items/{itemId}` subcollection have allowed direct client `create` since the very first rules commit (step 1 of the build sequence), with **no restriction on the `total`/`price` fields** — a client could submit any total it wanted, directly contradicting `BonManzE_Firestore_Schema.md` §4's stated design ("a Function recomputes the total... that recomputed value is what actually gets written"). This predates this session; found while reading the rules to scope step 6, not something that was ever exercised (no checkout flow existed yet to expose it in practice). Fixed by changing both `create` rules to `if false` — order/item creation is now Cloud-Function-only (`confirmCheckout`, via the Admin SDK, which bypasses these rules). `read` and the existing staff `update` rule (mark paid/delivered, price/qty/name/customerId frozen) are unchanged.
+
+**What shipped:**
+- **`confirmCheckout`** (callable) — a customer submits *what* they're ordering (dish id, add-on selections, delivery date, service, a same-day slot index) per item; the Function prices every item server-side from the currently published menu (`menuWeeks/{weekStart}`, falling back to `menuDefaults/current` per-service exactly like the client's `forWeek()` helpers) plus the current add-on catalogs, replicates `CustomerPortal.tsx`'s `cartTotals` discount-stacking logic exactly (tier vs. group standard discount, birthday discount, the Lunch-only-coverage bulk discount applied to the full Lunch+Dinner week subtotal, VAT last), and writes `orders/{orderId}` + its `items` subcollection transactionally. The client never submits a price or a total — only what was ordered.
+- **`onItemPaymentConfirmed`** (Firestore trigger, not callable) — fires when any order item's `paymentStatus` transitions into `'Paid'` (the write staff already make via the existing rules-gated client update). Awards `points += round(price × tier.multiplier)` — the `LoyaltyTier.multiplier` field that has existed in `store.ts` since before this Function but was confirmed (via grep) to be completely unused anywhere until now — adds the same amount to `ltv`, and upgrades `tier` if the new points total crosses a higher tier's `pointsThreshold` (never downgrades).
+
+**Two judgment calls made and disclosed, not silently decided:**
+1. **Pricing source is the day-slot menu document, not the linked Main.** `store.ts`'s own `resolveDish()` comment is explicit that a day-slot dish's `price` is intentionally per-day, never resolved live from `mains/{mainId}` — confirmed and followed here, so `confirmCheckout` reads `menuWeeks`/`menuDefaults`, not `mains`, for pricing.
+2. **Points/ltv accrue on each item's own (undiscounted) `price` field, not a pro-rated share of the order's discounted+VAT total.** No existing points-earning logic exists anywhere in the codebase to mirror (confirmed via grep — only the cancellation/refund path touches `storeCredit` today), so this is new design, not a port. The alternative (splitting the order-level discount/VAT back across items to find each item's "amount actually paid") is a defensible design too, just meaningfully more complex, and wasn't clearly called for by anything in the schema doc. Worth Bhimal's explicit sign-off if the simpler basis isn't what he had in mind.
+
+**Verification, and an honest limitation of it:** this project's sandbox environment can reach npm's registry (used for last round's `tsc`/`vite build` check) but **not** `storage.googleapis.com`, which is where the Firestore/Functions emulator binaries are hosted — confirmed by a direct `curl`, which got a 403 from the sandbox's network proxy. That means, unlike previous rounds, **no live emulator run was possible before delivery this time.** Compensated with what could be verified without one: `node --check` + an actual module-load of the new `functions/index.js` (real imports, not just syntax), and — most importantly — the exact discount-stacking and tier-upgrade arithmetic extracted verbatim and unit-tested against independently hand-computed expected values across several cases (full-week bulk discount vs. 4-of-5-days no-discount, group-beats-tier, birthday-only-on-the-matching-item, tier-upgrade-crosses-threshold, top-tier-never-downgrades) — all passed. What could **not** be proven here is the live Firestore/Functions wiring itself (the actual `db.runTransaction` calls, the rules enforcement, the trigger actually firing under a real emulator). `scripts/testCheckoutFlow.js` (delivered alongside this entry) is built to close that gap on Bhimal's machine, which already has the emulator binaries downloaded from earlier sessions: it signs in as the real seeded Eleanor Fant account, builds a full Mon-Fri Lunch cart (+1 Dinner item) using real `menuDefaults` ids on a week chosen specifically to have no `menuWeeks` override, independently recomputes the expected price/discount/total without reusing any of `functions/index.js`'s own code, and asserts against the Function's actual response — plus checks that an unknown dish id is rejected, that a direct client `orders` create now fails with `permission-denied` (proving the rules fix), that marking every item Paid awards the right points/ltv and upgrades Eleanor from Bronze to Silver, and that re-marking an already-Paid item doesn't double-award.
+
+**One disclosed gap in the test's own coverage:** step 5 of the test (marking items Paid) writes via the Admin SDK rather than signing in as staff and doing it through the client, because the bootstrap staff password (`scripts/seedBootstrap.js`) may have been changed by hand since seeding, per that script's own comment — this script has no way to know the current value. The write shape is identical to what a real staff client update produces, so the trigger's own behavior is tested faithfully either way; what's *not* independently re-proven here is the staff-permission rule gate itself, which is a simple boolean/equality check with no new logic in this round.
+
+**Deliberately still deferred, not forgotten:** the real Customer App cart/checkout UI is not wired to `confirmCheckout` yet, and Operations' order screens are not wired to read `orders`/`items` yet — both explicitly out of scope for this round (agreed with Bhimal before writing any code), same "backend proven, UI wiring is separate work" split as step 5.
+
+**Update — Bhimal's live run (2026-08-13) found a real bug, since fixed:** the emulator picked up both new functions and the tightened rules cleanly (`functions[us-central1-confirmCheckout]: http function initialized`, `functions[us-central1-onItemPaymentConfirmed]: firestore function initialized`, `firestore: Rules updated`, no compile errors), and `scripts/testCheckoutFlow.js` passed 12 of 13 checks on the first run. The one failure was real: marking all 6 of Eleanor's items Paid at once awarded 1159 points instead of the expected 1115 — a 44-point overshoot that traced to `round(220 x 1.2) - 220`. Root cause: `onItemPaymentConfirmed` re-read the customer's **live** tier on every trigger invocation, and each item's `paymentStatus` update fires its own independent trigger -- so once an earlier item in the same batch pushed Eleanor's points past the Silver threshold, a later item in that same batch (processing order across independent Cloud Functions triggers isn't guaranteed) got charged at the new 1.2x multiplier instead of the 1x she was actually on when she placed the order. Same order, potentially different point totals depending on nothing more meaningful than trigger scheduling.
+
+**Fix:** `confirmCheckout` now freezes `tierAtOrder` onto every item at checkout time; `onItemPaymentConfirmed` computes the multiplier from that frozen value instead of re-reading the customer's current tier at payment time. Verified the fix directly: replayed the exact failing scenario (same 6 prices, same starting points/tier) through 4 different processing orders in a standalone simulation -- all 4 now converge on identical results (1415 points, tier `t2`), where before the fix they would have diverged. `scripts/unitTestMath.js`'s existing checks (unaffected by this change) still all pass. Updated `functions/index.js` re-delivered to Bhimal's machine; re-running `testCheckoutFlow.js` is the next step.
+
+**Confirmed working (live), 2026-08-13:** after restoring the emulator's seed data (a separate, unrelated near-miss — see below) and restarting with the fixed `functions/index.js`, `node scripts/testCheckoutFlow.js` passed all 13 checks: subtotal/discount/total math correct (Rs 1115 subtotal, Rs 167.25 standard discount, Rs 55.75 bulk discount, Rs 1025.80 total), the order + 6 items written with server-computed pricing, an unknown dish id rejected, a direct client `orders` create rejected with `permission-denied` (the rules fix holds), and — the one that mattered most — marking all 6 items Paid took Eleanor from 300 to exactly 1415 points (300 + 1115, at the correct 1x Bronze multiplier throughout) and upgraded her to Silver, with no double-award on a repeat mark-paid. `confirmCheckout` and `onItemPaymentConfirmed` are now genuinely proven end-to-end, not just reviewed by hand — same rung on this project's verification ladder as `registerCustomer` reached in the prior entry.
+
+**A separate, unrelated near-miss during this same verification pass:** the first re-run after restarting the emulator hit `auth/user-not-found` for Eleanor's account — the restart's `npm run emulators` (confirmed to be the correct script, with `--export-on-exit`/`--import` both present) came up with an empty Auth/Firestore emulator, no "Importing data from ..." lines at all in the startup log. The likely cause: whatever happened during the *previous* restart (before this verification pass) didn't complete a clean export, so there was nothing for this restart to import — the same category of near-miss as the 2026-08-13 entry earlier today, a different specific trigger. Fixed the same way: re-ran all four seed scripts (`seedBootstrap.js`, `migrateConfigDocs.js`, `migrateMenuLibrary.js`, `seedCustomers.js`), all idempotent, all confirmed clean. Same standing reminder applies: always stop the emulator with `Ctrl+C` in its own terminal and let the export finish before closing anything.
+
+**Next step:** commit the three changed/new files (`firestore.rules`, `functions/index.js`, `scripts/testCheckoutFlow.js`) via Antigravity, then decide whether to wire the real Customer App checkout UI to `confirmCheckout` next, or tackle something else.
+
+---
+
+## 2026-08-13 — firestore.rules / functions/index.js / scripts/testCheckoutFlow.js Committed (Antigravity)
+
+**Commit:** [`914137e`](https://github.com/BhimalL/BonManze_PWA/commit/914137e7c2d7393d1e09accc478836423177d80f) "Step 6 backend: confirmCheckout + onItemPaymentConfirmed, tierAtOrder fix, tightened rules" — 3 files, 554 insertions, 11 deletions, pushed to `main` by Antigravity.
+**Verified:** confirmed directly against the device (`git status --short`, `git log -1`, `git show --stat`) rather than trusting the relayed confirmation alone — exact match on files/line counts. Working tree clean of tracked changes afterward.
+
+Closes the "Also pending: committing..." item from the previous entry. Step 6's backend half (`confirmCheckout`, `onItemPaymentConfirmed`, the `tierAtOrder` fix, the tightened `orders`/`items` create rules) is now fully shipped: written, live-tested (13/13 checks), and committed.
+
+---
+
+## 2026-08-13 — Customer App Checkout + Order History Wired to Real Firestore (Claude's own call, Bhimal delegated "what's next")
+
+**Files changed (not yet committed by Antigravity, not yet live-tested by Bhimal):** `modules/CustomerPortal.tsx`.
+
+**Why this task, not something else:** after the previous entry's commit landed, Bhimal was asked whether to wire the Customer App checkout UI to `confirmCheckout` next, address Operations' Customer CRM visibility into real customers, or verify Storage's cross-service rules — and said "I'll let you decide." Chose the checkout UI wiring: it's the most direct payoff from step 6's backend work (already proven live, sitting unused by the actual customer-facing screen), and the natural next rung after step 5's login UI.
+
+**Investigated before writing any code, not assumed:** two things changed the scope from "just wire the button."
+1. **Operations' menu-editing UI (`Operations.tsx`) has zero Firestore wiring at all** — confirmed by reading the code; every menu/price edit (`updateMainDish`, `addBaseOption`, etc.) mutates only a local in-memory array, never Firestore. `confirmCheckout` prices from Firestore's `menuWeeks`/`menuDefaults`/add-on-catalog documents, a one-time snapshot from the 2026-08-12 migration with no live sync since. **If any menu/price content has been edited in Operations since that migration, customer-facing pricing and what `confirmCheckout` actually charges have silently diverged** — flagged directly to Bhimal, not yet answered.
+2. **Wiring checkout alone would have made a customer's own order invisible immediately after placing it.** `myOrders` (the source for "My Order" and Profile's order history) filters a completely separate local mock `orders` array, disconnected from Firestore. So this round's scope was expanded, before any code was written, to cover both checkout submission *and* order-history reading — not checkout alone.
+
+**What shipped:**
+- **`handleCheckout` rewritten** to call `confirmCheckout` (the callable proven working in the prior two entries) via `httpsCallable`, with `type: 'Meal Plan'` and `paymentScheme: 'Per-Delivery'` (matching the value already hardcoded in the mock flow — no new payment-scheme UI). On success, clears both carts and switches to the order view; the new Firestore listeners (below) surface the new order automatically, no local state push needed. On failure, shows an inline error banner and a toast rather than failing silently. The "Confirm order" button now shows a loading spinner and is disabled while the call is in flight.
+- **Two new live `onSnapshot` listeners** — one on `orders` filtered by `customerId == uid`, one on a `collectionGroup('items')` query also filtered by `customerId == uid` (the exact query shape that field was duplicated onto every item to support, per the schema doc's own design). A new `firestoreOrders` memo reshapes the raw listener data into the app's existing `Order`/`OrderItem` TypeScript types, and `myOrders` now concatenates the local mock with this real data. **No changes were needed to any existing rendering code** ("My Order" tab, the receipt sheet, Profile drawer's order history, the week-grouping logic) — it all already only needed `Order`-shaped objects and doesn't care where they came from.
+- **Edit/Cancel/Pay controls hidden for real orders.** `editOrderItem`/`cancelOrderItem`/`submitPaymentClaim` all mutate the local mock store by order id and would silently do nothing (or worse) against a real Firestore order id. A `firestoreOrderIds` set gates all 4 reachable call sites; real orders show short explanatory read-only text ("Contact us to change" / "{amount} due · contact us") instead of non-functional buttons. Wiring these to real Cloud Functions is separate follow-up work, not done this round.
+
+**Verification, and an honest limitation of it:** checked before delivery, matching the effort of every prior round — `npx tsc --noEmit` and `npx vite build` both clean in Claude's own sandbox scratch copy, and a manual read-through of the existing `thisWeekLines`/`weekOrders`/`pastLines`/`paymentGroups` derivations confirming they rely only on fields (`item.status`, `item.deliveryDate`, `order.id`, `order.timestamp`, `item.paymentStatus`, `item.paymentReference`, `item.qty`, `item.price`) that the new Firestore reconstruction populates correctly, cross-checked directly against what `confirmCheckout` actually writes in `functions/index.js`. **What could not be checked here:** this is UI work with no synthetic test script behind it (unlike `confirmCheckout` itself, which has `testCheckoutFlow.js`) — the actual checkout button and order-history screen have not been exercised against a live emulator + running app. That's the next step, on Bhimal's machine.
+
+**Deliberately still deferred, not forgotten:** Operations' order screens (Orders by Dish, Delivery List, Payments) are still not wired to real `orders`/`items`; Operations' Customer CRM tab still has no visibility into real Firestore customers; the menu-data drift risk above is unresolved; the Edit/Cancel/Pay actions above are hidden, not implemented, for real orders.
+
+**Next step:** Bhimal to run `npm run dev` + the emulator and place a real order through the Customer App as one of the seeded customers, confirming it appears correctly in "My Order" and that the totals/points match what `confirmCheckout` computes. Once confirmed working live, commit `modules/CustomerPortal.tsx` via Antigravity.
+
+---
+
+## 2026-08-13 — Real Bug Found on Bhimal's First Live Checkout: Collection-Group Query Denied by firestore.rules (Claude, fixed same day)
+
+**Files changed (not yet committed by Antigravity):** `firestore.rules`.
+
+**What happened:** Bhimal placed a real order through the Customer App's new checkout — the order didn't appear in "My Order" afterward. The browser console showed the real cause directly: `order items listener failed FirebaseError: false for 'list' @ [the deny-everything catch-all's line]`.
+
+**Root cause:** the `items` subcollection's security rule was written nested inside `orders/{orderId}`'s own `match` block — correct-looking, and correct for direct single-document access where the order id is already known (e.g. staff marking one item Paid). But the Customer App's new order-history listener reads items via a **collection-group query** (`collectionGroup('items')`, filtered by `customerId`) specifically so it can see every order's items without already knowing which order ids exist — and Firestore does not apply a rule nested under a specific parent path to a collection-group `list` request. The request instead fell through to the deny-everything catch-all rule at the bottom of the file, so the items listener got `permission-denied`, `fsItemDocs` stayed empty, and the order rendered with zero items — invisible in "My Order" even though the order document itself (in the top-level `orders` collection, a normal query, unaffected) was created correctly.
+
+**Fix:** moved the `items` rule out of the nested `match /orders/{orderId} { match /items/{itemId} {...} } }` form and into a top-level `match /{path=**}/items/{itemId} { ... }` block — Firestore's documented pattern for a rule meant to apply across a whole collection group. This form covers both the collection-group query and ordinary direct get/update access to a single item; no other rule logic changed (same read/create/update/delete conditions as before).
+
+**Verification, and its limit:** confirmed brace/paren balance and structure by hand (no live emulator available in this sandbox — network-blocked, same limitation as every prior rules-touching round). This is a well-documented, standard Firestore Rules pattern for collection-group access, not a novel construct. **Not yet confirmed against the real emulator** — that's the next step, on Bhimal's machine.
+
+**Next step:** with the emulator already running, dropping in the new `firestore.rules` should hot-reload automatically (watch terminal 1 for `+  firestore: Rules updated`, no compile error). Refresh the Customer App page afterward to re-establish the order-history listeners (a failed `onSnapshot` doesn't automatically retry after rules change) — the order Bhimal already placed should then appear in "My Order" immediately, since the order document itself was already there; only the items were unreadable. If it still doesn't show, check the console again for a fresh error.
+
+---
+
+## 2026-08-13 — Confirmed Working (Live): Real Checkout + Order History, After the Rules Fix
+
+Bhimal re-ran the checkout after the `firestore.rules` fix above landed and refreshed the page: the order (Chicken Curry, Rs 120, Monday) now appears correctly in "My Order" — right amount, right dish, tagged UNPAID/ACTIVE, with "CONTACT US TO CHANGE" shown in place of Edit/Pay/Cancel controls (the gating for real Firestore-origin orders working exactly as designed). No permission errors in the browser console this time. This closes out the last open item from the two entries above — the Customer App's checkout + order-history wiring is now genuinely proven live, not just `tsc`/`vite build`-clean.
+
+**Next step:** commit `firestore.rules` and `modules/CustomerPortal.tsx` via Antigravity.
+
+---
+
+## 2026-08-13 — firestore.rules / modules/CustomerPortal.tsx Committed (Antigravity)
+
+**Commit:** [`6e32fb4`](https://github.com/BhimalL/BonManze_PWA/commit/6e32fb48aa839e280244bf29436e655962f7e45a) "Wire Customer App checkout + order history to Firestore" — 2 files, 215 insertions, 67 deletions, pushed to `main` by Antigravity.
+**Verified:** confirmed directly against the device (`git status --short`, `git log -1`, `git show --stat`, and `git log -1 origin/main` to confirm the push actually landed, not just a local commit) — exact match on hash/files/line counts.
+
+Closes out this round: the Customer App's checkout + order-history wiring (and the `firestore.rules` collection-group fix it surfaced) is now written, live-tested, and committed — same bar as every other piece of this backend so far.
+
+**Next:** scoping Operations' Firestore wiring (Customer CRM tab + order screens) — Bhimal delegated the decision on ordering; committing first, scoping next.
+
+---
+
+## 2026-08-13 — Operations: Staff Login Gate + Real Firestore Read-Side Wiring
+
+**What changed (`modules/Operations.tsx`):**
+- Added a staff sign-in gate. Operations now requires signing in with a
+  Firebase Auth account that has a matching `staff/{uid}` document with
+  `active: true` (checked via `onAuthStateChanged` + `getDoc`). Anyone
+  without one is signed back out immediately with an explanatory error,
+  rather than being left half-authenticated.
+- Added an email/password sign-in screen (shown when not signed in) and a
+  loading spinner (shown while the auth check is running) — both render
+  before the existing Operations console JSX, placed as early returns
+  after all hooks so React's rules of hooks stay satisfied.
+- "Exit Console" in the sidebar now signs the staff user out (`signOut`)
+  before returning to the landing screen, instead of just navigating away
+  while still authenticated.
+- Once signed in, Operations' Customer CRM, Orders by Dish, Delivery List,
+  and Payments tabs now read real data from Firestore (`customers` and
+  `orders` collections, plus a `collectionGroup('items')` listener for
+  order line items) instead of the local mock store. This is a swap, not a
+  merge — matching the same call `CustomerPortal.tsx` already made for its
+  own order history — so existing mock/demo orders and customers no longer
+  appear in Operations.
+- `tier`/`group` on customers come back from Firestore as schema ids
+  (e.g. `t4`, `g3`); these are translated to display names using the
+  existing `LOYALTY_TIERS`/`CUSTOMER_GROUPS` mock constants purely as a
+  static id→name lookup table (the same trick `CustomerPortal.tsx` uses).
+- "Mark Delivered" (Delivery List) and "Mark Paid" (Payments) are now
+  disabled with an explanatory tooltip. Their underlying handlers still
+  only mutate the old local mock order array, so against now-100%
+  Firestore-sourced orders they would always silently fail — same
+  discipline already applied to `CustomerPortal.tsx`'s Edit/Cancel/Pay
+  controls. Wiring these to real writes is follow-up work.
+
+**Prerequisite already in place:** `scripts/seedBootstrap.js` (already run
+earlier) created an "Owner" role and a staff account for Bhimal via the
+Admin SDK:
+- email: `bhimalonly@gmail.com`
+- password: `ChangeMe123!` (placeholder — change this in the emulator's
+  Auth UI, or in the Firebase console once this goes to a real project)
+
+**Verified before delivery:** `npx tsc --noEmit` and `npx vite build` both
+pass clean against the edited file in a scratch mirror.
+
+**Not yet done:** wiring "Mark Delivered"/"Mark Paid" to real Firestore
+writes (currently disabled); committing this file via Antigravity.
+
+## 2026-08-13 — Confirmed Working (Live): Staff Login + Operations Read-Side Firestore Wiring
+
+Bhimal signed in to Operations with the seeded staff account
+(`bhimalonly@gmail.com`) after restarting the emulator with an imported
+data snapshot (the emulator had started blank the first time — no
+`--import` flag — losing all customers/staff/orders created earlier;
+recovered by importing `firebase-export-1786608580510RZAfuh`, which had
+everything including Neji Lakha's registration).
+
+Confirmed live in the browser:
+- Customer Directory shows real Firestore customers with correct
+  tier/points/credit — Neji Lakha (Bronze, 0 orders — she only
+  registered, never checked out), Eleanor Fant (Silver, 1 real order,
+  Rs 29,515.00), Sarah Connor, Marcus Sterling (Diamond) all displaying
+  correctly with ids translated to display names.
+- Orders by Dish, Delivery List, and Payments tabs (which depend on the
+  org-wide `collectionGroup('items')` listener — the same query shape
+  that hit the collection-group rules bug earlier this session) loaded
+  with no console errors — no `permission-denied`, no listener failures.
+- No Firestore/Auth-related console errors at all after the emulator
+  restart. Remaining console entries (Tailwind CDN dev warning, a browser
+  extension's "Extension context invalidated" errors, a click-handler
+  timing violation) are unrelated to this app's code.
+
+**Also confirmed:** the Cloud Functions emulator, which failed to load on
+the first (blank) `emulators:start` run, loaded cleanly
+(`confirmCheckout`, `onItemPaymentConfirmed`, `registerCustomer` all
+initialized) once restarted — that first failure looks like a one-off,
+not a real regression.
+
+**Operational note for future sessions:** running `firebase emulators:start`
+without `--import`/`--export-on-exit` starts completely blank — no
+staff/customer/order data survives a restart otherwise. Restart with:
+`npx firebase emulators:start --import=./firebase-export-1786608580510RZAfuh --export-on-exit=./firebase-export-1786608580510RZAfuh`
+to both load and keep saving to the same snapshot going forward.
+
+**Next step:** hand `modules/Operations.tsx` to Antigravity to commit.
