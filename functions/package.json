@@ -1,0 +1,17 @@
+{
+  "name": "functions",
+  "description": "BonManzE Cloud Functions — server-side logic that must not run on a customer's own client (see BonManzE_Firestore_Schema.md §4).",
+  "type": "module",
+  "private": true,
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "serve": "firebase emulators:start --only functions,firestore,auth"
+  },
+  "dependencies": {
+    "firebase-admin": "^14.2.0",
+    "firebase-functions": "^7.3.2"
+  }
+}
