@@ -32,8 +32,14 @@ import {
   Truck,
   CreditCard,
   MessageSquare,
-  Phone
+  Phone,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { auth, db, functions } from '../firebaseClient';
 import { Customer, Order, OrderItem, PaymentMethod } from '../types';
 import {
   WEEKDAY_KEYS,
@@ -345,6 +351,29 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // time they open the app, but first-timers can still tap it open.
   const [guideOpen, setGuideOpen] = useState(false);
 
+  // --- Real Firebase Auth state (replaces the old mock customer-picker) ---
+  // customerDocRaw holds the customers/{uid} document exactly as Firestore
+  // returns it (tier/group as schema ids, e.g. "t4") — currentUser below is
+  // derived from it in its own effect further down, rather than resolved
+  // inline in onAuthStateChanged, so the tier/group name lookups never run
+  // against a stale loyaltyTiers/customerGroups closure.
+  const [customerDocRaw, setCustomerDocRaw] = useState<any | null>(null);
+  // True only until Firebase Auth's persisted-session check resolves once,
+  // on first mount — avoids flashing the login screen for an already
+  // signed-in customer before their session is restored.
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [regUsername, setRegUsername] = useState('');
+  const [regEmail, setRegEmail] = useState('');
+  const [regPassword, setRegPassword] = useState('');
+  const [regFirstName, setRegFirstName] = useState('');
+  const [regLastName, setRegLastName] = useState('');
+  const [regPhone, setRegPhone] = useState('');
+
   const [builder, setBuilder] = useState<{
     day: WeekDay; service: Service; weekStart: string; openSection: 1 | 2 | 3; sel: MealSelection; editIndex: number | null;
     // Set only when editing an already-confirmed meal (as opposed to a
@@ -446,11 +475,136 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return () => clearTimeout(t);
   }, [toastMsg]);
 
+  // Real login/registration (Firebase Auth), replacing the old mock
+  // customer-picker. Fires once on mount and again on every sign-in/out.
+  // Only fetches *which* customer is signed in — currentUser itself is
+  // derived from customerDocRaw in the next effect below.
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setCustomerDocRaw(null);
+        setAuthChecking(false);
+        return;
+      }
+      try {
+        const snap = await getDoc(doc(db, 'customers', user.uid));
+        if (snap.exists()) {
+          setCustomerDocRaw({ id: user.uid, ...snap.data() });
+        } else {
+          // Signed in with Firebase but no customers/{uid} doc — shouldn't
+          // happen via registerCustomer's own flow, but fail safe rather
+          // than show an app screen with a half-populated currentUser.
+          setAuthError('Signed in, but no customer record was found for this account.');
+          await signOut(auth);
+        }
+      } catch (err) {
+        console.error('Failed to load customer profile', err);
+        setAuthError('Could not load your account — please try again.');
+      } finally {
+        setAuthChecking(false);
+      }
+    });
+    return unsub;
+  }, []);
+
+  // Re-derive currentUser from the raw Firestore doc whenever it (or the
+  // loyaltyTiers/customerGroups arrays it resolves ids against) changes.
+  // Firestore stores tier/group as schema ids ("t4"/"g3" — see
+  // scripts/seedCustomers.js and functions/index.js), but every other part
+  // of this app (built long before Firestore existed) expects tier/group
+  // as a display NAME ("Diamond"/"VIP") to match against loyaltyTiers —
+  // this is the one translation step that keeps a real Firestore customer
+  // from silently regressing to "t4 Member" in the header.
+  useEffect(() => {
+    if (!customerDocRaw) { setCurrentUser(null); return; }
+    setCurrentUser({
+      id: customerDocRaw.id,
+      firstName: customerDocRaw.firstName,
+      lastName: customerDocRaw.lastName,
+      name: customerDocRaw.name,
+      email: customerDocRaw.email,
+      phone: customerDocRaw.phone || '',
+      segment: customerDocRaw.segment,
+      group: customerGroups.find(g => g.id === customerDocRaw.group)?.name ?? customerDocRaw.group,
+      lastOrder: customerDocRaw.lastOrder,
+      ltv: customerDocRaw.ltv ?? 0,
+      points: customerDocRaw.points ?? 0,
+      storeCredit: customerDocRaw.storeCredit ?? 0,
+      tier: loyaltyTiers.find(t => t.id === customerDocRaw.tier)?.name ?? customerDocRaw.tier,
+      birthday: customerDocRaw.birthday,
+      avatar: customerDocRaw.avatar || `https://picsum.photos/seed/${customerDocRaw.id}/100/100`,
+      referenceCode: customerDocRaw.referenceCode,
+      gdprConsent: customerDocRaw.gdprConsent,
+      addresses: customerDocRaw.addresses || [],
+      dietaryPreferences: customerDocRaw.dietaryPreferences,
+    });
+  }, [customerDocRaw, loyaltyTiers, customerGroups]);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthLoading(true);
+    try {
+      const normalized = loginUsername.trim().toLowerCase();
+      const usernameSnap = await getDoc(doc(db, 'usernames', normalized));
+      if (!usernameSnap.exists()) {
+        setAuthError('No account found with that username.');
+        return;
+      }
+      const { email } = usernameSnap.data() as { email: string };
+      await signInWithEmailAndPassword(auth, email, loginPassword);
+      // onAuthStateChanged (above) picks up from here and loads the profile.
+    } catch (err: any) {
+      setAuthError(friendlyAuthError(err));
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthLoading(true);
+    try {
+      const register = httpsCallable(functions, 'registerCustomer');
+      await register({
+        username: regUsername.trim(),
+        email: regEmail.trim(),
+        password: regPassword,
+        firstName: regFirstName.trim(),
+        lastName: regLastName.trim(),
+        phone: regPhone.trim(),
+      });
+      // registerCustomer creates the account server-side via the Admin SDK,
+      // which doesn't give the browser a session — sign in with the same
+      // credentials the customer just chose to actually establish one.
+      await signInWithEmailAndPassword(auth, regEmail.trim(), regPassword);
+    } catch (err: any) {
+      setAuthError(friendlyAuthError(err));
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const friendlyAuthError = (err: any): string => {
+    const code = err?.code || '';
+    if (code.includes('wrong-password') || code.includes('invalid-credential')) return 'Incorrect password.';
+    if (code.includes('too-many-requests')) return 'Too many attempts — please wait a moment and try again.';
+    if (code.includes('user-disabled')) return 'This account has been disabled.';
+    // Cloud Function HttpsErrors (registration) and most Auth SDK errors
+    // already carry a readable message — see functions/index.js.
+    return err?.message?.replace(/^Firebase: /, '').replace(/\s*\(auth\/[a-z-]+\)\.?$/i, '') || 'Something went wrong — please try again.';
+  };
+
   // Keeps the logged-in customer's own record (points, storeCredit, etc.)
-  // in sync with the shared customers store whenever it changes — e.g. a
-  // cancelled paid meal adds store credit via updateCustomerRecord, and
-  // without this, Home/Profile would keep showing the pre-refund balance
-  // until the customer logged out and back in.
+  // in sync with the LOCAL mock customers store whenever it changes — e.g.
+  // a cancelled paid meal adds store credit via updateCustomerRecord. This
+  // is now effectively inert for a real Firebase-authenticated customer
+  // (their id is a Firebase UID, never present in the local GLOBAL_CUSTOMERS
+  // array), a known, disclosed gap — see BonManzE_Firestore_Schema.md §5.
+  // Left in place rather than removed since it's harmless and still exactly
+  // correct for the local-store world every *other* part of this screen
+  // (orders, cart, menu) still lives in.
   useEffect(() => {
     if (!currentUser) return;
     const updated = customers.find(c => c.id === currentUser.id);
@@ -1082,42 +1236,129 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return null;
   }, [thisWeekLinesWithSeq, cart, weekDays]);
 
-  // --- LOGIN ---
+  // --- LOGIN / REGISTER ---
+  if (authChecking) {
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-[#FDFAF4]">
+        <Loader2 className="size-8 text-primary animate-spin" />
+      </div>
+    );
+  }
+
   if (!currentUser) {
     return (
-      <div className="h-full w-full overflow-y-auto bg-[#FDFAF4] flex items-center justify-center p-6">
-        <div className="max-w-md w-full text-center">
-          {onLogout && (
-            <button onClick={onLogout} className="absolute top-6 left-6 p-2 rounded-xl text-slate-400 hover:bg-white/60">
-              <ArrowLeft className="size-5" />
-            </button>
-          )}
-          {SYSTEM_CONFIG.businessLogoUrl ? (
-            <img src={SYSTEM_CONFIG.businessLogoUrl} alt={SYSTEM_CONFIG.businessName} className="size-16 rounded-2xl object-cover shadow-lg shadow-primary/20 mx-auto mb-5" />
-          ) : (
-            <div className="size-16 bg-primary rounded-2xl flex items-center justify-center text-white shadow-lg shadow-primary/20 mx-auto mb-5">
-              <Sparkles className="size-8" />
-            </div>
-          )}
-          <h1 className="text-3xl font-black text-slate-900 tracking-tight mb-1">{SYSTEM_CONFIG.businessName}</h1>
-          <p className="text-slate-500 font-medium mb-1">{SYSTEM_CONFIG.businessTagline}</p>
-          <p className="text-xs text-primary font-bold italic mb-8">"{culturePhrase.cr}" — {culturePhrase.en}</p>
+      <div className="h-full w-full overflow-y-auto bg-[#FDFAF4] flex items-center justify-center p-6 relative">
+        {onLogout && (
+          <button onClick={onLogout} className="absolute top-6 left-6 p-2 rounded-xl text-slate-400 hover:bg-white/60">
+            <ArrowLeft className="size-5" />
+          </button>
+        )}
+        <div className="max-w-md w-full">
+          <div className="text-center mb-6">
+            {SYSTEM_CONFIG.businessLogoUrl ? (
+              <img src={SYSTEM_CONFIG.businessLogoUrl} alt={SYSTEM_CONFIG.businessName} className="size-16 rounded-2xl object-cover shadow-lg shadow-primary/20 mx-auto mb-5" />
+            ) : (
+              <div className="size-16 bg-primary rounded-2xl flex items-center justify-center text-white shadow-lg shadow-primary/20 mx-auto mb-5">
+                <Sparkles className="size-8" />
+              </div>
+            )}
+            <h1 className="text-3xl font-black text-slate-900 tracking-tight mb-1">{SYSTEM_CONFIG.businessName}</h1>
+            <p className="text-slate-500 font-medium mb-1">{SYSTEM_CONFIG.businessTagline}</p>
+            <p className="text-xs text-primary font-bold italic">"{culturePhrase.cr}" — {culturePhrase.en}</p>
+          </div>
 
-          <div className="space-y-3">
-            {customers.map(c => (
+          <div className="bg-white rounded-[28px] border border-slate-200 shadow-sm p-6">
+            <div className="flex bg-[#F4EFE4] rounded-2xl p-1 mb-6">
               <button
-                key={c.id}
-                onClick={() => setCurrentUser(c)}
-                className="w-full flex items-center gap-4 p-4 bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-primary/40 transition-all text-left"
+                onClick={() => { setAuthMode('login'); setAuthError(null); }}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${authMode === 'login' ? 'bg-white text-primary shadow-sm' : 'text-slate-400'}`}
               >
-                <img src={c.avatar} alt={c.name} className="size-11 rounded-full border-2 border-slate-100" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-bold text-slate-900 truncate">{c.name}</p>
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{c.tier || 'Member'}</p>
-                </div>
-                <ChevronRight className="size-4 text-slate-300" />
+                Log In
               </button>
-            ))}
+              <button
+                onClick={() => { setAuthMode('register'); setAuthError(null); }}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${authMode === 'register' ? 'bg-white text-primary shadow-sm' : 'text-slate-400'}`}
+              >
+                Sign Up
+              </button>
+            </div>
+
+            {authError && (
+              <div className="mb-4 p-3 rounded-xl bg-danger/10 text-danger text-xs font-bold flex items-start gap-2">
+                <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                <span>{authError}</span>
+              </div>
+            )}
+
+            {authMode === 'login' ? (
+              <form onSubmit={handleLogin} className="space-y-3">
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Username</label>
+                  <input
+                    value={loginUsername}
+                    onChange={e => setLoginUsername(e.target.value)}
+                    placeholder="e.g. marcus"
+                    autoCapitalize="none"
+                    className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Password</label>
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={e => setLoginPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={authLoading || !loginUsername || !loginPassword}
+                  className="w-full py-3.5 rounded-xl bg-primary text-white text-xs font-black uppercase shadow-lg shadow-primary/20 disabled:opacity-40 flex items-center justify-center gap-2 mt-2"
+                >
+                  {authLoading && <Loader2 className="size-4 animate-spin" />}
+                  Log In
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleRegister} className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">First name</label>
+                    <input value={regFirstName} onChange={e => setRegFirstName(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-white" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Last name</label>
+                    <input value={regLastName} onChange={e => setRegLastName(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-white" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Username</label>
+                  <input value={regUsername} onChange={e => setRegUsername(e.target.value)} placeholder="letters, numbers, _ and . only" autoCapitalize="none" className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-white" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Email</label>
+                  <input type="email" value={regEmail} onChange={e => setRegEmail(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-white" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Phone (optional)</label>
+                  <input type="tel" value={regPhone} onChange={e => setRegPhone(e.target.value)} placeholder="+230 ..." className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-white" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">Password</label>
+                  <input type="password" value={regPassword} onChange={e => setRegPassword(e.target.value)} placeholder="At least 6 characters" className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-white" />
+                </div>
+                <button
+                  type="submit"
+                  disabled={authLoading || !regUsername || !regEmail || !regPassword || !regFirstName || !regLastName}
+                  className="w-full py-3.5 rounded-xl bg-primary text-white text-xs font-black uppercase shadow-lg shadow-primary/20 disabled:opacity-40 flex items-center justify-center gap-2 mt-2"
+                >
+                  {authLoading && <Loader2 className="size-4 animate-spin" />}
+                  Create Account
+                </button>
+              </form>
+            )}
           </div>
         </div>
       </div>
@@ -1169,7 +1410,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 <button
                   onClick={() => {
                     setProfileMenuOpen(false);
-                    if (onLogout) onLogout();
+                    signOut(auth).finally(() => {
+                      setCustomerDocRaw(null);
+                      if (onLogout) onLogout();
+                    });
                   }}
                   className="w-full text-left px-4 py-2.5 text-xs font-bold text-danger hover:bg-slate-50 transition-colors flex items-center gap-2"
                 >
@@ -1848,7 +2092,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <button
                 onClick={() => {
                   setProfileOpen(false);
-                  onLogout();
+                  signOut(auth).finally(() => {
+                    setCustomerDocRaw(null);
+                    onLogout();
+                  });
                 }}
                 className="w-full py-4 bg-slate-100 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-transform"
               >
