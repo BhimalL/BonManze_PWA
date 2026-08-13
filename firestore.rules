@@ -156,18 +156,21 @@ service cloud.firestore {
     }
 
     // ---- orders/{orderId} and its items subcollection (manageOrders) ----
-    // A customer may read/create their own orders but never edit one after
-    // the fact (no client-side changing of totals/status) — everything an
-    // order needs to become after checkout (recomputed total, status
-    // transitions) is a Cloud Function's job, not a client write.
+    // A customer may read their own orders but never create or edit one
+    // directly — checkout goes through the confirmCheckout Cloud Function
+    // (Admin SDK, bypasses these rules), which is the only thing allowed to
+    // decide what an order's/item's total/price actually is. Direct client
+    // create used to be allowed here with no field restriction at all
+    // (a client could submit any total/price it wanted) — closed 2026-08-13
+    // once confirmCheckout existed to do that job properly instead.
     match /orders/{orderId} {
       allow read: if isCustomer(resource.data.customerId) || isStaffAllowed('manageOrders');
-      allow create: if isCustomer(request.resource.data.customerId);
+      allow create: if false; // Cloud Function only — see confirmCheckout
       allow update, delete: if false;
 
       match /items/{itemId} {
         allow read: if isCustomer(resource.data.customerId) || isStaffAllowed('manageOrders');
-        allow create: if isCustomer(request.resource.data.customerId);
+        allow create: if false; // Cloud Function only — see confirmCheckout
         // Staff may update status/paymentStatus fields (mark delivered /
         // mark paid) — never price/qty/name, and never from the customer.
         allow update: if isStaffAllowed('manageOrders')
