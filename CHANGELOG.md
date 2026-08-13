@@ -640,3 +640,62 @@ staff/customer/order data survives a restart otherwise. Restart with:
 to both load and keep saving to the same snapshot going forward.
 
 **Next step:** hand `modules/Operations.tsx` to Antigravity to commit.
+
+## 2026-08-13 — Mark Delivered / Mark Paid Wired to Real Firestore Writes, Confirmed Live
+
+**What changed (`modules/Operations.tsx`):**
+- "Mark Delivered" (Delivery List) and "Mark Paid" (Payments) now perform
+  real batched Firestore writes to the relevant `orders/{orderId}/items`
+  documents (`status: 'Completed'` / `paymentStatus: 'Paid'` +
+  `paymentMethodName`) instead of being disabled placeholders. Both show a
+  loading spinner while in flight and a red inline error banner if the
+  write fails.
+- The items listener now carries each item's real Firestore document id
+  (`_fsItemId`) through to the UI — needed because `confirmCheckout`
+  writes items with an auto-generated id, not the `itemId` data field
+  (which is just which dish/curry it is). Without this there was no way
+  to build a `doc()` reference back to the exact item to update.
+- No new Cloud Function was needed for either action — `firestore.rules`'
+  existing `manageOrders` rule already allowed staff to change
+  `status`/`paymentStatus` directly, as long as price/qty/name/customerId
+  don't move, so a batch of plain client updates is enough. The parent
+  order's own `paymentStatus` rollup (something the old mock also wrote)
+  has no real equivalent — Operations derives it live from the items
+  listener already, so it doesn't need a separate write.
+
+**Confirmed working end-to-end, live, same day:** placed a fresh real
+order through the Customer App as Neji Lakha (2 meals, Rs 210 total —
+Monday Chicken Curry Rs 120, Tuesday DiPain Sausice Rs 90), then in
+Operations marked the Monday item both Delivered and Paid. Confirmed in
+Neji's own live Customer App view (not just Operations): the Monday item
+flipped to `PAID`/`COMPLETED` with a receipt button, "Pay Balance"
+correctly dropped from Rs 210.00 to Rs 90.00 (the remaining unpaid
+Tuesday item), and her Customer Directory card picked up the
+`onItemPaymentConfirmed` loyalty trigger's side effect (120 points, Rs
+120.00 lifetime value) with no console errors. This is the first fully
+real, staff-initiated payment/delivery confirmation to flow through the
+whole stack — checkout, staff action, Firestore trigger, and the
+customer's own live view — in one unbroken chain.
+
+**Found along the way, not a bug:** an existing `orders` document
+(customerName "Eleanor Fant", `type: "Delivery"`) never showed up in
+Payments/Delivery List — traced to `scripts/testCheckoutFlow.js` hardcoding
+`type: 'Delivery'` for its own test runs, which Operations' Meal-Plan-only
+filter correctly excludes. Not a real order, left in place as harmless
+test data (can be cleared via the Emulator UI's "Clear all data" if it
+gets in the way later).
+
+**Confirmed isolated, not systemic:** an earlier checkout attempt failed
+with `"dish-msrgh4sz-8pm6" is not on the Lunch menu for 2026-08-13` — a
+real `confirmCheckout` validation working as intended. Swapping that one
+dish for a different one and re-confirming succeeded immediately, so this
+was specific to that one dish, not the broader menu-drift risk flagged
+earlier — worth a closer look at that specific dish's Firestore id later,
+but not urgent.
+
+**Next round, by Bhimal's choice:** the Customer App's own "Pay"/"Pay
+order" buttons (`submitPaymentClaim`) are still hidden for real orders —
+same reason Mark Delivered/Paid were disabled before this round, the
+handler only mutates the local mock store. Wiring that up so customers
+can self-report a payment claim (Juice/MauCAS reference, etc.) for
+Operations to confirm is the next scoped piece of work.
