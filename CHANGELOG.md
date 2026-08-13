@@ -643,6 +643,9 @@ to both load and keep saving to the same snapshot going forward.
 
 ## 2026-08-13 — Mark Delivered / Mark Paid Wired to Real Firestore Writes, Confirmed Live
 
+**Commit:** [`295125a`](https://github.com/BhimalL/BonManze_PWA/commit/295125a1004f9dfca04ba18e36f98a8a89234d77)
+**Verified:** `npx tsc --noEmit` clean, `vite build` clean, pushed to `main`.
+
 **What changed (`modules/Operations.tsx`):**
 - "Mark Delivered" (Delivery List) and "Mark Paid" (Payments) now perform
   real batched Firestore writes to the relevant `orders/{orderId}/items`
@@ -699,3 +702,72 @@ same reason Mark Delivered/Paid were disabled before this round, the
 handler only mutates the local mock store. Wiring that up so customers
 can self-report a payment claim (Juice/MauCAS reference, etc.) for
 Operations to confirm is the next scoped piece of work.
+
+---
+
+## 2026-08-13 — Customer App "Pay"/"Pay order"/"Pay balance" Wired to Real Firestore Writes, Confirmed Live
+
+**Verified:** `npx tsc --noEmit` clean, `vite build` clean. Not yet
+committed via Antigravity as of this write-up.
+
+**What changed (`modules/CustomerPortal.tsx`, `firestore.rules`):**
+- "Pay" (per meal), "Pay order," and "Pay balance" now perform a real
+  batched Firestore write to `paymentMethodName`/`paymentReference` on the
+  relevant `orders/{orderId}/items` document(s), instead of being hidden
+  for real orders. `paymentStatus` itself is never touched from here —
+  choosing a method only records a claim, exactly like the old mock; only
+  Operations' own Mark Paid (wired the previous round) can ever confirm a
+  payment.
+- Same `_fsItemId` gap Operations.tsx had before its own round — the
+  items listener here didn't carry the item's real Firestore document id
+  either. Fixed the same way: `_fsItemId` rides through `FsOrderItem`
+  (extending `OrderItem`) from the listener through the `firestoreOrders`
+  reshape memo and the `Line` interface, so `commitPayment` can build a
+  real `doc()` reference. A target with no `_fsItemId` is mock demo
+  history and still goes through the old local-store `submitPaymentClaim`
+  — so a "Pay balance" spanning both a real order and mock history (the
+  UI doesn't rule this out, even if unlikely in practice) settles every
+  line correctly either way.
+- **New `firestore.rules` clause was required this round** — unlike Mark
+  Delivered/Paid, which reused the existing staff-only `manageOrders`
+  update rule, there was previously NO customer-write path for items at
+  all. Added a second `allow update` clause, `||`'d with the staff one:
+  a customer may update their own item only while `paymentStatus !=
+  'Paid'`, and only if `paymentStatus`/`price`/`qty`/`name`/`status`/
+  `customerId`/`deliveryDate`/`serviceSlot` all stay unchanged — leaving
+  only `paymentMethodName`/`paymentReference` free to move. Chosen over a
+  new Cloud Function since the rule change is small, narrowly scoped, and
+  keeps the write a plain client batch like Mark Delivered/Paid.
+- Loading spinner + inline error banner added to the payment sheet's
+  confirm button, same pattern as the Mark Delivered/Paid round.
+- The Pay/Pay order buttons' `!firestoreOrderIds.has(...)` gate (and the
+  now-dead "contact us" fallback badge) were removed since both now write
+  correctly for real orders. Edit/Cancel remain gated/hidden for real
+  orders — out of scope this round, still mock-store-only.
+
+**Confirmed working end-to-end, live, same day, by Bhimal:** placed the
+`firestore.rules` clause and `CustomerPortal.tsx` changes, restarted the
+emulators to pick up the new rules (rules only reload on restart, not
+hot), signed in as Neji, tapped Pay on the remaining Rs 90 Tuesday meal,
+picked a payment method and confirmed. The claim showed up correctly in
+Operations' Payments tab awaiting Mark Paid; confirming it there flipped
+the item to Paid in both Operations and Neji's own Customer App view —
+same three-way verification standard as the Mark Delivered/Paid round.
+
+**Found along the way, not part of this round's code:** the emulator
+restart initially came up without last session's data (Neji's order,
+customers, staff, menus) because it was started with a plain `firebase
+emulators:start` rather than `npm run emulators` — the latter is the only
+one that points `--import`/`--export-on-exit` at
+`%LOCALAPPDATA%\BonManzE\emulator-data` (moved there in the first place
+because OneDrive's sync driver blocks the atomic rename Firebase's export
+needs on exit — see `.gitignore`'s note on `.emulator-data/`). The prior
+session's data was recovered from a `firebase-export-<timestamp>` folder
+that auto-saved to the repo root on exit (an artifact of running the bare
+command), imported once to reseed the canonical `%LOCALAPPDATA%` location,
+then `npm run emulators` continued working normally. No code change; a
+process reminder — always start emulators via `npm run emulators`, never
+the raw `firebase emulators:start`, in this OneDrive-synced repo.
+
+**Next step:** hand `modules/CustomerPortal.tsx` and `firestore.rules` to
+Antigravity to commit.

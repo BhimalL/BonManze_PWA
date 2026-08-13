@@ -191,11 +191,31 @@ service cloud.firestore {
       allow create: if false; // Cloud Function only — see confirmCheckout
       // Staff may update status/paymentStatus fields (mark delivered /
       // mark paid) — never price/qty/name, and never from the customer.
-      allow update: if isStaffAllowed('manageOrders')
-        && request.resource.data.price == resource.data.price
-        && request.resource.data.qty == resource.data.qty
-        && request.resource.data.name == resource.data.name
-        && request.resource.data.customerId == resource.data.customerId;
+      //
+      // A customer may ALSO update their own still-unpaid item, but only to
+      // claim how they intend to pay — the Customer App's "Pay"/"Pay
+      // order"/"Pay balance" buttons (2026-08-13), which set ONLY
+      // paymentMethodName/paymentReference. paymentStatus itself, and every
+      // other field, must stay exactly as it was: a claim is never a
+      // confirmation — only Operations' own Mark Paid (the isStaffAllowed
+      // clause above) can ever flip paymentStatus to 'Paid'. The
+      // `resource.data.paymentStatus != 'Paid'` guard additionally blocks a
+      // customer from touching an item Operations has already confirmed.
+      allow update: if (isStaffAllowed('manageOrders')
+          && request.resource.data.price == resource.data.price
+          && request.resource.data.qty == resource.data.qty
+          && request.resource.data.name == resource.data.name
+          && request.resource.data.customerId == resource.data.customerId)
+        || (isCustomer(resource.data.customerId)
+          && resource.data.paymentStatus != 'Paid'
+          && request.resource.data.paymentStatus == resource.data.paymentStatus
+          && request.resource.data.price == resource.data.price
+          && request.resource.data.qty == resource.data.qty
+          && request.resource.data.name == resource.data.name
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.deliveryDate == resource.data.deliveryDate
+          && request.resource.data.serviceSlot == resource.data.serviceSlot);
       allow delete: if false;
     }
 
