@@ -367,7 +367,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Settings has its own General/Icons sub-tabs now that it manages the
   // Icon Library too — everything that used to be the whole Settings page
   // lives under "General".
-  const [settingsSubTab, setSettingsSubTab] = useState<'general' | 'icons' | 'loyalty'>('general');
+  const [settingsSubTab, setSettingsSubTab] = useState<'identity' | 'delivery' | 'tax' | 'loyalty' | 'groups' | 'icons' | 'danger'>('identity');
   const [loyaltyTiers, setLoyaltyTiers] = useState<LoyaltyTier[]>([]);
   const [customerGroups, setCustomerGroups] = useState<CustomerGroup[]>([]);
 
@@ -477,6 +477,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [editCustBirthday, setEditCustBirthday] = useState('');
   const [editCustPhone, setEditCustPhone] = useState('');
   const [editCustTier, setEditCustTier] = useState('');
+  const [editCustGroup, setEditCustGroup] = useState('');
   const [editCustStreet, setEditCustStreet] = useState('');
   const [editCustCity, setEditCustCity] = useState('');
   const [confirmPaymentId, setConfirmPaymentId] = useState<string | null>(null);
@@ -828,6 +829,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setEditCustBirthday(c.birthday || '');
     setEditCustPhone(c.phone || '');
     setEditCustTier(c.tier || 'Bronze');
+    const matchedGroup = customerGroups.find(g => g.id === c.group || g.name === c.group);
+    setEditCustGroup(matchedGroup ? matchedGroup.id : '');
     const primaryAddr = c.addresses?.[0];
     setEditCustStreet(primaryAddr?.street || '');
     setEditCustCity(primaryAddr?.city || '');
@@ -862,6 +865,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       const name = `${firstName} ${lastName}`.trim();
       const email = editCustEmail.trim();
       const birthday = editCustBirthday.trim();
+      const group = editCustGroup;
 
       await updateDoc(docRef, {
         firstName,
@@ -871,6 +875,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         birthday,
         phone: editCustPhone.trim(),
         tier: editCustTier,
+        group,
         addresses: updatedAddresses,
       });
 
@@ -882,6 +887,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         birthday,
         phone: editCustPhone.trim(),
         tier: editCustTier,
+        group: customerGroups.find(g => g.id === editCustGroup)?.name || '',
         addresses: updatedAddresses,
       });
 
@@ -2015,60 +2021,150 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         </button>
 
         {catalogsOpen && (
-          <div className="mt-6 space-y-6">
+          <div className="mt-6 space-y-8 animate-fade-in">
             {catalogKeys.map(key => {
               const meta = CATALOG_META[key];
               const draft = newAddOnForm[key];
               return (
-                <div key={key} className="border-t border-slate-100 pt-5 first:border-t-0 first:pt-0">
-                  <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">{meta.label}</p>
-                  <div className="space-y-2 mb-3">
-                    {meta.items.map(item => {
-                      const isEditing = editingAddOn?.catalog === key && editingAddOn.id === item.id;
-                      if (isEditing) {
-                        return (
-                          <div key={item.id} className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-xl border border-primary/20">
-                            <IconPickerButton value={addOnForm.emoji} onChange={emoji => setAddOnForm(f => ({ ...f, emoji }))} className="w-10 h-9 flex items-center justify-center text-sm rounded-lg border border-slate-200 bg-white hover:border-primary/40 transition-colors shrink-0" />
-                            <input value={addOnForm.name} onChange={e => setAddOnForm(f => ({ ...f, name: e.target.value }))} placeholder="Name" className="flex-1 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
-                            {meta.hasGroup && (
-                              <input value={addOnForm.group} onChange={e => setAddOnForm(f => ({ ...f, group: e.target.value }))} placeholder="Group" className="w-24 text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
-                            )}
-                            {meta.hasPrice && (
-                              <input type="number" value={addOnForm.price} onChange={e => setAddOnForm(f => ({ ...f, price: e.target.value }))} className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
-                            )}
-                            <button onClick={saveAddOnEdit} className="p-1.5 bg-primary text-white rounded-lg shrink-0"><Check className="size-3.5" /></button>
-                            <button onClick={() => setEditingAddOn(null)} className="p-1.5 bg-slate-100 text-slate-400 rounded-lg shrink-0"><X className="size-3.5" /></button>
-                          </div>
-                        );
-                      }
-                      return (
-                        <div key={item.id} className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-xl">
-                          <span className="text-sm">{item.emoji}</span>
-                          <span className="flex-1 text-xs font-bold text-slate-700 truncate">{item.name}</span>
-                          {meta.hasGroup && <span className="text-[10px] font-bold text-slate-400 bg-white px-2 py-0.5 rounded-full border border-slate-200 shrink-0">{item.group || DEFAULT_BASE_GROUP}</span>}
-                          {meta.hasPrice && <span className="text-[11px] font-black text-slate-500 shrink-0">{formatCurrency(item.price ?? item.up ?? 0)}</span>}
-                          <button onClick={() => startEditAddOn(key, item)} className="p-1 text-slate-300 hover:text-primary shrink-0"><Edit3 className="size-3.5" /></button>
-                          <button onClick={() => runMenuWrite(meta.remove(item.id))} className="p-1 text-slate-300 hover:text-red-500 shrink-0"><Trash2 className="size-3.5" /></button>
-                        </div>
-                      );
-                    })}
-                    {meta.items.length === 0 && <p className="text-[11px] text-slate-400 font-medium py-1">No {meta.label.toLowerCase()} options yet.</p>}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <IconPickerButton value={draft.emoji} onChange={emoji => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], emoji } }))} className="w-10 h-9 flex items-center justify-center text-sm rounded-lg border border-slate-200 bg-white hover:border-primary/40 transition-colors shrink-0" />
-                    <input value={draft.name} onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], name: e.target.value } }))} placeholder={`New ${meta.label.toLowerCase()} name`} className="flex-1 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
-                    {meta.hasGroup && (
-                      <input value={draft.group} onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], group: e.target.value } }))} placeholder="Group" className="w-24 text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
-                    )}
-                    {meta.hasPrice && (
-                      <input type="number" value={draft.price} onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], price: e.target.value } }))} className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
-                    )}
-                    <button
-                      onClick={() => saveNewAddOn(key)}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-black bg-primary/10 text-primary hover:bg-primary/20 transition-colors shrink-0"
-                    >
-                      <Plus className="size-3.5" /> Add
-                    </button>
+                <div key={key} className="space-y-3 pt-6 border-t border-slate-100 first:border-t-0 first:pt-0">
+                  <h4 className="text-[10px] font-black uppercase text-primary tracking-widest">{meta.label} Options</h4>
+                  
+                  {meta.items.length > 0 ? (
+                    <div className="overflow-x-auto border border-[#E7E0D0] rounded-2xl">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-[#E7E0D0] bg-[#FAF9F5] text-[10px] font-black uppercase tracking-widest text-slate-400">
+                            <th className="px-6 py-3 w-16">Icon</th>
+                            <th className="px-6 py-3">Option Name</th>
+                            {meta.hasGroup && <th className="px-6 py-3 w-28">Group</th>}
+                            {meta.hasPrice && <th className="px-6 py-3 text-right w-28">Upcharge (Rs)</th>}
+                            <th className="px-6 py-3 text-center w-28">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#E7E0D0] font-semibold text-slate-700">
+                          {meta.items.map(item => {
+                            const isEditing = editingAddOn?.catalog === key && editingAddOn.id === item.id;
+                            if (isEditing) {
+                              return (
+                                <tr key={item.id} className="bg-primary/[0.02]">
+                                  <td className="px-6 py-3">
+                                    <IconPickerButton
+                                      value={addOnForm.emoji}
+                                      onChange={emoji => setAddOnForm(f => ({ ...f, emoji }))}
+                                      className="w-10 h-8 flex items-center justify-center text-sm rounded-lg border border-slate-200 bg-white hover:border-primary/40 transition-colors cursor-pointer shrink-0"
+                                    />
+                                  </td>
+                                  <td className="px-6 py-3">
+                                    <input
+                                      value={addOnForm.name}
+                                      onChange={e => setAddOnForm(f => ({ ...f, name: e.target.value }))}
+                                      placeholder="Name"
+                                      className="w-full text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                                    />
+                                  </td>
+                                  {meta.hasGroup && (
+                                    <td className="px-6 py-3">
+                                      <input
+                                        value={addOnForm.group}
+                                        onChange={e => setAddOnForm(f => ({ ...f, group: e.target.value }))}
+                                        placeholder="Group"
+                                        className="w-24 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                                      />
+                                    </td>
+                                  )}
+                                  {meta.hasPrice && (
+                                    <td className="px-6 py-3 text-right">
+                                      <div className="flex justify-end">
+                                        <input
+                                          type="number"
+                                          value={addOnForm.price}
+                                          onChange={e => setAddOnForm(f => ({ ...f, price: e.target.value }))}
+                                          className="w-20 text-right text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                                        />
+                                      </div>
+                                    </td>
+                                  )}
+                                  <td className="px-6 py-3 text-center">
+                                    <div className="flex items-center justify-center gap-1.5">
+                                      <button onClick={saveAddOnEdit} className="p-1 bg-primary text-white rounded-lg cursor-pointer"><Check className="size-3.5" /></button>
+                                      <button onClick={() => setEditingAddOn(null)} className="p-1 bg-slate-100 text-slate-400 rounded-lg cursor-pointer"><X className="size-3.5" /></button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            }
+                            return (
+                              <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
+                                <td className="px-6 py-4 text-base">{item.emoji}</td>
+                                <td className="px-6 py-4 text-xs font-bold text-slate-900">{item.name}</td>
+                                {meta.hasGroup && (
+                                  <td className="px-6 py-4">
+                                    <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                                      {item.group || DEFAULT_BASE_GROUP}
+                                    </span>
+                                  </td>
+                                )}
+                                {meta.hasPrice && (
+                                  <td className="px-6 py-4 text-right font-black text-slate-600">
+                                    {formatCurrency(item.price ?? item.up ?? 0)}
+                                  </td>
+                                )}
+                                <td className="px-6 py-4 text-center">
+                                  <div className="flex items-center justify-center gap-1.5 font-normal">
+                                    <button onClick={() => startEditAddOn(key, item)} className="p-1.5 text-primary hover:bg-[#FAF9F5] rounded-lg transition-all cursor-pointer"><Edit3 className="size-3.5" /></button>
+                                    <button onClick={() => runMenuWrite(meta.remove(item.id))} className="p-1.5 text-danger hover:bg-danger/5 rounded-lg transition-all cursor-pointer"><Trash2 className="size-3.5" /></button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-slate-400 font-medium py-2">No {meta.label.toLowerCase()} options yet.</p>
+                  )}
+
+                  {/* Add New Option Form Row */}
+                  <div className="p-4 bg-[#FAF9F5] rounded-2xl border border-[#E7E0D0] space-y-3">
+                    <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest pb-1 border-b border-[#E7E0D0]">Add New {meta.label}</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <IconPickerButton
+                        value={draft.emoji}
+                        onChange={emoji => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], emoji } }))}
+                        className="w-10 h-9 flex items-center justify-center text-sm rounded-lg border border-slate-200 bg-white hover:border-primary/40 transition-colors cursor-pointer shrink-0"
+                      />
+                      <input
+                        value={draft.name}
+                        onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], name: e.target.value } }))}
+                        placeholder={`New ${meta.label.toLowerCase()} name`}
+                        className="flex-1 min-w-[150px] text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                      />
+                      {meta.hasGroup && (
+                        <input
+                          value={draft.group}
+                          onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], group: e.target.value } }))}
+                          placeholder="Group (e.g. Rice)"
+                          className="w-24 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                        />
+                      )}
+                      {meta.hasPrice && (
+                        <input
+                          type="number"
+                          value={draft.price}
+                          onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], price: e.target.value } }))}
+                          placeholder="Upcharge"
+                          className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                        />
+                      )}
+                      <button
+                        onClick={() => saveNewAddOn(key)}
+                        disabled={!draft.name.trim()}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white hover:bg-primary/95 disabled:opacity-40 rounded-xl text-xs font-black uppercase tracking-widest transition-colors cursor-pointer shrink-0"
+                      >
+                        <Plus className="size-4 shrink-0" /> Add {meta.label}
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -2386,10 +2482,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     }
   };
 
-  const renderLoyaltySubTab = () => {
+  const renderLoyaltyTiersSubTab = () => {
     return (
-      <div className="space-y-8 animate-fade-in">
-        {/* Loyalty Tiers Card */}
+      <div className="space-y-6 animate-fade-in">
         <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
           <div>
             <h3 className="text-base font-black text-slate-900">Configure Loyalty Tiers</h3>
@@ -2398,76 +2493,88 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </p>
           </div>
 
-          <div className="space-y-6">
-            {loyaltyTiersForm.map((tier, idx) => (
-              <div key={tier.id} className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
-                <div className="flex items-center gap-2">
-                  <span className={`inline-flex items-center gap-1.5 px-3 py-1 ${tier.color || 'bg-primary'} text-white rounded-full text-[10px] font-black uppercase tracking-wider`}>
-                    <Star className="size-3 fill-white text-white" /> {tier.name} Tier
-                  </span>
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">ID: {tier.id}</span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Points Threshold</label>
-                    <input
-                      type="number"
-                      value={tier.pointsThreshold}
-                      onChange={e => {
-                        const updated = [...loyaltyTiersForm];
-                        updated[idx] = { ...updated[idx], pointsThreshold: Number(e.target.value) };
-                        setLoyaltyTiersForm(updated);
-                      }}
-                      className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Points Multiplier</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={tier.multiplier}
-                      onChange={e => {
-                        const updated = [...loyaltyTiersForm];
-                        updated[idx] = { ...updated[idx], multiplier: Number(e.target.value) };
-                        setLoyaltyTiersForm(updated);
-                      }}
-                      className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Standard Discount (%)</label>
-                    <input
-                      type="number"
-                      value={tier.standardDiscount || 0}
-                      onChange={e => {
-                        const updated = [...loyaltyTiersForm];
-                        updated[idx] = { ...updated[idx], standardDiscount: Number(e.target.value) };
-                        setLoyaltyTiersForm(updated);
-                      }}
-                      className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Birthday Discount (%)</label>
-                    <input
-                      type="number"
-                      value={tier.birthdayDiscount || 0}
-                      onChange={e => {
-                        const updated = [...loyaltyTiersForm];
-                        updated[idx] = { ...updated[idx], birthdayDiscount: Number(e.target.value) };
-                        setLoyaltyTiersForm(updated);
-                      }}
-                      className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
+          <div className="overflow-x-auto border border-[#E7E0D0] rounded-2xl">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-[#E7E0D0] bg-[#FAF9F5] text-[10px] font-black uppercase tracking-widest text-slate-400">
+                  <th className="px-6 py-4">Tier Level</th>
+                  <th className="px-6 py-4 text-right">Points Threshold</th>
+                  <th className="px-6 py-4 text-right">Points Multiplier</th>
+                  <th className="px-6 py-4 text-right">Standard Discount</th>
+                  <th className="px-6 py-4 text-right">Birthday Discount</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E7E0D0] font-semibold text-slate-700">
+                {loyaltyTiersForm.map((tier, idx) => (
+                  <tr key={tier.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="px-6 py-4">
+                      <span className={`inline-flex items-center gap-1.5 px-3 py-1 ${tier.color || 'bg-primary'} text-white rounded-full text-[9px] font-black uppercase tracking-wider`}>
+                        <Star className="size-2.5 fill-white text-white" /> {tier.name}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex justify-end">
+                        <input
+                          type="number"
+                          value={tier.pointsThreshold}
+                          onChange={e => {
+                            const updated = [...loyaltyTiersForm];
+                            updated[idx] = { ...updated[idx], pointsThreshold: Number(e.target.value) };
+                            setLoyaltyTiersForm(updated);
+                          }}
+                          className="w-24 text-right text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                        />
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex justify-end">
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={tier.multiplier}
+                          onChange={e => {
+                            const updated = [...loyaltyTiersForm];
+                            updated[idx] = { ...updated[idx], multiplier: Number(e.target.value) };
+                            setLoyaltyTiersForm(updated);
+                          }}
+                          className="w-20 text-right text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                        />
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex justify-end items-center gap-1.5">
+                        <input
+                          type="number"
+                          value={tier.standardDiscount || 0}
+                          onChange={e => {
+                            const updated = [...loyaltyTiersForm];
+                            updated[idx] = { ...updated[idx], standardDiscount: Number(e.target.value) };
+                            setLoyaltyTiersForm(updated);
+                          }}
+                          className="w-16 text-right text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                        />
+                        <span className="font-bold text-slate-400">%</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex justify-end items-center gap-1.5">
+                        <input
+                          type="number"
+                          value={tier.birthdayDiscount || 0}
+                          onChange={e => {
+                            const updated = [...loyaltyTiersForm];
+                            updated[idx] = { ...updated[idx], birthdayDiscount: Number(e.target.value) };
+                            setLoyaltyTiersForm(updated);
+                          }}
+                          className="w-16 text-right text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                        />
+                        <span className="font-bold text-slate-400">%</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
           <div className="pt-2 border-t border-slate-100 flex justify-end">
@@ -2479,8 +2586,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </button>
           </div>
         </div>
+      </div>
+    );
+  };
 
-        {/* Customer Groups Card */}
+  const renderCustomerGroupsSubTab = () => {
+    return (
+      <div className="space-y-6 animate-fade-in">
         <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
           <div>
             <h3 className="text-base font-black text-slate-900">Discount & Customer Groups</h3>
@@ -2493,19 +2605,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-[#E7E0D0] bg-[#FAF9F5] text-[10px] font-black uppercase tracking-widest text-slate-400">
-                  <th className="px-4 py-3">Group Name</th>
-                  <th className="px-4 py-3">Discount Rate</th>
-                  <th className="px-4 py-3">Description</th>
-                  <th className="px-4 py-3 text-center">Actions</th>
+                  <th className="px-6 py-4">Group Name</th>
+                  <th className="px-6 py-4">Discount Rate</th>
+                  <th className="px-6 py-4">Description</th>
+                  <th className="px-6 py-4 text-center">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#E7E0D0]">
+              <tbody className="divide-y divide-[#E7E0D0] font-semibold text-slate-700">
                 {customerGroups.map(group => {
                   const isEditing = editingGroupId === group.id;
                   if (isEditing) {
                     return (
                       <tr key={group.id} className="bg-primary/[0.02]">
-                        <td className="px-4 py-3">
+                        <td className="px-6 py-4">
                           <input
                             type="text"
                             value={groupForm.name}
@@ -2513,7 +2625,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             className="w-full text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
                           />
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-6 py-4">
                           <div className="flex items-center gap-1.5">
                             <input
                               type="number"
@@ -2524,7 +2636,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             <span className="font-bold text-slate-500">%</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-6 py-4">
                           <input
                             type="text"
                             value={groupForm.description}
@@ -2532,7 +2644,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             className="w-full text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
                           />
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-6 py-4 text-center">
                           <div className="flex items-center justify-center gap-1.5">
                             <button onClick={saveGroupEdit} className="p-1 bg-primary text-white rounded-lg"><Check className="size-3.5" /></button>
                             <button onClick={() => setEditingGroupId(null)} className="p-1 bg-slate-100 text-slate-400 rounded-lg"><X className="size-3.5" /></button>
@@ -2543,14 +2655,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   }
 
                   return (
-                    <tr key={group.id} className="hover:bg-slate-50/50">
-                      <td className="px-4 py-3 font-bold text-slate-900">{group.name}</td>
-                      <td className="px-4 py-3 font-black text-primary">{group.discountPercentage}%</td>
-                      <td className="px-4 py-3 text-slate-500 font-medium">{group.description || '-'}</td>
-                      <td className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button onClick={() => startEditGroup(group)} className="p-1.5 text-primary hover:bg-[#FAF9F5] rounded-lg transition-all"><Edit3 className="size-3.5" /></button>
-                          <button onClick={() => handleDeleteGroup(group.id)} className="p-1.5 text-danger hover:bg-danger/5 rounded-lg transition-all"><Trash2 className="size-3.5" /></button>
+                    <tr key={group.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-6 py-4 font-bold text-slate-900">{group.name}</td>
+                      <td className="px-6 py-4 font-black text-primary">{group.discountPercentage}%</td>
+                      <td className="px-6 py-4 text-slate-500 font-medium">{group.description || '-'}</td>
+                      <td className="px-6 py-4 text-center">
+                        <div className="flex items-center justify-center gap-1.5 font-normal">
+                          <button onClick={() => startEditGroup(group)} className="p-1.5 text-primary hover:bg-[#FAF9F5] rounded-lg transition-all cursor-pointer"><Edit3 className="size-3.5" /></button>
+                          <button onClick={() => handleDeleteGroup(group.id)} className="p-1.5 text-danger hover:bg-danger/5 rounded-lg transition-all cursor-pointer"><Trash2 className="size-3.5" /></button>
                         </div>
                       </td>
                     </tr>
@@ -2561,8 +2673,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           </div>
 
           {/* Add New Group Section */}
-          <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
-            <h4 className="text-xs font-black text-slate-950 uppercase tracking-widest pb-1 border-b border-slate-200">Add New Group</h4>
+          <div className="p-6 bg-[#FAF9F5] rounded-2xl border border-[#E7E0D0] space-y-4">
+            <h4 className="text-[10px] font-black text-slate-950 uppercase tracking-widest pb-1 border-b border-[#E7E0D0]">Add New Group</h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               <div className="space-y-1">
                 <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Group Name</label>
@@ -2615,16 +2727,28 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const renderSettingsTab = () => {
     return (
       <div className="space-y-8 animate-fade-in pb-24">
-        <div className="flex items-center gap-1 bg-slate-100 rounded-full p-1 w-fit">
-          {(['general', 'icons', 'loyalty'] as const).map(t => (
-            <button
-              key={t}
-              onClick={() => setSettingsSubTab(t)}
-              className={`px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${settingsSubTab === t ? 'bg-primary text-white shadow-sm' : 'text-slate-500'}`}
-            >
-              {t === 'general' ? 'General' : t === 'icons' ? 'Icons' : 'Loyalty & Groups'}
-            </button>
-          ))}
+        {/* Sub-tabs Selector Row */}
+        <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 rounded-2xl p-1.5 w-fit">
+          {(['identity', 'delivery', 'tax', 'loyalty', 'groups', 'icons', 'danger'] as const).map(t => {
+            const labels: Record<typeof t, string> = {
+              identity: 'Identity',
+              delivery: 'Delivery & Cut-offs',
+              tax: 'Tax & Offerings',
+              loyalty: 'Loyalty Tiers',
+              groups: 'Customer Groups',
+              icons: 'Icon Library',
+              danger: 'Danger Zone'
+            };
+            return (
+              <button
+                key={t}
+                onClick={() => setSettingsSubTab(t)}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${settingsSubTab === t ? 'bg-primary text-white shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                {labels[t]}
+              </button>
+            );
+          })}
         </div>
 
         {settingsSubTab === 'icons' && (
@@ -2640,329 +2764,368 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 The emoji set every icon-picker modal in Operations searches — a Main's icon, an Add-on Catalog entry's icon. Add, rename, or remove entries here; nothing here is shown to customers directly.
               </p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-              {icons.map(icon => {
-                const isEditing = editingIcon === icon.id;
-                if (isEditing) {
-                  return (
-                    <div key={icon.id} className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-xl border border-primary/20">
-                      <input value={iconForm.emoji} onChange={e => setIconForm(f => ({ ...f, emoji: e.target.value }))} className="w-10 text-center text-lg px-1 py-1.5 rounded-lg border border-slate-200 outline-none" />
-                      <input value={iconForm.label} onChange={e => setIconForm(f => ({ ...f, label: e.target.value }))} placeholder="Label" className="flex-1 min-w-0 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none" />
-                      <button onClick={saveIconEdit} className="p-1.5 bg-primary text-white rounded-lg shrink-0"><Check className="size-3.5" /></button>
-                      <button onClick={() => setEditingIcon(null)} className="p-1.5 bg-slate-100 text-slate-400 rounded-lg shrink-0"><X className="size-3.5" /></button>
-                    </div>
-                  );
-                }
-                return (
-                  <div key={icon.id} className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-xl">
-                    <span className="text-lg shrink-0">{icon.emoji}</span>
-                    <span className="flex-1 min-w-0 text-xs font-bold text-slate-700 truncate">{icon.label}</span>
-                    <button onClick={() => startEditIcon(icon)} className="p-1 text-slate-300 hover:text-primary shrink-0"><Edit3 className="size-3.5" /></button>
-                    <button onClick={() => runMenuWrite(removeIconEntry(icon.id))} className="p-1 text-slate-300 hover:text-red-500 shrink-0"><Trash2 className="size-3.5" /></button>
-                  </div>
-                );
-              })}
+
+            <div className="overflow-x-auto border border-[#E7E0D0] rounded-2xl">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[#E7E0D0] bg-[#FAF9F5] text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    <th className="px-6 py-4 w-20">Icon</th>
+                    <th className="px-6 py-4">Label</th>
+                    <th className="px-6 py-4 text-center w-28">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E7E0D0] font-semibold text-slate-700">
+                  {icons.map(icon => {
+                    const isEditing = editingIcon === icon.id;
+                    if (isEditing) {
+                      return (
+                        <tr key={icon.id} className="bg-primary/[0.02]">
+                          <td className="px-6 py-4">
+                            <input
+                              value={iconForm.emoji}
+                              onChange={e => setIconForm(f => ({ ...f, emoji: e.target.value }))}
+                              className="w-12 text-center text-base px-1 py-1.5 rounded-lg border border-slate-200 outline-none bg-white font-bold"
+                            />
+                          </td>
+                          <td className="px-6 py-4">
+                            <input
+                              value={iconForm.label}
+                              onChange={e => setIconForm(f => ({ ...f, label: e.target.value }))}
+                              className="w-full text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                            />
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button onClick={saveIconEdit} className="p-1 bg-primary text-white rounded-lg"><Check className="size-3.5" /></button>
+                              <button onClick={() => setEditingIcon(null)} className="p-1 bg-slate-100 text-slate-400 rounded-lg"><X className="size-3.5" /></button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+                    return (
+                      <tr key={icon.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-6 py-4 text-lg">{icon.emoji}</td>
+                        <td className="px-6 py-4 text-xs font-bold text-slate-900">{icon.label}</td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="flex items-center justify-center gap-1.5 font-normal">
+                            <button onClick={() => startEditIcon(icon)} className="p-1.5 text-primary hover:bg-[#FAF9F5] rounded-lg transition-all cursor-pointer"><Edit3 className="size-3.5" /></button>
+                            <button onClick={() => runMenuWrite(removeIconEntry(icon.id))} className="p-1.5 text-danger hover:bg-danger/5 rounded-lg transition-all cursor-pointer"><Trash2 className="size-3.5" /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
-              <input value={newIconForm.emoji} onChange={e => setNewIconForm(f => ({ ...f, emoji: e.target.value }))} placeholder="🍽️" className="w-14 text-center text-lg px-1 py-2 rounded-xl border border-slate-200 outline-none" />
-              <input value={newIconForm.label} onChange={e => setNewIconForm(f => ({ ...f, label: e.target.value }))} placeholder="Label (e.g. Chicken)" className="flex-1 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20" />
-              <button
-                onClick={saveNewIcon}
-                disabled={!newIconForm.emoji.trim() || !newIconForm.label.trim()}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black bg-primary text-white hover:bg-primary/90 disabled:opacity-40 transition-colors shrink-0"
-              >
-                <Plus className="size-4" /> Add
-              </button>
+
+            {/* Add New Icon Section */}
+            <div className="p-6 bg-[#FAF9F5] rounded-2xl border border-[#E7E0D0] space-y-4">
+              <h4 className="text-[10px] font-black text-slate-950 uppercase tracking-widest pb-1 border-b border-[#E7E0D0]">Add New Icon</h4>
+              <div className="flex items-center gap-2">
+                <input value={newIconForm.emoji} onChange={e => setNewIconForm(f => ({ ...f, emoji: e.target.value }))} placeholder="🍽️" className="w-14 text-center text-lg px-1 py-2 rounded-xl border border-slate-200 outline-none" />
+                <input value={newIconForm.label} onChange={e => setNewIconForm(f => ({ ...f, label: e.target.value }))} placeholder="Label (e.g. Chicken)" className="flex-1 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20" />
+                <button
+                  onClick={saveNewIcon}
+                  disabled={!newIconForm.emoji.trim() || !newIconForm.label.trim()}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white hover:bg-primary/95 disabled:opacity-40 rounded-xl text-xs font-black uppercase tracking-widest transition-colors cursor-pointer shrink-0"
+                >
+                  <Plus className="size-4 shrink-0" /> Add Icon
+                </button>
+              </div>
             </div>
           </div>
         )}
 
-        {settingsSubTab === 'loyalty' && renderLoyaltySubTab()}
+        {settingsSubTab === 'loyalty' && renderLoyaltyTiersSubTab()}
 
-        {settingsSubTab === 'general' && (
-          <div className="space-y-8">
-        {/* Card 1: Brand Identity & Support */}
-        <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
-          <div>
-            <h3 className="text-base font-black text-slate-900">Brand Identity & Support Contact</h3>
-            <p className="text-xs text-slate-400 font-medium mt-1">
-              Configure the default brand identity and contact information displayed to customers in the support section.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Business Name</label>
-              <input
-                type="text"
-                value={brandForm.name}
-                onChange={e => setBrandForm(f => ({ ...f, name: e.target.value }))}
-                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Tagline</label>
-              <input
-                type="text"
-                value={brandForm.tagline}
-                onChange={e => setBrandForm(f => ({ ...f, tagline: e.target.value }))}
-                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-              />
-            </div>
-            <div className="space-y-1.5 md:col-span-2">
-              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Logo Image URL</label>
-              <div className="flex gap-4 items-center">
-                <input
-                  type="text"
-                  value={brandForm.logoUrl}
-                  onChange={e => setBrandForm(f => ({ ...f, logoUrl: e.target.value }))}
-                  className="flex-1 text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                />
-                {brandForm.logoUrl && (
-                  <img src={brandForm.logoUrl} alt="Logo Preview" className="size-10 rounded-lg object-cover border border-[#E7E0D0] bg-slate-50" />
-                )}
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Support Phone (WhatsApp Link Only)</label>
-              <input
-                type="text"
-                value={brandForm.supportPhone}
-                onChange={e => setBrandForm(f => ({ ...f, supportPhone: e.target.value }))}
-                placeholder="59412131"
-                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Support Email Address</label>
-              <input
-                type="email"
-                value={brandForm.supportEmail}
-                onChange={e => setBrandForm(f => ({ ...f, supportEmail: e.target.value }))}
-                placeholder="bhimalonly@gmail.com"
-                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-              />
-            </div>
-          </div>
-        </div>
+        {settingsSubTab === 'groups' && renderCustomerGroupsSubTab()}
 
-        {/* Card 2: Delivery Schedules & Cutoffs */}
-        <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
-          <div>
-            <h3 className="text-base font-black text-slate-900">Delivery Rules & Order Cutoffs</h3>
-            <p className="text-xs text-slate-400 font-medium mt-1">
-              Set the rules for lock times and delivery schedule slots to enforce cutoff gates in the customer checkout wizard.
-            </p>
-          </div>
-          
-          <div className="space-y-6">
-            {/* Lunch Service Cutoffs */}
-            <div className="space-y-4">
-              <h4 className="text-xs font-black text-primary uppercase tracking-widest pb-1.5 border-b border-slate-100">☀️ Lunch Service Cut-offs</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Ordering Cutoff Time (e.g. 12:00)</label>
-                  <input
-                    type="text"
-                    value={deliveryForm.lunchOrderCutoffTime}
-                    onChange={e => setDeliveryForm(f => ({ ...f, lunchOrderCutoffTime: e.target.value }))}
-                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Ordering Offset Days (-1 = day before, 0 = same day)</label>
-                  <input
-                    type="number"
-                    value={deliveryForm.lunchOrderCutoffDayOffset}
-                    onChange={e => setDeliveryForm(f => ({ ...f, lunchOrderCutoffDayOffset: e.target.value }))}
-                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Cancel/Edit Cutoff Time (e.g. 09:00)</label>
-                  <input
-                    type="text"
-                    value={deliveryForm.lunchCancelCutoffTime}
-                    onChange={e => setDeliveryForm(f => ({ ...f, lunchCancelCutoffTime: e.target.value }))}
-                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Cancel/Edit Offset Days (0 = same day)</label>
-                  <input
-                    type="number"
-                    value={deliveryForm.lunchCancelCutoffDayOffset}
-                    onChange={e => setDeliveryForm(f => ({ ...f, lunchCancelCutoffDayOffset: e.target.value }))}
-                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Dinner Service Cutoffs */}
-            {dinnerEnabled && (
-              <div className="space-y-4 pt-4 border-t border-slate-100">
-                <h4 className="text-xs font-black text-primary uppercase tracking-widest pb-1.5 border-b border-slate-100">🌙 Dinner Service Cut-offs</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Ordering Cutoff Time (e.g. 12:00)</label>
-                    <input
-                      type="text"
-                      value={deliveryForm.dinnerOrderCutoffTime}
-                      onChange={e => setDeliveryForm(f => ({ ...f, dinnerOrderCutoffTime: e.target.value }))}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Ordering Offset Days (-1 = day before, 0 = same day)</label>
-                    <input
-                      type="number"
-                      value={deliveryForm.dinnerOrderCutoffDayOffset}
-                      onChange={e => setDeliveryForm(f => ({ ...f, dinnerOrderCutoffDayOffset: e.target.value }))}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Cancel/Edit Cutoff Time (e.g. 14:00)</label>
-                    <input
-                      type="text"
-                      value={deliveryForm.dinnerCancelCutoffTime}
-                      onChange={e => setDeliveryForm(f => ({ ...f, dinnerCancelCutoffTime: e.target.value }))}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Cancel/Edit Offset Days (0 = same day)</label>
-                    <input
-                      type="number"
-                      value={deliveryForm.dinnerCancelCutoffDayOffset}
-                      onChange={e => setDeliveryForm(f => ({ ...f, dinnerCancelCutoffDayOffset: e.target.value }))}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-[#E7E0D0]">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Delivery Window (Info Text)</label>
-              <input
-                type="text"
-                value={deliveryForm.lunchDeliveryWindow}
-                onChange={e => setDeliveryForm(f => ({ ...f, lunchDeliveryWindow: e.target.value }))}
-                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Delivery Window (Info Text)</label>
-              <input
-                type="text"
-                value={deliveryForm.dinnerDeliveryWindow}
-                onChange={e => setDeliveryForm(f => ({ ...f, dinnerDeliveryWindow: e.target.value }))}
-                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Card 3: Offerings & Tax VAT Settings */}
-        <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
-          <div>
-            <h3 className="text-base font-black text-slate-900">Offerings & Tax Registry</h3>
-            <p className="text-xs text-slate-400 font-medium mt-1">
-              Activate offerings such as dinner menus or configure tax details for receipts/invoices.
-            </p>
-          </div>
-          <div className="space-y-6">
-            {/* Dinner offering */}
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h4 className="text-xs font-black text-slate-900">Dinner Offering</h4>
-                <p className="text-[11px] text-slate-400 font-medium mt-0.5">Enables dinner curries as separate selections on the Customer Menu.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => toggleDinner(!dinnerEnabled)}
-                className={`relative w-12 h-7 rounded-full transition-colors ${dinnerEnabled ? 'bg-primary' : 'bg-slate-200'}`}
-              >
-                <span className={`absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform ${dinnerEnabled ? 'translate-x-5' : ''}`} />
-              </button>
-            </div>
-
-            {/* VAT enabled */}
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h4 className="text-xs font-black text-slate-900">MRA VAT Charging</h4>
-                <p className="text-[11px] text-slate-400 font-medium mt-0.5">Toggles VAT calculations and display on invoice receipts.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => toggleVat(!vatEnabled)}
-                className={`relative w-12 h-7 rounded-full transition-colors ${vatEnabled ? 'bg-primary' : 'bg-slate-200'}`}
-              >
-                <span className={`absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform ${vatEnabled ? 'translate-x-5' : ''}`} />
-              </button>
-            </div>
-
-            {vatEnabled && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2 animate-in slide-in-from-top-2 duration-200">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">VAT Rate (%)</label>
-                  <input
-                    type="text"
-                    value={vatRateInput}
-                    onChange={e => setVatRateInput(e.target.value)}
-                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">VAT Registration Number (VRN)</label>
-                  <input
-                    type="text"
-                    value={vatNumberInput}
-                    onChange={e => setVatNumberInput(e.target.value)}
-                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Card 4: Danger Zone */}
-        <div className="bg-white rounded-3xl border border-red-200 p-8 shadow-sm space-y-5">
-          <div>
-            <h3 className="text-base font-black text-red-600">Danger Zone</h3>
-            <p className="text-xs text-slate-400 font-medium mt-1">
-              Wipes test/demo data clean before going live. Does not touch the Meal Library, Menu Planner, or any Settings above — only order history and customer loyalty balances.
-            </p>
-          </div>
-          {dangerResetDone && (
-            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3">
-              <p className="text-[11px] font-bold text-emerald-700">All orders cleared, and every customer's points and store credit reset to Rs 0.</p>
-              <button onClick={() => setDangerResetDone(false)} className="p-1 text-emerald-600 hover:text-emerald-800 shrink-0"><X className="size-3.5" /></button>
-            </div>
-          )}
-          <div className="flex items-center justify-between border-t border-slate-100 pt-5">
+        {settingsSubTab === 'identity' && (
+          <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
             <div>
-              <h4 className="text-xs font-black text-slate-900">Clear all orders & reset customer loyalty</h4>
-              <p className="text-[11px] text-slate-400 font-medium mt-0.5 max-w-md">
-                Permanently deletes every order (Orders by Dish, Delivery List, Payments all go empty) and zeroes every customer's points and store credit. Customer records, addresses, and tiers are kept. Cannot be undone.
+              <h3 className="text-base font-black text-slate-900">Brand Identity & Support Contact</h3>
+              <p className="text-xs text-slate-400 font-medium mt-1">
+                Configure the default brand identity and contact information displayed to customers in the support section.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => dangerConfirm === 'reset' ? handleDangerReset() : setDangerConfirm('reset')}
-              onBlur={() => setDangerConfirm(null)}
-              className={`shrink-0 px-4 py-2.5 rounded-xl text-xs font-black transition-colors ${dangerConfirm === 'reset' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100'}`}
-            >
-              {dangerConfirm === 'reset' ? 'Confirm — this cannot be undone' : 'Clear orders & reset loyalty'}
-            </button>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Business Name</label>
+                <input
+                  type="text"
+                  value={brandForm.name}
+                  onChange={e => setBrandForm(f => ({ ...f, name: e.target.value }))}
+                  className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Tagline</label>
+                <input
+                  type="text"
+                  value={brandForm.tagline}
+                  onChange={e => setBrandForm(f => ({ ...f, tagline: e.target.value }))}
+                  className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                />
+              </div>
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Logo Image URL</label>
+                <div className="flex gap-4 items-center">
+                  <input
+                    type="text"
+                    value={brandForm.logoUrl}
+                    onChange={e => setBrandForm(f => ({ ...f, logoUrl: e.target.value }))}
+                    className="flex-1 text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                  />
+                  {brandForm.logoUrl && (
+                    <img src={brandForm.logoUrl} alt="Logo Preview" className="size-10 rounded-lg object-cover border border-[#E7E0D0] bg-slate-50" />
+                  )}
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Support Phone (WhatsApp Link Only)</label>
+                <input
+                  type="text"
+                  value={brandForm.supportPhone}
+                  onChange={e => setBrandForm(f => ({ ...f, supportPhone: e.target.value }))}
+                  placeholder="59412131"
+                  className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Support Email Address</label>
+                <input
+                  type="email"
+                  value={brandForm.supportEmail}
+                  onChange={e => setBrandForm(f => ({ ...f, supportEmail: e.target.value }))}
+                  placeholder="bhimalonly@gmail.com"
+                  className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                />
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
-      )}
+        )}
+
+        {settingsSubTab === 'delivery' && (
+          <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
+            <div>
+              <h3 className="text-base font-black text-slate-900">Delivery Rules & Order Cutoffs</h3>
+              <p className="text-xs text-slate-400 font-medium mt-1">
+                Set the rules for lock times and delivery schedule slots to enforce cutoff gates in the customer checkout wizard.
+              </p>
+            </div>
+            
+            <div className="space-y-6">
+              {/* Lunch Service Cutoffs */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-black text-primary uppercase tracking-widest pb-1.5 border-b border-slate-100">☀️ Lunch Service Cut-offs</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Ordering Cutoff Time (e.g. 12:00)</label>
+                    <input
+                      type="text"
+                      value={deliveryForm.lunchOrderCutoffTime}
+                      onChange={e => setDeliveryForm(f => ({ ...f, lunchOrderCutoffTime: e.target.value }))}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Ordering Offset Days (-1 = day before, 0 = same day)</label>
+                    <input
+                      type="number"
+                      value={deliveryForm.lunchOrderCutoffDayOffset}
+                      onChange={e => setDeliveryForm(f => ({ ...f, lunchOrderCutoffDayOffset: e.target.value }))}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Cancel/Edit Cutoff Time (e.g. 09:00)</label>
+                    <input
+                      type="text"
+                      value={deliveryForm.lunchCancelCutoffTime}
+                      onChange={e => setDeliveryForm(f => ({ ...f, lunchCancelCutoffTime: e.target.value }))}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Cancel/Edit Offset Days (0 = same day)</label>
+                    <input
+                      type="number"
+                      value={deliveryForm.lunchCancelCutoffDayOffset}
+                      onChange={e => setDeliveryForm(f => ({ ...f, lunchCancelCutoffDayOffset: e.target.value }))}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Dinner Service Cutoffs */}
+              {dinnerEnabled && (
+                <div className="space-y-4 pt-4 border-t border-slate-100">
+                  <h4 className="text-xs font-black text-primary uppercase tracking-widest pb-1.5 border-b border-slate-100">🌙 Dinner Service Cut-offs</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Ordering Cutoff Time (e.g. 12:00)</label>
+                      <input
+                        type="text"
+                        value={deliveryForm.dinnerOrderCutoffTime}
+                        onChange={e => setDeliveryForm(f => ({ ...f, dinnerOrderCutoffTime: e.target.value }))}
+                        className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Ordering Offset Days (-1 = day before, 0 = same day)</label>
+                      <input
+                        type="number"
+                        value={deliveryForm.dinnerOrderCutoffDayOffset}
+                        onChange={e => setDeliveryForm(f => ({ ...f, dinnerOrderCutoffDayOffset: e.target.value }))}
+                        className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Cancel/Edit Cutoff Time (e.g. 14:00)</label>
+                      <input
+                        type="text"
+                        value={deliveryForm.dinnerCancelCutoffTime}
+                        onChange={e => setDeliveryForm(f => ({ ...f, dinnerCancelCutoffTime: e.target.value }))}
+                        className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Cancel/Edit Offset Days (0 = same day)</label>
+                      <input
+                        type="number"
+                        value={deliveryForm.dinnerCancelCutoffDayOffset}
+                        onChange={e => setDeliveryForm(f => ({ ...f, dinnerCancelCutoffDayOffset: e.target.value }))}
+                        className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-[#E7E0D0]">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Delivery Window (Info Text)</label>
+                <input
+                  type="text"
+                  value={deliveryForm.lunchDeliveryWindow}
+                  onChange={e => setDeliveryForm(f => ({ ...f, lunchDeliveryWindow: e.target.value }))}
+                  className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Delivery Window (Info Text)</label>
+                <input
+                  type="text"
+                  value={deliveryForm.dinnerDeliveryWindow}
+                  onChange={e => setDeliveryForm(f => ({ ...f, dinnerDeliveryWindow: e.target.value }))}
+                  className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {settingsSubTab === 'tax' && (
+          <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
+            <div>
+              <h3 className="text-base font-black text-slate-900">Offerings & Tax Registry</h3>
+              <p className="text-xs text-slate-400 font-medium mt-1">
+                Activate offerings such as dinner menus or configure tax details for receipts/invoices.
+              </p>
+            </div>
+            <div className="space-y-6">
+              {/* Dinner offering */}
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <div>
+                  <h4 className="text-xs font-black text-slate-900">Dinner Offering</h4>
+                  <p className="text-[11px] text-slate-400 font-medium mt-0.5">Enables dinner curries as separate selections on the Customer Menu.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleDinner(!dinnerEnabled)}
+                  className={`relative w-12 h-7 rounded-full transition-colors ${dinnerEnabled ? 'bg-primary' : 'bg-slate-200'}`}
+                >
+                  <span className={`absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform ${dinnerEnabled ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
+
+              {/* VAT enabled */}
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <div>
+                  <h4 className="text-xs font-black text-slate-900">MRA VAT Charging</h4>
+                  <p className="text-[11px] text-slate-400 font-medium mt-0.5">Toggles VAT calculations and display on invoice receipts.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleVat(!vatEnabled)}
+                  className={`relative w-12 h-7 rounded-full transition-colors ${vatEnabled ? 'bg-primary' : 'bg-slate-200'}`}
+                >
+                  <span className={`absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform ${vatEnabled ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
+
+              {vatEnabled && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2 animate-in slide-in-from-top-2 duration-200">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">VAT Rate (%)</label>
+                    <input
+                      type="text"
+                      value={vatRateInput}
+                      onChange={e => setVatRateInput(e.target.value)}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">VAT Registration Number (VRN)</label>
+                    <input
+                      type="text"
+                      value={vatNumberInput}
+                      onChange={e => setVatNumberInput(e.target.value)}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {settingsSubTab === 'danger' && (
+          <div className="bg-white rounded-3xl border border-red-200 p-8 shadow-sm space-y-5">
+            <div>
+              <h3 className="text-base font-black text-red-600">Danger Zone</h3>
+              <p className="text-xs text-slate-400 font-medium mt-1">
+                Wipes test/demo data clean before going live. Does not touch the Meal Library, Menu Planner, or any Settings above — only order history and customer loyalty balances.
+              </p>
+            </div>
+            {dangerResetDone && (
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3">
+                <p className="text-[11px] font-bold text-emerald-700">All orders cleared, and every customer's points and store credit reset to Rs 0.</p>
+                <button onClick={() => setDangerResetDone(false)} className="p-1 text-emerald-600 hover:text-emerald-800 shrink-0"><X className="size-3.5" /></button>
+              </div>
+            )}
+            <div className="flex items-center justify-between border-t border-slate-100 pt-5">
+              <div>
+                <h4 className="text-xs font-black text-slate-900">Clear all orders & reset customer loyalty</h4>
+                <p className="text-[11px] text-slate-400 font-medium mt-0.5 max-w-md">
+                  Permanently deletes every order (Orders by Dish, Delivery List, Payments all go empty) and zeroes every customer's points and store credit. Customer records, addresses, and tiers are kept. Cannot be undone.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => dangerConfirm === 'reset' ? handleDangerReset() : setDangerConfirm('reset')}
+                onBlur={() => setDangerConfirm(null)}
+                className={`shrink-0 px-4 py-2.5 rounded-xl text-xs font-black transition-colors ${dangerConfirm === 'reset' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100'}`}
+              >
+                {dangerConfirm === 'reset' ? 'Confirm — this cannot be undone' : 'Clear orders & reset loyalty'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -3798,7 +3961,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     />
                   </div>
 
-                  <div className="space-y-1.5 md:col-span-2">
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Loyalty Tier</label>
                     <select
                       value={editCustTier}
@@ -3807,6 +3970,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     >
                       {loyaltyTiers.map(t => (
                         <option key={t.id} value={t.name}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Customer Group</label>
+                    <select
+                      value={editCustGroup}
+                      onChange={e => setEditCustGroup(e.target.value)}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    >
+                      <option value="">None (Regular Customer)</option>
+                      {customerGroups.map(g => (
+                        <option key={g.id} value={g.id}>{g.name}</option>
                       ))}
                     </select>
                   </div>
