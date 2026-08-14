@@ -141,6 +141,23 @@ const isBirthdayToday = (birthday?: string, systemDateStr?: string): boolean => 
   return bMonth === sMonth && bDay === sDay;
 };
 
+/**
+ * Returns the YYYY-MM-DD date string of the birthday if it falls within the
+ * given week's days AND that date is today or still in the future (>= systemDate).
+ * Returns null if the birthday isn't in this week or has already passed.
+ * Used by the Menu banner: show a celebration notice from the start of the week
+ * up to and including the birthday, then hide it once it's passed.
+ */
+const birthdayDateInWeek = (birthday?: string, days?: { date: string }[], systemDate?: string): string | null => {
+  if (!birthday || !days || !systemDate) return null;
+  const [, bMonth, bDay] = birthday.split('-').map(Number);
+  for (const d of days) {
+    const [, dm, dd] = d.date.split('-').map(Number);
+    if (dm === bMonth && dd === bDay && d.date >= systemDate) return d.date;
+  }
+  return null;
+};
+
 const orderCutoffDayPhrase = (service: 'Lunch' | 'Dinner' | Service): string => {
   const isDinner = service === 'Dinner';
   const offset = isDinner ? SYSTEM_CONFIG.dinnerOrderCutoffDayOffset : SYSTEM_CONFIG.lunchOrderCutoffDayOffset;
@@ -1800,13 +1817,24 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 background, soft blurred color blobs for depth, and frosted
                 (backdrop-blur + translucent white) panels for every element
                 sitting on top of it, rather than flat white-on-solid-color. */}
-            <div className={`relative rounded-[28px] p-6 text-white shadow-xl shadow-primary/30 overflow-hidden bg-gradient-to-br ${isBirthday ? 'from-[#E1A02E] via-[#D38B1C] to-[#C17610]' : 'from-primary via-primary to-secondary'}`}>
+            <div className={`relative rounded-[28px] p-6 text-white shadow-xl overflow-hidden ${
+              isBirthday
+                ? 'bg-gradient-to-br from-[#1e1b4b] via-[#4c1d95] to-[#7e22ce] shadow-purple-900/40'
+                : 'bg-gradient-to-br from-primary via-primary to-secondary shadow-primary/30'
+            }`}>
+              {/* Ambient blobs */}
               <div className="absolute -top-12 -right-10 size-40 rounded-full bg-white/10 blur-2xl pointer-events-none" />
-              <div className="absolute -bottom-16 -left-10 size-44 rounded-full bg-secondary/40 blur-2xl pointer-events-none" />
-              <button onClick={() => setProfileOpen(true)} className="absolute top-5 right-5 z-10 text-[10px] font-black uppercase tracking-widest text-white/80 hover:text-white bg-white/10 backdrop-blur-md border border-white/20 px-2.5 py-1 rounded-full">Profile →</button>
-              
+              <div className="absolute -bottom-16 -left-10 size-44 rounded-full bg-white/5 blur-2xl pointer-events-none" />
+              {/* Large decorative cake — birthday only */}
               {isBirthday && (
-                <div className="relative z-10 mb-3 px-2.5 py-0.5 rounded bg-white/20 backdrop-blur-md border border-white/30 text-[9px] font-black uppercase tracking-wider w-fit animate-pulse">
+                <div className="absolute right-4 bottom-2 text-[72px] opacity-10 pointer-events-none select-none leading-none">
+                  🎂
+                </div>
+              )}
+              <button onClick={() => setProfileOpen(true)} className="absolute top-5 right-5 z-10 text-[10px] font-black uppercase tracking-widest text-white/80 hover:text-white bg-white/10 backdrop-blur-md border border-white/20 px-2.5 py-1 rounded-full">Profile →</button>
+
+              {isBirthday && (
+                <div className="relative z-10 mb-3 px-2.5 py-0.5 rounded-full bg-white/15 backdrop-blur-md border border-white/25 text-[9px] font-black uppercase tracking-wider w-fit">
                   🎂 Birthday Today!
                 </div>
               )}
@@ -2050,18 +2078,32 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 )}
               </div>
             </div>
-            {isBirthday && (() => {
+            {(() => {
+              // Show the birthday banner as long as the birthday falls within
+              // the currently-viewed week AND hasn't passed yet.
+              // birthdayDateInWeek returns the date string or null.
+              const bdayDate = birthdayDateInWeek(currentUser?.birthday, activeDays, systemDate);
+              if (!bdayDate) return null;
               const tierObj = loyaltyTiers.find(t => t.name.toLowerCase() === currentUser?.tier?.toLowerCase());
               const birthdayDiscountRate = tierObj?.birthdayDiscount || 0;
+              const bdayLabel = activeDays.find(d => d.date === bdayDate)?.label || bdayDate;
+              const isToday = bdayDate === systemDate;
               return (
-                <div className="bg-gradient-to-r from-accent/20 via-accent/10 to-[#F4BA41]/20 border border-accent/20 rounded-3xl p-5 shadow-sm space-y-2 text-slate-800 animate-fade-in">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xl">🎂</span>
-                    <h3 className="text-sm font-black text-slate-900">Happy Birthday, {currentUser?.firstName}! 🎉</h3>
+                <div className="bg-gradient-to-r from-rose-50 via-pink-50 to-purple-50 border border-pink-200/60 rounded-3xl p-5 shadow-sm animate-fade-in">
+                  <div className="flex items-start gap-3">
+                    <span className="text-2xl shrink-0">🎂</span>
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-black text-slate-900">
+                        {isToday ? `Happy Birthday, ${currentUser?.firstName}! 🎉` : `🎉 Your birthday is coming up, ${currentUser?.firstName}!`}
+                      </h3>
+                      <p className="text-xs text-slate-600 font-medium mt-1 leading-relaxed">
+                        {birthdayDiscountRate > 0 && (
+                          <>{isToday ? 'Today' : `On ${bdayLabel}`}, a <span className="font-black text-pink-600">{birthdayDiscountRate}% Birthday Discount</span> will apply to your delivery. </>
+                        )}
+                        {isToday ? 'Enjoy your special day! 🎈' : `Order ahead and it'll be applied automatically!`}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-xs text-slate-600 font-medium">
-                    To celebrate, a special <span className="font-black text-accent">{birthdayDiscountRate}% Birthday Discount</span> is automatically active on any meals scheduled for delivery today! Enjoy your special day! 🎈
-                  </p>
                 </div>
               );
             })()}
