@@ -456,4 +456,34 @@ This session implemented the loyalty/discount settings panel, expanded customer 
 * **Type Safety & Compilation**: Verified code compiles successfully with `npx tsc --noEmit` and has zero errors.
 * **Commits**: `fcbf1d6` (settings loyalty & groups + tabular CRM + customer edit fields) — pushed to `origin/main`.
 
+## 2026-08-14: Antigravity — Settings Sub-tabs Restructuring, Tabular Layouts for Catalogs/Tiers, and Customer Group assignment
+
+This session modularized the Settings panel, converted card lists/catalogs into tables matching the CRM directory style, and added Customer Group assignment inside the CRM editor.
+
+### What was done
+
+**1. Settings: Sub-tabs Redesign (`modules/Operations.tsx`)**
+* Split the large `General` and `Loyalty & Groups` sub-tabs into six flat, focused top-level subtabs:
+  - **Identity** (`identity`): Configure Business Name, Tagline, and Logo URL.
+  - **Delivery & Cut-offs** (`delivery`): Configure ordering/cancellation offset days and cutoff times for Lunch and Dinner.
+  - **Tax & Offerings** (`tax`): Manage Dinner menu offerings and VRN/VAT rate.
+  - **Loyalty Tiers** (`loyalty`): Adjust points thresholds, points multiplier, standard discount %, and birthday discount %.
+  - **Customer Groups** (`groups`): Manage corporate/VIP group discount percentages and descriptions.
+  - **Icon Library** (`icons`): Manage application emojis and labels.
+  - **Danger Zone** (`danger`): Admin-triggered data reset.
+
+**2. Settings & Catalogs: Tabular Styles (`modules/Operations.tsx`)**
+* Converted the **Loyalty Tiers** editor into a tabular grid showing Tier level, Points threshold, multiplier, standard discount %, and birthday discount %, with in-line editing inside the row inputs.
+* Converted the **Icon Library** CRUD interface into a table showing icon emoji, label, and edit/delete actions, with inline editing and adding.
+* Converted **Add-on Option Catalogs** (Bases, Dhals, Salads, Beverages, Desserts) in the Meal Library into HTML tables, featuring columns for Emoji, Name, Group (for bases), Upcharge/Price, and Actions.
+
+**3. CRM: Customer Group Assignment (`modules/Operations.tsx`)**
+* Added `editCustGroup` state to track the customer's discount group.
+* Added a **Customer Group** select dropdown inside the Edit Customer modal, populating options dynamically from `customerGroups` in Firestore.
+* Updates the customer's group in Firestore (`/customers/{uid}`) and recalculates the locally mapped group name on save.
+
+### Key Architecture Notes
+* **Type Safety & Compilation**: Verified code compiles successfully with `npx tsc --noEmit` and has zero errors.
+* **Commits**: `d3044fb` (settings sub-tabs modularization + tabular lists/catalogs + CRM group selection) — pushed to `origin/main`.
+
 
