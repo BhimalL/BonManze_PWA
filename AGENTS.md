@@ -402,3 +402,33 @@ This session implemented customer app UX feedback and added week/day/service fil
 * **TypeScript Compilation**: All code verified with `npx tsc --noEmit` and resolves successfully with zero errors.
 * **Commits**: `3465d86` (orders filters + week split), `864f8a3` (delivery list filters, grouping by service inside days, address fix) — both pushed to `origin/main`.
 
+## 2026-08-14: Antigravity — Persisted Meal Ratings, Customer Comments & Security Rules Updates
+
+This session implemented Option 1: Persisted Meal Ratings with customer comment reviews, updating database schemas, security rules, and console integration.
+
+### What was done
+
+**1. Data Model Extension (`types.ts`)**
+* Extended the `OrderItem` interface to include optional `rating?: number;` and `ratingComment?: string;` fields.
+
+**2. Customer Portal: Firestore Updates & Review Dialog (`modules/CustomerPortal.tsx`)**
+* Imported `updateDoc` from `firebase/firestore`.
+* Extended `rateTarget` and updated `openRating` to capture `fsItemId` (the Firestore item document ID) along with `orderId`.
+* Rewrote `submitRating` to perform a direct Firestore `updateDoc` on the target order item (`orders/{orderId}/items/{itemId}`) when available, with a fallback to the local component state map for mock orders.
+* Added a `rateComment` state variable and built a text area block inside the Rating modal/sheet to collect optional feedback.
+* Connected submission loading states (`ratingSubmitting`) to disable inputs and display a spinner during database writes.
+* Refactored loop rating references in both "This week" and "Next week" views to check `line.item.rating` (live database values) before falling back to local memory.
+
+**3. Firestore Security Rules Update (`firestore.rules`)**
+* Modified the `/orders/{orderId}/items/{itemId}` update rules to allow customers to update their own documents even when the item is already `Paid` (required since ratings are only allowed on paid, completed orders).
+* Ensured safety by restricting the customer from modifying critical order details (price, qty, name, status, dates, etc.) and blocking updates to payment fields (`paymentMethodName`/`paymentReference`) once payment is confirmed.
+
+**4. Operations: Paid History Feedback Loop (`modules/Operations.tsx`)**
+* Embedded customer reviews directly into the Payments tab under **Paid History**.
+* If a customer has rated any item in a completed drop, a styled feedback block renders beneath their drop description showing the star count (`★`) and their review comment.
+
+### Key Architecture Notes
+* **Rating Storage**: Ratings are stored directly in the `OrderItem` subcollection. Since the client listens to orders/items live via snapshot collection group queries, rating changes update the UI seamlessly.
+* **Security Constraints**: Customers are permitted to update `rating` and `ratingComment` on any item they own, but payment details are locked down once `paymentStatus == 'Paid'`.
+* **Commits**: `053200e` (ratings persistence + rules + Operations view) — pushed to `origin/main`.
+
