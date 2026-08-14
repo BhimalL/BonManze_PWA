@@ -1929,6 +1929,14 @@ export const updateSystemConfig = async (updates: Partial<typeof SYSTEM_CONFIG>)
   if (updates.supportPhone !== undefined) SYSTEM_CONFIG.supportPhone = updates.supportPhone;
   if (updates.supportEmail !== undefined) SYSTEM_CONFIG.supportEmail = updates.supportEmail;
   if (updates.dinnerEnabled !== undefined) SYSTEM_CONFIG.dinnerEnabled = updates.dinnerEnabled;
+  if (updates.lunchOrderCutoffTime !== undefined) SYSTEM_CONFIG.lunchOrderCutoffTime = updates.lunchOrderCutoffTime;
+  if (updates.lunchOrderCutoffDayOffset !== undefined) SYSTEM_CONFIG.lunchOrderCutoffDayOffset = updates.lunchOrderCutoffDayOffset;
+  if (updates.lunchCancelCutoffTime !== undefined) SYSTEM_CONFIG.lunchCancelCutoffTime = updates.lunchCancelCutoffTime;
+  if (updates.lunchCancelCutoffDayOffset !== undefined) SYSTEM_CONFIG.lunchCancelCutoffDayOffset = updates.lunchCancelCutoffDayOffset;
+  if (updates.dinnerOrderCutoffTime !== undefined) SYSTEM_CONFIG.dinnerOrderCutoffTime = updates.dinnerOrderCutoffTime;
+  if (updates.dinnerOrderCutoffDayOffset !== undefined) SYSTEM_CONFIG.dinnerOrderCutoffDayOffset = updates.dinnerOrderCutoffDayOffset;
+  if (updates.dinnerCancelCutoffTime !== undefined) SYSTEM_CONFIG.dinnerCancelCutoffTime = updates.dinnerCancelCutoffTime;
+  if (updates.dinnerCancelCutoffDayOffset !== undefined) SYSTEM_CONFIG.dinnerCancelCutoffDayOffset = updates.dinnerCancelCutoffDayOffset;
   configListeners.forEach(l => l());
 
   await setDoc(doc(db, 'config', 'system'), dropUndefined({
