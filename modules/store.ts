@@ -1,5 +1,71 @@
 
 import { MenuItem, LoyaltyTier, CustomerGroup, Order, OrderItem, PaymentMethod, Customer } from '../types';
+// Meal Library / Menu Planner (Mains, weekly Lunch/Dinner menus, the
+// menuDefaults fallback, and the five Base/Dhal/Salad/Beverage/Dessert
+// add-on catalogs plus the Icon Library) are wired directly to Firestore
+// here in store.ts rather than via component-local onSnapshot listeners
+// (the pattern Operations.tsx/CustomerPortal.tsx use for orders/customers).
+// That's a deliberate exception: resolveDish()/specialPriceInfo()/
+// filterAddOnOptions() below are plain functions that read these
+// module-level arrays directly and are shared by both Operations.tsx and
+// CustomerPortal.tsx — syncing Firestore straight into the same exported
+// `let` bindings those functions already read means every existing call
+// site in both files keeps working completely unchanged, and
+// CustomerPortal's menu-drift risk closes with zero changes there, since
+// it already only ever reads through these bindings/functions too (see
+// BonManzE_Firestore_Schema.md, decision #12, for the full reasoning).
+import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebaseClient';
+
+// Every mock-era optional field in this file (MainDish.cost/photoUrl,
+// CurryOption.baseOptionIds/dhalOptionIds/..., AddOnOption.price/up/group,
+// etc.) has always used `field: undefined` to mean "no value" — harmless
+// for a plain JS object/spread, but the Firestore SDK rejects a literal
+// `undefined` anywhere in written data (nested or top-level) with
+// "Unsupported field value: undefined", unlike `null`. Every write path
+// below needs to sanitize this before handing data to setDoc/updateDoc,
+// rather than relying on every call site in Operations.tsx to know not to
+// do this (confirmed live 2026-08-13: editing a Main whose form leaves
+// `cost` blank throws exactly this error from `saveMainEditor`'s patch,
+// which unconditionally includes `baseGroup: undefined`).
+//
+// dropUndefined recursively removes undefined-valued keys/array entries —
+// correct for setDoc (a full-document or full-array-element write, where
+// "no value" and "key absent" mean the same thing) and for values nested
+// inside a merge-written map field (menuWeeks' per-day CurryOption[]
+// arrays are always written as complete replacements, never merged
+// element-by-element — Firestore doesn't merge inside arrays regardless).
+// Deliberately does NOT recurse into a Firestore FieldValue sentinel
+// (serverTimestamp(), deleteField(), etc.) — those are opaque marker
+// objects, not plain data, and destructuring one would break it. Every
+// call site below applies this only to the plain-data portion of a write,
+// adding `updatedAt: serverTimestamp()` afterward, never running it over
+// the sentinel itself.
+const dropUndefined = <T>(value: T): T => {
+  if (Array.isArray(value)) return value.filter(v => v !== undefined).map(dropUndefined) as unknown as T;
+  if (value !== null && typeof value === 'object' && value.constructor === Object) {
+    const out: Record<string, unknown> = {};
+    Object.entries(value as Record<string, unknown>).forEach(([k, v]) => {
+      if (v !== undefined) out[k] = dropUndefined(v);
+    });
+    return out as T;
+  }
+  return value;
+};
+
+// For updateDoc specifically: an explicit `updates.field = undefined` (as
+// `saveMainEditor`'s patch always sends for baseGroup, and conditionally
+// for cost/photoUrl/*OptionIds) means "clear this field" — updateDoc only
+// touches the keys present in its payload, so simply dropping an
+// undefined-valued key (dropUndefined's behavior) would silently leave
+// Firestore's stale prior value in place instead of clearing it. Firestore's
+// own sentinel for "delete this field on update" is deleteField() — this
+// swaps every top-level undefined for that sentinel instead of dropping it.
+const toUpdatePayload = (updates: Record<string, unknown>): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  Object.entries(updates).forEach(([k, v]) => { out[k] = v === undefined ? deleteField() : v; });
+  return out;
+};
 
 // Helper to get real today's date in YYYY-MM-DD ISO format
 export const getRealTodayISO = (): string => {
@@ -378,13 +444,10 @@ export interface MainDish extends CurryOption {
   cost?: number;
 }
 
-// Starts empty rather than auto-seeded from the existing default weekly
-// rotations: those defaults deliberately vary a curry's name/desc/price by
-// day (see dishPhotoFor's comment — ids there are shared per *photo family*,
-// not per canonical dish), so there's no single "the" Fish Curry to seed
-// from without guessing which day's version is canonical. Existing day-menu
-// dishes keep working exactly as before with no Library link (no mainId);
-// add Mains here going forward as new dishes come up.
+// Backed by the `mains/{mainId}` Firestore collection (already seeded — see
+// scripts/migrateMenuLibrary.js) — starts empty and fills in the instant the
+// first onSnapshot batch arrives, same "empty until Firestore answers"
+// pattern Operations.tsx already uses for orders/customers.
 export let MAIN_DISHES: MainDish[] = [];
 const mainDishListeners = new Set<(items: MainDish[]) => void>();
 export const subscribeToMainDishes = (listener: (items: MainDish[]) => void) => {
@@ -392,17 +455,23 @@ export const subscribeToMainDishes = (listener: (items: MainDish[]) => void) => 
   listener([...MAIN_DISHES]);
   return () => { mainDishListeners.delete(listener); };
 };
-export const addMainDish = (dish: MainDish) => {
-  MAIN_DISHES = [...MAIN_DISHES, dish];
+onSnapshot(collection(db, 'mains'), snap => {
+  MAIN_DISHES = snap.docs.map(d => ({ id: d.id, ...(d.data() as Omit<MainDish, 'id'>) }));
   mainDishListeners.forEach(l => l([...MAIN_DISHES]));
+});
+// `dish.id` is client-generated (e.g. `main-${Date.now()...}`, same as every
+// other call site in this file) and used directly as the Firestore doc id —
+// matches migrateMenuLibrary.js's own `mains/{mainId}` shape, so a
+// hand-added Main and a migrated one look identical in Firestore.
+export const addMainDish = async (dish: MainDish) => {
+  const { id, ...fields } = dish;
+  await setDoc(doc(db, 'mains', id), { ...dropUndefined(fields), updatedAt: serverTimestamp() });
 };
-export const updateMainDish = (id: string, updates: Partial<Omit<MainDish, 'id'>>) => {
-  MAIN_DISHES = MAIN_DISHES.map(m => m.id === id ? { ...m, ...updates } : m);
-  mainDishListeners.forEach(l => l([...MAIN_DISHES]));
+export const updateMainDish = async (id: string, updates: Partial<Omit<MainDish, 'id'>>) => {
+  await updateDoc(doc(db, 'mains', id), { ...toUpdatePayload(updates), updatedAt: serverTimestamp() });
 };
-export const removeMainDish = (id: string) => {
-  MAIN_DISHES = MAIN_DISHES.filter(m => m.id !== id);
-  mainDishListeners.forEach(l => l([...MAIN_DISHES]));
+export const removeMainDish = async (id: string) => {
+  await deleteDoc(doc(db, 'mains', id));
 };
 
 // Whether a day-slot dish is currently running at a special/promo price —
@@ -473,9 +542,26 @@ export type WeekdayKey = typeof WEEKDAY_KEYS[number];
 // factory, same mutable-store pattern as LOYALTY_TIERS/CUSTOMER_GROUPS —
 // a module-level binding plus a listener set, rather than local component
 // state.
-function createWeeklyMenuStore(defaultMenu: Record<WeekdayKey, CurryOption[]>) {
+//
+// Backed by Firestore: `menuDefaults/current` (read-only from here — see
+// setDefaultMenu below; the Menu Planner UI never edits an abstract
+// "default", only real calendar weeks, per Operations.tsx's
+// activeMenuWeekStart) supplies the fallback, and `menuWeeks/{weekStart}`
+// (one doc per week that has ANY override, `{ lunch?, dinner?, updatedAt }`
+// — the two services are independent keys on the SAME doc) supplies
+// `overrides`. update/addDish/removeDish/setWeekMenu below write straight to
+// Firestore and return a Promise; `overrides` itself only ever changes via
+// applySnapshot(), called from the single shared `menuWeeks` collection
+// listener declared right after both stores exist (see below) — so a write
+// here becomes visible through forWeek()/subscribe() once it round-trips
+// through Firestore's onSnapshot, the same "write, then let the listener
+// update local state" shape Operations.tsx already uses for orders/
+// customers (e.g. its Mark Delivered/Mark Paid batches).
+function createWeeklyMenuStore(serviceKey: 'lunch' | 'dinner', initialDefaultMenu: Record<WeekdayKey, CurryOption[]>) {
+  let defaultMenu: Record<WeekdayKey, CurryOption[]> = initialDefaultMenu;
   let overrides: Record<string, Record<WeekdayKey, CurryOption[]>> = {};
   const listeners = new Set<(overrides: Record<string, Record<WeekdayKey, CurryOption[]>>) => void>();
+  const notify = () => listeners.forEach(l => l({ ...overrides }));
 
   const forWeek = (weekStart: string): Record<WeekdayKey, CurryOption[]> => overrides[weekStart] || defaultMenu;
 
@@ -484,6 +570,33 @@ function createWeeklyMenuStore(defaultMenu: Record<WeekdayKey, CurryOption[]>) {
     listener({ ...overrides });
     return () => { listeners.delete(listener); };
   };
+
+  // Called only from the menuDefaults/current onSnapshot handler below.
+  const setDefaultMenu = (menu: Record<WeekdayKey, CurryOption[]>) => {
+    defaultMenu = menu;
+    notify();
+  };
+
+  // Called only from the menuWeeks collection onSnapshot handler below.
+  // `menu === undefined` means this service's key is gone from that week's
+  // doc (removed, or the whole doc was deleted) — falls back to defaultMenu.
+  const applySnapshot = (weekStart: string, menu: Record<WeekdayKey, CurryOption[]> | undefined) => {
+    if (menu === undefined) {
+      if (!(weekStart in overrides)) return;
+      const next = { ...overrides };
+      delete next[weekStart];
+      overrides = next;
+    } else {
+      overrides = { ...overrides, [weekStart]: menu };
+    }
+    notify();
+  };
+
+  // Writes this service's key on menuWeeks/{weekStart}, merged so the OTHER
+  // service's key on the same doc (if any) is left untouched — a week can
+  // have only Lunch overridden, only Dinner, or both, per the schema doc.
+  const writeWeek = (weekStart: string, menu: Record<WeekdayKey, CurryOption[]>) =>
+    setDoc(doc(db, 'menuWeeks', weekStart), { [serviceKey]: dropUndefined(menu), updatedAt: serverTimestamp() }, { merge: true });
 
   // Edits one curry option's name/description/price for a given weekday
   // within a given week — scoped to editing what's already on the menu, not
@@ -499,11 +612,7 @@ function createWeeklyMenuStore(defaultMenu: Record<WeekdayKey, CurryOption[]>) {
   // fields.
   const update = (weekStart: string, day: WeekdayKey, curryId: string, updates: Partial<Omit<CurryOption, 'id'>>) => {
     const base = overrides[weekStart] || defaultMenu;
-    overrides = {
-      ...overrides,
-      [weekStart]: { ...base, [day]: base[day].map(c => c.id === curryId ? { ...c, ...updates } : c) }
-    };
-    listeners.forEach(l => l({ ...overrides }));
+    return writeWeek(weekStart, { ...base, [day]: base[day].map(c => c.id === curryId ? { ...c, ...updates } : c) });
   };
 
   // Adds a new main dish to a given day within a given week — same
@@ -511,21 +620,13 @@ function createWeeklyMenuStore(defaultMenu: Record<WeekdayKey, CurryOption[]>) {
   // touched week diverges from the default rotation.
   const addDish = (weekStart: string, day: WeekdayKey, dish: CurryOption) => {
     const base = overrides[weekStart] || defaultMenu;
-    overrides = {
-      ...overrides,
-      [weekStart]: { ...base, [day]: [...base[day], dish] }
-    };
-    listeners.forEach(l => l({ ...overrides }));
+    return writeWeek(weekStart, { ...base, [day]: [...base[day], dish] });
   };
 
   // Removes a main dish from a given day within a given week.
   const removeDish = (weekStart: string, day: WeekdayKey, dishId: string) => {
     const base = overrides[weekStart] || defaultMenu;
-    overrides = {
-      ...overrides,
-      [weekStart]: { ...base, [day]: base[day].filter(c => c.id !== dishId) }
-    };
-    listeners.forEach(l => l({ ...overrides }));
+    return writeWeek(weekStart, { ...base, [day]: base[day].filter(c => c.id !== dishId) });
   };
 
   // Replaces an entire week's lineup in one atomic call — used by "reuse a
@@ -535,10 +636,7 @@ function createWeeklyMenuStore(defaultMenu: Record<WeekdayKey, CurryOption[]>) {
   // some week — either forWeek(sourceWeek) or a freshly parsed CSV), not a
   // reference into another week's live override, so editing the destination
   // afterwards never retroactively changes the source it was copied from.
-  const setWeekMenu = (weekStart: string, menu: Record<WeekdayKey, CurryOption[]>) => {
-    overrides = { ...overrides, [weekStart]: { ...menu } };
-    listeners.forEach(l => l({ ...overrides }));
-  };
+  const setWeekMenu = (weekStart: string, menu: Record<WeekdayKey, CurryOption[]>) => writeWeek(weekStart, { ...menu });
 
   // Every weekStart key that currently has a saved override — lets Menu
   // Planner list and browse past/future weeks that were deliberately set
@@ -548,23 +646,7 @@ function createWeeklyMenuStore(defaultMenu: Record<WeekdayKey, CurryOption[]>) {
   // extra sort step.
   const listWeekStarts = (): string[] => Object.keys(overrides).sort();
 
-  // Raw accessors used only by the persistence layer at the bottom of this
-  // file: getSnapshot() reads the current overrides for saving, hydrate()
-  // restores a saved set on module load, and addRawListener() registers a
-  // subscriber without the immediate "call me with the current value" firing
-  // that subscribe() does (persistAll must NOT fire before hydrate() has run,
-  // or it would overwrite the saved data with the in-memory defaults).
-  const getSnapshot = () => ({ ...overrides });
-  const hydrate = (saved: Record<string, Record<WeekdayKey, CurryOption[]>> | undefined) => {
-    if (!saved) return;
-    overrides = { ...saved };
-    listeners.forEach(l => l({ ...overrides }));
-  };
-  const addRawListener = (listener: (overrides: Record<string, Record<WeekdayKey, CurryOption[]>>) => void) => {
-    listeners.add(listener);
-  };
-
-  return { forWeek, subscribe, update, addDish, removeDish, setWeekMenu, listWeekStarts, getSnapshot, hydrate, addRawListener };
+  return { forWeek, subscribe, update, addDish, removeDish, setWeekMenu, listWeekStarts, setDefaultMenu, applySnapshot };
 }
 
 const WEEKLY_LUNCH_MENU_DEFAULT: Record<WeekdayKey, CurryOption[]> = {
@@ -595,7 +677,7 @@ const WEEKLY_LUNCH_MENU_DEFAULT: Record<WeekdayKey, CurryOption[]> = {
   ],
 };
 
-const lunchMenuStore = createWeeklyMenuStore(WEEKLY_LUNCH_MENU_DEFAULT);
+const lunchMenuStore = createWeeklyMenuStore('lunch', WEEKLY_LUNCH_MENU_DEFAULT);
 export const lunchMenuForWeek = lunchMenuStore.forWeek;
 export const subscribeToLunchMenu = lunchMenuStore.subscribe;
 export const updateLunchCurryOption = lunchMenuStore.update;
@@ -636,7 +718,7 @@ const WEEKLY_DINNER_MENU_DEFAULT: Record<WeekdayKey, CurryOption[]> = {
   ],
 };
 
-const dinnerMenuStore = createWeeklyMenuStore(WEEKLY_DINNER_MENU_DEFAULT);
+const dinnerMenuStore = createWeeklyMenuStore('dinner', WEEKLY_DINNER_MENU_DEFAULT);
 export const dinnerMenuForWeek = dinnerMenuStore.forWeek;
 export const subscribeToDinnerMenu = dinnerMenuStore.subscribe;
 export const updateDinnerCurryOption = dinnerMenuStore.update;
@@ -645,187 +727,41 @@ export const removeDinnerDish = dinnerMenuStore.removeDish;
 export const setDinnerWeekMenu = dinnerMenuStore.setWeekMenu;
 export const listDinnerWeekStarts = dinnerMenuStore.listWeekStarts;
 
-// --- One-time Meal Library migration ---
-// Walks every dish currently in play — the hardcoded default rotation plus
-// any saved week overrides, Lunch and Dinner both — and creates a Main in
-// the Library for each distinct dish name that doesn't already have one.
-//
-// Lunch and Dinner are walked (and deduped) separately rather than merged
-// into one shared pool: the same name can legitimately mean two different
-// offerings ("Chicken Curry" is Rs150 at lunch, Rs180 at dinner in the
-// current data), so folding them into a single Main would silently
-// overwrite one service's real price with the other's. Only when a name's
-// Lunch and Dinner canonical versions turn out identical (same price and
-// description) are they merged into one Main; otherwise each keeps its own
-// Main, suffixed "(Lunch)"/"(Dinner)" so both are distinguishable in the
-// Add-dish picker.
-//
-// "Canonical" for a given name is simply its first occurrence when walking
-// the default rotation (MON→FRI) and then saved override weeks in
-// ascending order — deterministic and reproducible, since in the current
-// data every day a name repeats it keeps the same price (only the
-// description varies day to day).
-//
-// Safe to re-run: a name already matching an existing Main (case-
-// insensitive) is skipped rather than duplicated, so running this again
-// after adding new override weeks only picks up genuinely new names. This
-// never touches existing day-slot dishes on the Menu Planner — it only
-// populates the Library; nothing already planned gets linked or locked.
-export interface MenuLibraryMigrationResult {
-  created: string[];
-  skipped: string[];
-  // How many already-existing day-slot dishes (default rotation + every
-  // saved week, both services) got their mainId set to the Main matching
-  // their name — see the backfill pass below.
-  linked: number;
-}
+// menuDefaults/current is the Firestore fallback both stores use in place
+// of the hardcoded WEEKLY_LUNCH/DINNER_MENU_DEFAULT literals above (which
+// now only serve as the initial value until this first snapshot arrives).
+// Read-only from the client on purpose — Operations.tsx's Menu Planner
+// always edits a real calendar week (activeMenuWeekStart), never an
+// abstract "default", so there's no write path for this doc this round.
+onSnapshot(doc(db, 'menuDefaults', 'current'), snap => {
+  if (!snap.exists()) return;
+  const data = snap.data() as { lunch?: Record<WeekdayKey, CurryOption[]>; dinner?: Record<WeekdayKey, CurryOption[]> };
+  if (data.lunch) lunchMenuStore.setDefaultMenu(data.lunch);
+  if (data.dinner) dinnerMenuStore.setDefaultMenu(data.dinner);
+});
 
-const canonicalDishesByName = (
-  defaultMenu: Record<WeekdayKey, CurryOption[]>,
-  weekStarts: string[],
-  forWeek: (weekStart: string) => Record<WeekdayKey, CurryOption[]>
-): Map<string, CurryOption> => {
-  const canonical = new Map<string, CurryOption>();
-  const visit = (menu: Record<WeekdayKey, CurryOption[]>) => {
-    WEEKDAY_KEYS.forEach(day => {
-      (menu[day] || []).forEach(dish => {
-        const key = dish.name.trim().toLowerCase();
-        if (key && !canonical.has(key)) canonical.set(key, dish);
-      });
-    });
-  };
-  visit(defaultMenu);
-  weekStarts.slice().sort().forEach(w => visit(forWeek(w)));
-  return canonical;
-};
-
-export const migrateMenuToLibrary = (): MenuLibraryMigrationResult => {
-  const lunchCanonical = canonicalDishesByName(WEEKLY_LUNCH_MENU_DEFAULT, listLunchWeekStarts(), lunchMenuForWeek);
-  const dinnerCanonical = canonicalDishesByName(WEEKLY_DINNER_MENU_DEFAULT, listDinnerWeekStarts(), dinnerMenuForWeek);
-
-  const findMainByName = (name: string) => MAIN_DISHES.find(m => m.name.trim().toLowerCase() === name.trim().toLowerCase());
-  const created: string[] = [];
-  const skipped: string[] = [];
-  let seq = 0;
-
-  // Creates a Main for `displayName` if one doesn't already exist (by
-  // name, case-insensitive), otherwise reuses the existing one — either
-  // way returns its id, so the backfill pass below always has something
-  // to link matching day-slot dishes to.
-  const ensureMain = (dish: CurryOption, displayName: string): string => {
-    const existing = findMainByName(displayName);
-    if (existing) {
-      skipped.push(displayName);
-      return existing.id;
-    }
-    seq += 1;
-    const id = `main-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${seq}`;
-    addMainDish({
-      id,
-      emoji: dish.emoji,
-      name: displayName,
-      desc: dish.desc,
-      price: dish.price,
-      photoUrl: dish.photoUrl,
-      baseApplicable: dishBaseApplicable(dish),
-      baseOptionIds: dish.baseOptionIds,
-      baseGroup: dish.baseGroup,
-      dhalApplicable: dishDhalApplicable(dish),
-      dhalOptionIds: dish.dhalOptionIds,
-      saladApplicable: dishSaladApplicable(dish),
-      saladOptionIds: dish.saladOptionIds,
-      beverageApplicable: dishBeverageApplicable(dish),
-      beverageOptionIds: dish.beverageOptionIds,
-      dessertApplicable: dishDessertApplicable(dish),
-      dessertOptionIds: dish.dessertOptionIds
-    });
-    created.push(displayName);
-    return id;
-  };
-
-  // Per-service, per-name → Main id, built once so the backfill pass below
-  // can link every occurrence of that name without re-deciding (identical
-  // vs. Lunch/Dinner-suffixed) each time.
-  const lunchLinkByKey = new Map<string, string>();
-  const dinnerLinkByKey = new Map<string, string>();
-
-  const allKeys = new Set<string>([...lunchCanonical.keys(), ...dinnerCanonical.keys()]);
-  allKeys.forEach(key => {
-    const lunchDish = lunchCanonical.get(key);
-    const dinnerDish = dinnerCanonical.get(key);
-    if (lunchDish && dinnerDish) {
-      const identical = lunchDish.price === dinnerDish.price && lunchDish.desc.trim() === dinnerDish.desc.trim();
-      if (identical) {
-        const id = ensureMain(lunchDish, lunchDish.name);
-        lunchLinkByKey.set(key, id);
-        dinnerLinkByKey.set(key, id);
-      } else {
-        lunchLinkByKey.set(key, ensureMain(lunchDish, `${lunchDish.name} (Lunch)`));
-        dinnerLinkByKey.set(key, ensureMain(dinnerDish, `${dinnerDish.name} (Dinner)`));
-      }
-    } else if (lunchDish) {
-      lunchLinkByKey.set(key, ensureMain(lunchDish, lunchDish.name));
-    } else if (dinnerDish) {
-      dinnerLinkByKey.set(key, ensureMain(dinnerDish, dinnerDish.name));
-    }
+// menuWeeks/{weekStart} — one doc per week with ANY override, `lunch`/
+// `dinner` independent optional keys on the SAME doc (a week can override
+// just one service). A single collection listener feeds both stores'
+// applySnapshot(), rather than each store subscribing separately, so a
+// week doc with only a `lunch` key doesn't need dinnerMenuStore to guess
+// whether its own key is "genuinely absent" vs. "not loaded yet". Weeks
+// that disappear from the snapshot (doc deleted, or emptied down to no
+// service keys) are swept via applySnapshot(weekStart, undefined) so a
+// removed override actually falls back to the default rotation instead of
+// getting stuck on the last value seen.
+onSnapshot(collection(db, 'menuWeeks'), snap => {
+  const seenLunch = new Set<string>();
+  const seenDinner = new Set<string>();
+  snap.forEach(docSnap => {
+    const weekStart = docSnap.id;
+    const data = docSnap.data() as { lunch?: Record<WeekdayKey, CurryOption[]>; dinner?: Record<WeekdayKey, CurryOption[]> };
+    if (data.lunch) { lunchMenuStore.applySnapshot(weekStart, data.lunch); seenLunch.add(weekStart); }
+    if (data.dinner) { dinnerMenuStore.applySnapshot(weekStart, data.dinner); seenDinner.add(weekStart); }
   });
-
-  // Persist these name→id links so relinkDefaultRotationToLibrary() can
-  // replay them on every future load — see LUNCH_DEFAULT_LINK_MAP above for
-  // why. Merged rather than overwritten, in case this ever runs more than
-  // once (it currently doesn't, but merging costs nothing and is safer).
-  LUNCH_DEFAULT_LINK_MAP = { ...LUNCH_DEFAULT_LINK_MAP, ...Object.fromEntries(lunchLinkByKey) };
-  DINNER_DEFAULT_LINK_MAP = { ...DINNER_DEFAULT_LINK_MAP, ...Object.fromEntries(dinnerLinkByKey) };
-
-  // --- Backfill: link every already-existing day-slot dish (the default
-  // rotation plus every saved week, both services) to the Main it matches
-  // by name — so "Import" doesn't just create Mains, it also connects what
-  // was already planned to them. Never touches a dish that already has a
-  // mainId (don't clobber a deliberate existing link), and never touches
-  // price/desc — a linked day keeps showing whatever it already showed;
-  // only its editability and its special-price comparison change from here.
-  let linked = 0;
-  const linkInPlace = (menu: Record<WeekdayKey, CurryOption[]>, linkByKey: Map<string, string>) => {
-    WEEKDAY_KEYS.forEach(day => {
-      menu[day].forEach(dish => {
-        if (dish.mainId) return;
-        const id = linkByKey.get(dish.name.trim().toLowerCase());
-        if (id) { dish.mainId = id; linked++; }
-      });
-    });
-  };
-  linkInPlace(WEEKLY_LUNCH_MENU_DEFAULT, lunchLinkByKey);
-  linkInPlace(WEEKLY_DINNER_MENU_DEFAULT, dinnerLinkByKey);
-
-  const linkOverrideWeek = (
-    weekStart: string,
-    menu: Record<WeekdayKey, CurryOption[]>,
-    linkByKey: Map<string, string>,
-    update: (weekStart: string, day: WeekdayKey, curryId: string, updates: Partial<Omit<CurryOption, 'id'>>) => void
-  ) => {
-    WEEKDAY_KEYS.forEach(day => {
-      menu[day].forEach(dish => {
-        if (dish.mainId) return;
-        const id = linkByKey.get(dish.name.trim().toLowerCase());
-        if (id) { update(weekStart, day, dish.id, { mainId: id }); linked++; }
-      });
-    });
-  };
-  listLunchWeekStarts().forEach(w => linkOverrideWeek(w, lunchMenuForWeek(w), lunchLinkByKey, updateLunchCurryOption));
-  listDinnerWeekStarts().forEach(w => linkOverrideWeek(w, dinnerMenuForWeek(w), dinnerLinkByKey, updateDinnerCurryOption));
-
-  // Mutating WEEKLY_LUNCH/DINNER_MENU_DEFAULT in place (above) bypasses the
-  // normal update()/addDish() paths — those only ever touch a single
-  // week's override, never the shared fallback rotation itself — so
-  // nothing would otherwise tell subscribers (Operations' menuTick,
-  // CustomerPortal's own subscription) that it changed. Re-hydrating with
-  // the current overrides is a no-op on the override data itself, just a
-  // way to force that notification.
-  lunchMenuStore.hydrate(lunchMenuStore.getSnapshot());
-  dinnerMenuStore.hydrate(dinnerMenuStore.getSnapshot());
-
-  return { created, skipped, linked };
-};
+  lunchMenuStore.listWeekStarts().forEach(w => { if (!seenLunch.has(w)) lunchMenuStore.applySnapshot(w, undefined); });
+  dinnerMenuStore.listWeekStarts().forEach(w => { if (!seenDinner.has(w)) dinnerMenuStore.applySnapshot(w, undefined); });
+});
 
 export interface AddOnOption {
   id: string;
@@ -845,6 +781,13 @@ export interface AddOnOption {
 // remove), the same hand-rolled pattern as MEAL_LIBRARY_ITEMS/LOYALTY_TIERS
 // above, so Operations can manage them and the meal builder can react live.
 
+// Each of the five catalogs below is backed by a single Firestore doc,
+// `meal{Bases,Dhals,Salads,Beverages,Desserts}/current`, shaped
+// `{ items: AddOnOption[], updatedAt }` — already seeded (see
+// scripts/migrateConfigDocs.js) and already read by confirmCheckout in
+// functions/index.js for server-side pricing, so this is wiring the client
+// onto data that's real in Firestore right now. The literal arrays below
+// are only the fallback shown until the first onSnapshot batch arrives.
 export let MEAL_BASES: AddOnOption[] = [
   { id: 'wrice', emoji: '🍚', name: 'White Rice', up: 0, group: 'rice' },
   { id: 'brice', emoji: '🌾', name: 'Brown Rice', up: 15, group: 'rice' },
@@ -858,17 +801,19 @@ export const subscribeToBases = (listener: (items: AddOnOption[]) => void) => {
   listener([...MEAL_BASES]);
   return () => { baseListeners.delete(listener); };
 };
-export const addBaseOption = (item: AddOnOption) => {
-  MEAL_BASES = [...MEAL_BASES, item];
+onSnapshot(doc(db, 'mealBases', 'current'), snap => {
+  if (!snap.exists()) return;
+  MEAL_BASES = (snap.data().items || []) as AddOnOption[];
   baseListeners.forEach(l => l([...MEAL_BASES]));
+});
+export const addBaseOption = async (item: AddOnOption) => {
+  await setDoc(doc(db, 'mealBases', 'current'), { items: dropUndefined([...MEAL_BASES, item]), updatedAt: serverTimestamp() });
 };
-export const updateBaseOption = (id: string, updates: Partial<AddOnOption>) => {
-  MEAL_BASES = MEAL_BASES.map(i => i.id === id ? { ...i, ...updates } : i);
-  baseListeners.forEach(l => l([...MEAL_BASES]));
+export const updateBaseOption = async (id: string, updates: Partial<AddOnOption>) => {
+  await setDoc(doc(db, 'mealBases', 'current'), { items: dropUndefined(MEAL_BASES.map(i => i.id === id ? { ...i, ...updates } : i)), updatedAt: serverTimestamp() });
 };
-export const removeBaseOption = (id: string) => {
-  MEAL_BASES = MEAL_BASES.filter(i => i.id !== id);
-  baseListeners.forEach(l => l([...MEAL_BASES]));
+export const removeBaseOption = async (id: string) => {
+  await setDoc(doc(db, 'mealBases', 'current'), { items: dropUndefined(MEAL_BASES.filter(i => i.id !== id)), updatedAt: serverTimestamp() });
 };
 
 export let MEAL_DHALS: AddOnOption[] = [
@@ -881,17 +826,19 @@ export const subscribeToDhals = (listener: (items: AddOnOption[]) => void) => {
   listener([...MEAL_DHALS]);
   return () => { dhalListeners.delete(listener); };
 };
-export const addDhalOption = (item: AddOnOption) => {
-  MEAL_DHALS = [...MEAL_DHALS, item];
+onSnapshot(doc(db, 'mealDhals', 'current'), snap => {
+  if (!snap.exists()) return;
+  MEAL_DHALS = (snap.data().items || []) as AddOnOption[];
   dhalListeners.forEach(l => l([...MEAL_DHALS]));
+});
+export const addDhalOption = async (item: AddOnOption) => {
+  await setDoc(doc(db, 'mealDhals', 'current'), { items: dropUndefined([...MEAL_DHALS, item]), updatedAt: serverTimestamp() });
 };
-export const updateDhalOption = (id: string, updates: Partial<AddOnOption>) => {
-  MEAL_DHALS = MEAL_DHALS.map(i => i.id === id ? { ...i, ...updates } : i);
-  dhalListeners.forEach(l => l([...MEAL_DHALS]));
+export const updateDhalOption = async (id: string, updates: Partial<AddOnOption>) => {
+  await setDoc(doc(db, 'mealDhals', 'current'), { items: dropUndefined(MEAL_DHALS.map(i => i.id === id ? { ...i, ...updates } : i)), updatedAt: serverTimestamp() });
 };
-export const removeDhalOption = (id: string) => {
-  MEAL_DHALS = MEAL_DHALS.filter(i => i.id !== id);
-  dhalListeners.forEach(l => l([...MEAL_DHALS]));
+export const removeDhalOption = async (id: string) => {
+  await setDoc(doc(db, 'mealDhals', 'current'), { items: dropUndefined(MEAL_DHALS.filter(i => i.id !== id)), updatedAt: serverTimestamp() });
 };
 
 export let MEAL_SALADS: AddOnOption[] = [
@@ -904,17 +851,19 @@ export const subscribeToSalads = (listener: (items: AddOnOption[]) => void) => {
   listener([...MEAL_SALADS]);
   return () => { saladListeners.delete(listener); };
 };
-export const addSaladOption = (item: AddOnOption) => {
-  MEAL_SALADS = [...MEAL_SALADS, item];
+onSnapshot(doc(db, 'mealSalads', 'current'), snap => {
+  if (!snap.exists()) return;
+  MEAL_SALADS = (snap.data().items || []) as AddOnOption[];
   saladListeners.forEach(l => l([...MEAL_SALADS]));
+});
+export const addSaladOption = async (item: AddOnOption) => {
+  await setDoc(doc(db, 'mealSalads', 'current'), { items: dropUndefined([...MEAL_SALADS, item]), updatedAt: serverTimestamp() });
 };
-export const updateSaladOption = (id: string, updates: Partial<AddOnOption>) => {
-  MEAL_SALADS = MEAL_SALADS.map(i => i.id === id ? { ...i, ...updates } : i);
-  saladListeners.forEach(l => l([...MEAL_SALADS]));
+export const updateSaladOption = async (id: string, updates: Partial<AddOnOption>) => {
+  await setDoc(doc(db, 'mealSalads', 'current'), { items: dropUndefined(MEAL_SALADS.map(i => i.id === id ? { ...i, ...updates } : i)), updatedAt: serverTimestamp() });
 };
-export const removeSaladOption = (id: string) => {
-  MEAL_SALADS = MEAL_SALADS.filter(i => i.id !== id);
-  saladListeners.forEach(l => l([...MEAL_SALADS]));
+export const removeSaladOption = async (id: string) => {
+  await setDoc(doc(db, 'mealSalads', 'current'), { items: dropUndefined(MEAL_SALADS.filter(i => i.id !== id)), updatedAt: serverTimestamp() });
 };
 
 export let MEAL_BEVERAGES: AddOnOption[] = [
@@ -928,17 +877,19 @@ export const subscribeToBeverages = (listener: (items: AddOnOption[]) => void) =
   listener([...MEAL_BEVERAGES]);
   return () => { beverageListeners.delete(listener); };
 };
-export const addBeverageOption = (item: AddOnOption) => {
-  MEAL_BEVERAGES = [...MEAL_BEVERAGES, item];
+onSnapshot(doc(db, 'mealBeverages', 'current'), snap => {
+  if (!snap.exists()) return;
+  MEAL_BEVERAGES = (snap.data().items || []) as AddOnOption[];
   beverageListeners.forEach(l => l([...MEAL_BEVERAGES]));
+});
+export const addBeverageOption = async (item: AddOnOption) => {
+  await setDoc(doc(db, 'mealBeverages', 'current'), { items: dropUndefined([...MEAL_BEVERAGES, item]), updatedAt: serverTimestamp() });
 };
-export const updateBeverageOption = (id: string, updates: Partial<AddOnOption>) => {
-  MEAL_BEVERAGES = MEAL_BEVERAGES.map(i => i.id === id ? { ...i, ...updates } : i);
-  beverageListeners.forEach(l => l([...MEAL_BEVERAGES]));
+export const updateBeverageOption = async (id: string, updates: Partial<AddOnOption>) => {
+  await setDoc(doc(db, 'mealBeverages', 'current'), { items: dropUndefined(MEAL_BEVERAGES.map(i => i.id === id ? { ...i, ...updates } : i)), updatedAt: serverTimestamp() });
 };
-export const removeBeverageOption = (id: string) => {
-  MEAL_BEVERAGES = MEAL_BEVERAGES.filter(i => i.id !== id);
-  beverageListeners.forEach(l => l([...MEAL_BEVERAGES]));
+export const removeBeverageOption = async (id: string) => {
+  await setDoc(doc(db, 'mealBeverages', 'current'), { items: dropUndefined(MEAL_BEVERAGES.filter(i => i.id !== id)), updatedAt: serverTimestamp() });
 };
 
 export let MEAL_DESSERTS: AddOnOption[] = [
@@ -952,17 +903,19 @@ export const subscribeToDesserts = (listener: (items: AddOnOption[]) => void) =>
   listener([...MEAL_DESSERTS]);
   return () => { dessertListeners.delete(listener); };
 };
-export const addDessertOption = (item: AddOnOption) => {
-  MEAL_DESSERTS = [...MEAL_DESSERTS, item];
+onSnapshot(doc(db, 'mealDesserts', 'current'), snap => {
+  if (!snap.exists()) return;
+  MEAL_DESSERTS = (snap.data().items || []) as AddOnOption[];
   dessertListeners.forEach(l => l([...MEAL_DESSERTS]));
+});
+export const addDessertOption = async (item: AddOnOption) => {
+  await setDoc(doc(db, 'mealDesserts', 'current'), { items: dropUndefined([...MEAL_DESSERTS, item]), updatedAt: serverTimestamp() });
 };
-export const updateDessertOption = (id: string, updates: Partial<AddOnOption>) => {
-  MEAL_DESSERTS = MEAL_DESSERTS.map(i => i.id === id ? { ...i, ...updates } : i);
-  dessertListeners.forEach(l => l([...MEAL_DESSERTS]));
+export const updateDessertOption = async (id: string, updates: Partial<AddOnOption>) => {
+  await setDoc(doc(db, 'mealDesserts', 'current'), { items: dropUndefined(MEAL_DESSERTS.map(i => i.id === id ? { ...i, ...updates } : i)), updatedAt: serverTimestamp() });
 };
-export const removeDessertOption = (id: string) => {
-  MEAL_DESSERTS = MEAL_DESSERTS.filter(i => i.id !== id);
-  dessertListeners.forEach(l => l([...MEAL_DESSERTS]));
+export const removeDessertOption = async (id: string) => {
+  await setDoc(doc(db, 'mealDesserts', 'current'), { items: dropUndefined(MEAL_DESSERTS.filter(i => i.id !== id)), updatedAt: serverTimestamp() });
 };
 
 // --- ICON LIBRARY ---
@@ -1017,17 +970,27 @@ export const subscribeToIconLibrary = (listener: (items: IconEntry[]) => void) =
   listener([...ICON_LIBRARY]);
   return () => { iconLibraryListeners.delete(listener); };
 };
-export const addIconEntry = (item: IconEntry) => {
-  ICON_LIBRARY = [...ICON_LIBRARY, item];
+// firestore.rules gates iconLibrary/current's read to isActiveStaff() (it's
+// an admin-only picker, never customer-facing — see the rule's own
+// comment), but store.ts loads unconditionally in BOTH Operations.tsx and
+// CustomerPortal.tsx. A signed-in customer session is expected to fail this
+// read every time — that's the rule working as designed, not a bug — so
+// this listener needs its own error callback; without one, the Firestore
+// SDK logs an unhandled permission-denied error to the console on every
+// single customer page load.
+onSnapshot(doc(db, 'iconLibrary', 'current'), snap => {
+  if (!snap.exists()) return;
+  ICON_LIBRARY = (snap.data().items || []) as IconEntry[];
   iconLibraryListeners.forEach(l => l([...ICON_LIBRARY]));
+}, () => { /* expected for customer sessions — icon library is staff-only */ });
+export const addIconEntry = async (item: IconEntry) => {
+  await setDoc(doc(db, 'iconLibrary', 'current'), { items: dropUndefined([...ICON_LIBRARY, item]), updatedAt: serverTimestamp() });
 };
-export const updateIconEntry = (id: string, updates: Partial<IconEntry>) => {
-  ICON_LIBRARY = ICON_LIBRARY.map(i => i.id === id ? { ...i, ...updates } : i);
-  iconLibraryListeners.forEach(l => l([...ICON_LIBRARY]));
+export const updateIconEntry = async (id: string, updates: Partial<IconEntry>) => {
+  await setDoc(doc(db, 'iconLibrary', 'current'), { items: dropUndefined(ICON_LIBRARY.map(i => i.id === id ? { ...i, ...updates } : i)), updatedAt: serverTimestamp() });
 };
-export const removeIconEntry = (id: string) => {
-  ICON_LIBRARY = ICON_LIBRARY.filter(i => i.id !== id);
-  iconLibraryListeners.forEach(l => l([...ICON_LIBRARY]));
+export const removeIconEntry = async (id: string) => {
+  await setDoc(doc(db, 'iconLibrary', 'current'), { items: dropUndefined(ICON_LIBRARY.filter(i => i.id !== id)), updatedAt: serverTimestamp() });
 };
 
 // Real dish photography (three actual photos, licensed for this app),
@@ -2034,38 +1997,22 @@ export const deleteCustomerGroup = (id: string) => {
 
 const PERSIST_KEY = 'bonmanze_rms_state_v1';
 
-// Whether the one-time Menu Planner → Meal Library migration (see
-// migrateMenuToLibrary below) has already run on this installation.
-// Persisted so it runs itself automatically, exactly once, right after
-// hydration — the admin "Import from existing menu" button has been
-// removed now that this is automatic; this flag is what replaces it. A
-// fresh browser profile/origin (empty localStorage) or one where this
-// flag never got saved will auto-run the migration on next load, same as
-// clicking the old button once used to do.
-//
-// IMPORTANT — this flag only guards *creating* Mains, not *linking* dishes
-// to them. See LUNCH_DEFAULT_LINK_MAP/relinkDefaultRotationToLibrary below
-// for why those two concerns had to be split apart.
-let MENU_LIBRARY_MIGRATED = false;
-
-// Name (lowercased) → Main id, captured once by migrateMenuToLibrary() and
-// persisted here so relinkDefaultRotationToLibrary() can replay it on every
-// future load. WEEKLY_LUNCH_MENU_DEFAULT/WEEKLY_DINNER_MENU_DEFAULT (below)
-// are plain in-memory literals — only week *overrides* are persisted, via
-// LUNCH_MENU_OVERRIDES/DINNER_MENU_OVERRIDES — so a mainId the migration
-// wrote directly onto those default-rotation objects lived only in that
-// page's memory and was gone the instant the module re-initialized on the
-// next reload. Because MENU_LIBRARY_MIGRATED (above) then blocked the
-// migration from ever running again, "This Week"/"Next Week" (or any future
-// week nobody has explicitly edited) silently lost its Meal Library link on
-// every single refresh or dev-server restart, forever, after the first
-// successful migration — this is the actual root cause of the Menu Planner
-// repeatedly appearing "not linked to the Library" across multiple rounds
-// of fixes. These maps, plus the ungated relink pass below, fix that for
-// good: the *link* step now safely re-runs on every load, while the
-// *create* step (gated by MENU_LIBRARY_MIGRATED) still only ever runs once.
-let LUNCH_DEFAULT_LINK_MAP: Record<string, string> = {};
-let DINNER_DEFAULT_LINK_MAP: Record<string, string> = {};
+// Meal Library / Menu Planner / add-on catalogs / Icon Library are no
+// longer part of this localStorage snapshot — they're Firestore-backed now
+// (see the onSnapshot listeners above, each collection's own comment), and
+// Firestore is the only source of truth for them going forward. This used
+// to also carry a chain of one-time, localStorage-flag-gated migration/
+// cleanup passes (migrateMenuToLibrary, cleanupMainDishContentOnce,
+// relinkDefaultRotationToLibrary, clearMenuPlannerOnce,
+// fixDinnerOverridesOnce/V2) from the mock-data era — all removed here,
+// because every one of them called a mutator (addMainDish, setLunchWeekMenu,
+// etc.) that now writes to Firestore for real. Left in place, any of them
+// re-firing on a fresh browser profile or cleared localStorage (their own
+// "ran once" flags live in localStorage, so a fresh profile has none of
+// them set) would have replayed old mock-era fixups — created duplicate
+// Mains, wiped a real planned week back to empty — straight onto the real,
+// already-correctly-seeded production data. See BonManzE_Firestore_Schema.md
+// decision #12 for the full removal rationale.
 
 interface PersistedState {
   MOCK_TODAY: string;
@@ -2085,38 +2032,12 @@ interface PersistedState {
   LOYALTY_TIERS: LoyaltyTier[];
   CUSTOMER_GROUPS: CustomerGroup[];
   SYSTEM_CONFIG: typeof SYSTEM_CONFIG;
-  // Week-specific menu overrides (e.g. a custom "Next Week" lineup set in
-  // Operations before that week arrives) were originally left out of this
-  // snapshot — everything else in the app survives a refresh, but a planned
-  // future week's menu silently reverted to the default rotation. Included
-  // here so Operations can plan ahead without racing the clock.
-  LUNCH_MENU_OVERRIDES: Record<string, Record<WeekdayKey, CurryOption[]>>;
-  DINNER_MENU_OVERRIDES: Record<string, Record<WeekdayKey, CurryOption[]>>;
-  // Base/Dhal/Salad/Beverage/Dessert catalogs — previously plain constants,
-  // now admin-editable from Operations, so they need the same persistence
-  // treatment as everything else above.
-  MEAL_BASES: AddOnOption[];
-  MEAL_DHALS: AddOnOption[];
-  MEAL_SALADS: AddOnOption[];
-  MEAL_BEVERAGES: AddOnOption[];
-  MEAL_DESSERTS: AddOnOption[];
-  // Meal Library Mains — see MAIN_DISHES above.
-  MAIN_DISHES: MainDish[];
-  // Icon Library — see ICON_LIBRARY above.
-  ICON_LIBRARY: IconEntry[];
-  // See MENU_LIBRARY_MIGRATED above.
-  MENU_LIBRARY_MIGRATED: boolean;
-  // See MAIN_DISH_CONTENT_CLEANED below.
-  MAIN_DISH_CONTENT_CLEANED: boolean;
-  // See LUNCH_DEFAULT_LINK_MAP/DINNER_DEFAULT_LINK_MAP above.
-  LUNCH_DEFAULT_LINK_MAP: Record<string, string>;
-  DINNER_DEFAULT_LINK_MAP: Record<string, string>;
-  // See MENU_PLANNER_CLEARED_ONCE below.
-  MENU_PLANNER_CLEARED_ONCE: boolean;
-  // See DINNER_OVERRIDE_FIX_ONCE below.
-  DINNER_OVERRIDE_FIX_ONCE: boolean;
-  // See DINNER_OVERRIDE_FIX_V2_ONCE below.
-  DINNER_OVERRIDE_FIX_V2_ONCE: boolean;
+  // LUNCH_MENU_OVERRIDES/DINNER_MENU_OVERRIDES, the five add-on catalogs,
+  // MAIN_DISHES, and ICON_LIBRARY used to live in this snapshot — removed
+  // now that all of them are Firestore-backed (see the comment above this
+  // interface). Restoring them from localStorage on load would just mask
+  // real Firestore data with a stale local copy until the first onSnapshot
+  // batch overwrote it anyway, so there's nothing useful left to persist.
 }
 
 const persistAll = () => {
@@ -2127,12 +2048,6 @@ const persistAll = () => {
       PETTY_CASH, PREVIOUS_SHIFT_PHYSICAL, CASHIER_SHIFT, DISCOUNT_REQUESTS,
       ACTIVE_ORDERS, POS_SESSION_CARTS, LOYALTY_TIERS, CUSTOMER_GROUPS,
       SYSTEM_CONFIG,
-      LUNCH_MENU_OVERRIDES: lunchMenuStore.getSnapshot(),
-      DINNER_MENU_OVERRIDES: dinnerMenuStore.getSnapshot(),
-      MEAL_BASES, MEAL_DHALS, MEAL_SALADS, MEAL_BEVERAGES, MEAL_DESSERTS,
-      MAIN_DISHES, ICON_LIBRARY, MENU_LIBRARY_MIGRATED, MAIN_DISH_CONTENT_CLEANED,
-      LUNCH_DEFAULT_LINK_MAP, DINNER_DEFAULT_LINK_MAP, MENU_PLANNER_CLEARED_ONCE,
-      DINNER_OVERRIDE_FIX_ONCE, DINNER_OVERRIDE_FIX_V2_ONCE,
     };
     localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
   } catch (e) {
@@ -2143,17 +2058,20 @@ const persistAll = () => {
 };
 
 // Every existing listener Set gets persistAll added as an extra subscriber.
-// No mutator function above needs to change.
+// No mutator function above needs to change. The Meal Library/Menu Planner
+// listener Sets (baseListeners, dhalListeners, saladListeners,
+// beverageListeners, dessertListeners, mainDishListeners,
+// iconLibraryListeners) and the two weekly-menu-stores are deliberately NOT
+// in this list any more — see the comment above PersistedState for why:
+// Firestore's own onSnapshot listeners are what keeps those in sync now,
+// and persistAll() no longer has anywhere to put their data anyway (it was
+// removed from PersistedState above).
 [
   systemDateListeners, mealLibraryListeners, customerListeners,
   auditListeners, discrepancyListeners, poListeners, pettyCashListeners,
   cashierListeners, discountRequestListeners, orderListeners, posListeners,
   loyaltyListeners, groupListeners, paymentMethodListeners, configListeners,
-  baseListeners, dhalListeners, saladListeners, beverageListeners, dessertListeners,
-  mainDishListeners, iconLibraryListeners,
 ].forEach((set: Set<any>) => set.add(persistAll));
-lunchMenuStore.addRawListener(persistAll);
-dinnerMenuStore.addRawListener(persistAll);
 
 // Hydrate once at module load, before any component subscribes — ES module
 // top-level code always finishes running before an importer's code (e.g. a
@@ -2163,227 +2081,10 @@ export const clearPersistedState = () => {
   try { localStorage.removeItem(PERSIST_KEY); } catch (e) { /* ignore */ }
 };
 
-// Runs the Menu Planner → Meal Library migration exactly once per
-// installation (see MENU_LIBRARY_MIGRATED above) and immediately persists
-// the result, so a page reload right after never re-runs it or loses it.
-// No-ops if the flag is already set.
-const runMenuLibraryMigrationOnce = () => {
-  if (MENU_LIBRARY_MIGRATED) return;
-  migrateMenuToLibrary();
-  MENU_LIBRARY_MIGRATED = true;
-  persistAll();
-};
-
-// One-time content cleanup for Mains the original migration created — it
-// disambiguated same-named Lunch/Dinner dishes by suffixing the Main's
-// name "(Lunch)"/"(Dinner)", which read as visual clutter once the whole
-// Library was visible at once, and it always copied the day-slot's short,
-// auto-generated description verbatim rather than writing something fuller
-// for a Library entry meant to be the definitive version of that dish.
-// This strips the suffix from every Main's name (and a stray "- speical"
-// typo found on one manually-added entry) and, for the specific Lunch/
-// Dinner pairs the migration is known to have produced, replaces the
-// description with a fuller one written to also read as the disambiguator
-// now that the name no longer is. A Main whose (stripped) name+service
-// doesn't match a known migrated pair — added by hand, or from a CSV
-// import — only gets the name cleanup; there's no confident source to
-// rewrite its description from, so it's left exactly as the admin wrote it.
-const MAIN_DISH_DESCRIPTION_REWRITES: Record<string, string> = {
-  'Veg Curry|Lunch': 'A comforting Creole-spiced vegetable curry with seasonal greens, carrots, and pumpkin, gently simmered for a light, fully vegan lunch.',
-  'Veg Curry|Dinner': 'Roasted seasonal vegetables finished in a fuller evening curry sauce — heartier than the lunch version, built for dinner.',
-  'Chicken Curry|Lunch': "Our everyday home-style Mauritian chicken curry, simmered in a fragrant onion-and-tomato masala the way it's cooked in most Mauritian kitchens.",
-  'Chicken Curry|Dinner': 'Chicken finished with butter and cream for a richer, restaurant-style evening curry.',
-  'Fish Curry|Lunch': "Fresh local fish gently poached in a light, ginger-forward curry sauce, kept simple so the fish stays the star of the plate.",
-  'Fish Curry|Dinner': "Fish grilled first, then glazed in a tangy tamarind sauce for extra depth — our dinner take on the classic.",
-  'Lentil Curry|Lunch': 'A warming, fully vegan lentil curry finished with roasted turmeric and cumin — a lighter option that still fills you up.',
-  'Lentil Curry|Dinner': 'A five-lentil dal, ghee-tempered for extra richness — a more indulgent evening version of the lunch dal.',
-  'Prawn Curry|Lunch': 'Plump prawns in a coconut-and-lemongrass curry, balancing sweetness and citrus for a bright midday plate.',
-  'Prawn Curry|Dinner': 'Prawns finished in garlic butter with a chilli kick — a bolder, more indulgent evening preparation.',
-  'Beef Curry|Lunch': 'Beef slow-cooked until tender in a rich Creole tomato sauce, built for a heartier lunch.',
-  'Beef Curry|Dinner': 'Beef slow-cooked overnight for maximum tenderness, in a rich, deeply reduced gravy.',
-  'Shrimp Curry|Lunch': 'Small shrimp in a mild coconut cream curry — gentle spicing, easy on the palate.',
-  'Shrimp Curry|Dinner': 'Shrimp in a coconut cream curry lifted with fresh curry leaf, a more fragrant evening variation.',
-  'Paneer Curry|Lunch': 'Soft paneer cubes in a spinach curry with a touch of spice — a vegetarian favourite with real bite.',
-  'Paneer Curry|Dinner': 'Paneer in a cashew-and-tomato sauce — creamier and richer than the lunch version, made for dinner.',
-};
-let MAIN_DISH_CONTENT_CLEANED = false;
-const cleanupMainDishContentOnce = () => {
-  if (MAIN_DISH_CONTENT_CLEANED) return;
-  MAIN_DISHES = MAIN_DISHES.map(m => {
-    const isLunch = /\(lunch\)\s*$/i.test(m.name);
-    const isDinner = /\(dinner\)\s*$/i.test(m.name);
-    const name = m.name
-      .replace(/\s*\((lunch|dinner)\)\s*$/i, '')
-      .replace(/\s*-\s*speical\s*$/i, '')
-      .trim();
-    const key = isLunch ? `${name}|Lunch` : isDinner ? `${name}|Dinner` : undefined;
-    const desc = (key && MAIN_DISH_DESCRIPTION_REWRITES[key]) || m.desc;
-    return name === m.name && desc === m.desc ? m : { ...m, name, desc };
-  });
-  mainDishListeners.forEach(l => l([...MAIN_DISHES]));
-  MAIN_DISH_CONTENT_CLEANED = true;
-  persistAll();
-};
-
-// Re-applies LUNCH_DEFAULT_LINK_MAP/DINNER_DEFAULT_LINK_MAP onto
-// WEEKLY_LUNCH_MENU_DEFAULT/WEEKLY_DINNER_MENU_DEFAULT — see those maps'
-// comment above for the full root-cause explanation. Unlike
-// runMenuLibraryMigrationOnce()/cleanupMainDishContentOnce(), this is
-// deliberately NOT gated behind a "ran once" flag: it must re-run on every
-// single load, because the two default-rotation constants it's patching
-// are rebuilt fresh from source (unlinked) every time the module
-// re-initializes. Cheap and idempotent — skips any dish that already has a
-// mainId, and skips a link whose Main id no longer exists (e.g. deleted
-// from the Library since the map was captured).
-const relinkDefaultRotationToLibrary = () => {
-  let linked = 0;
-  const linkInPlace = (menu: Record<WeekdayKey, CurryOption[]>, linkMap: Record<string, string>) => {
-    WEEKDAY_KEYS.forEach(day => {
-      menu[day].forEach(dish => {
-        if (dish.mainId) return;
-        const id = linkMap[dish.name.trim().toLowerCase()];
-        if (id && MAIN_DISHES.some(m => m.id === id)) { dish.mainId = id; linked++; }
-      });
-    });
-  };
-  linkInPlace(WEEKLY_LUNCH_MENU_DEFAULT, LUNCH_DEFAULT_LINK_MAP);
-  linkInPlace(WEEKLY_DINNER_MENU_DEFAULT, DINNER_DEFAULT_LINK_MAP);
-  if (linked > 0) {
-    // Mutating the two default-rotation constants in place bypasses the
-    // normal update() path, so nothing would otherwise tell subscribers
-    // (Operations' menuTick, CustomerPortal) that a linked-but-unedited
-    // week just changed — same re-hydrate-to-force-notify trick
-    // migrateMenuToLibrary() already uses.
-    lunchMenuStore.hydrate(lunchMenuStore.getSnapshot());
-    dinnerMenuStore.hydrate(dinnerMenuStore.getSnapshot());
-  }
-};
-
-// ONE-TIME script, run automatically the next time this installation loads
-// — requested directly by Bhimal to empty the Menu Planner (This Week/Next
-// Week/Week+2, both Lunch and Dinner) so he can re-pick every dish from
-// the Meal Library by hand and verify each one links correctly from a
-// clean slate, rather than trying to untangle whatever was already
-// planned before the resolveDish()/relink fixes above landed.
-//
-// Deliberately called ONLY from the "existing persisted state" branch of
-// the hydration IIFE below, never from the fresh-install branch — a brand
-// new installation (no persisted state yet) has nothing to clear, and
-// should keep showing the intended default rotation, not start blank
-// forever. Guarded by MENU_PLANNER_CLEARED_ONCE so it fires exactly once
-// on Bhimal's existing installation and never repeats — critically, it
-// must never re-fire after he's re-added dishes, or it would wipe his
-// rework right back out on the next reload.
-//
-// Sets every currently-relevant week to an explicit empty override —
-// clearing overrides alone isn't enough, since forWeek() would then fall
-// back to WEEKLY_LUNCH_MENU_DEFAULT/WEEKLY_DINNER_MENU_DEFAULT (the
-// hardcoded rotation), which is not empty. Only touches the Menu
-// Planner's day-slot dishes — never the Meal Library (Mains), orders, or
-// customers.
-let MENU_PLANNER_CLEARED_ONCE = false;
-const mondayOfWeek = (dateStr: string, offsetDays: number): string => {
-  const d = new Date(dateStr + 'T00:00:00');
-  d.setDate(d.getDate() + offsetDays);
-  const day = d.getDay(); // 0=Sun..6=Sat
-  d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day));
-  return d.toISOString().slice(0, 10);
-};
-const clearMenuPlannerOnce = () => {
-  if (MENU_PLANNER_CLEARED_ONCE) return;
-  const EMPTY_WEEK: Record<WeekdayKey, CurryOption[]> = { MON: [], TUE: [], WED: [], THU: [], FRI: [] };
-  // Empty every week that already has an override (past, present, future)...
-  Object.keys(lunchMenuStore.getSnapshot()).forEach(w => setLunchWeekMenu(w, { ...EMPTY_WEEK }));
-  Object.keys(dinnerMenuStore.getSnapshot()).forEach(w => setDinnerWeekMenu(w, { ...EMPTY_WEEK }));
-  // ...and force-empty This Week/Next Week/Week+2 even if they had no
-  // override yet (they'd otherwise still show the hardcoded default
-  // rotation, which is not empty).
-  [0, 7, 14].forEach(offsetDays => {
-    const weekStart = mondayOfWeek(MOCK_TODAY, offsetDays);
-    setLunchWeekMenu(weekStart, { ...EMPTY_WEEK });
-    setDinnerWeekMenu(weekStart, { ...EMPTY_WEEK });
-  });
-  MENU_PLANNER_CLEARED_ONCE = true;
-  persistAll();
-};
-
-// Follow-up, second one-time patch. clearMenuPlannerOnce above was supposed
-// to leave Dinner's This Week/Next Week/Week+2 slots just as empty as
-// Lunch's — same three weekStarts, same setWeekMenu call, same code path —
-// but a live check of an actual installation on 2026-08-11 found Dinner's
-// overrides for two of those three weeks missing entirely (silently
-// falling through to the hardcoded default rotation, which is why Dinner
-// still showed real dish names/prices after the "clear") and the third
-// full of a stale multi-dish override instead of the intended empty one,
-// while all three of Lunch's forced weeks came out correctly empty. The
-// asymmetry didn't reproduce from reading the code — the Lunch/Dinner
-// paths are byte-for-byte identical — so rather than keep chasing a cause
-// that isn't visible in the source, this just re-applies the same
-// forced-empty write to Dinner's three current weeks a second time. Gated
-// by its own flag so it only ever fires once, and only on an installation
-// where the first clear already ran (a fresh install has nothing to fix).
-let DINNER_OVERRIDE_FIX_ONCE = false;
-const fixDinnerOverridesOnce = () => {
-  if (DINNER_OVERRIDE_FIX_ONCE) {
-    console.log('BonManzE: fixDinnerOverridesOnce already ran on this installation — skipping.');
-    return;
-  }
-  if (!MENU_PLANNER_CLEARED_ONCE) { DINNER_OVERRIDE_FIX_ONCE = true; return; }
-  const EMPTY_WEEK: Record<WeekdayKey, CurryOption[]> = { MON: [], TUE: [], WED: [], THU: [], FRI: [] };
-  // Belt-and-suspenders: clear every existing Dinner override key first, not
-  // just the three "current" weeks below — in case a stray week outside
-  // those three is also carrying stale content (mirrors the first step of
-  // clearMenuPlannerOnce above, which did the same for Lunch).
-  Object.keys(dinnerMenuStore.getSnapshot()).forEach(w => setDinnerWeekMenu(w, { ...EMPTY_WEEK }));
-  const weeksFixed = [0, 7, 14].map(offsetDays => {
-    const weekStart = mondayOfWeek(MOCK_TODAY, offsetDays);
-    setDinnerWeekMenu(weekStart, { ...EMPTY_WEEK });
-    return weekStart;
-  });
-  DINNER_OVERRIDE_FIX_ONCE = true;
-  persistAll();
-  // Visible confirmation this actually ran, and with which weeks — so the
-  // next person checking the console doesn't have to guess whether this
-  // fired or silently no-op'd/threw before reaching here.
-  console.warn('BonManzE: fixDinnerOverridesOnce ran — Dinner overrides forced empty for', weeksFixed);
-};
-
-// Third pass. Confirmed directly from source (not guessed): the "hardened"
-// broadened-clear body added to fixDinnerOverridesOnce above never actually
-// ran on Bhimal's real installation, because it shares DINNER_OVERRIDE_FIX_ONCE
-// with the original, narrower version of this same function (the one shipped
-// in 0b96b2c). That flag was already persisted true from that first run, so
-// every later reload — including with the hardened body in place — hit the
-// early-return guard at the top of fixDinnerOverridesOnce and skipped
-// straight past the broadened clear logic without ever executing it. Live
-// evidence: a full restart + fresh tab on 2026-08-12 still showed Dinner's
-// This Week fully populated (Lunch correctly empty), matching exactly what
-// this bug predicts. Fixed with an independent flag so the broadened clear
-// gets to run once regardless of whether the original narrower version
-// already fired and persisted its own flag as done.
-let DINNER_OVERRIDE_FIX_V2_ONCE = false;
-const fixDinnerOverridesOnceV2 = () => {
-  if (DINNER_OVERRIDE_FIX_V2_ONCE) {
-    console.log('BonManzE: fixDinnerOverridesOnceV2 already ran on this installation — skipping.');
-    return;
-  }
-  if (!MENU_PLANNER_CLEARED_ONCE) { DINNER_OVERRIDE_FIX_V2_ONCE = true; return; }
-  const EMPTY_WEEK: Record<WeekdayKey, CurryOption[]> = { MON: [], TUE: [], WED: [], THU: [], FRI: [] };
-  Object.keys(dinnerMenuStore.getSnapshot()).forEach(w => setDinnerWeekMenu(w, { ...EMPTY_WEEK }));
-  const weeksFixed = [0, 7, 14].map(offsetDays => {
-    const weekStart = mondayOfWeek(MOCK_TODAY, offsetDays);
-    setDinnerWeekMenu(weekStart, { ...EMPTY_WEEK });
-    return weekStart;
-  });
-  DINNER_OVERRIDE_FIX_V2_ONCE = true;
-  persistAll();
-  console.warn('BonManzE: fixDinnerOverridesOnceV2 ran — Dinner overrides forced empty for', weeksFixed);
-};
-
 (() => {
   try {
     const raw = localStorage.getItem(PERSIST_KEY);
-    if (!raw) { runMenuLibraryMigrationOnce(); cleanupMainDishContentOnce(); relinkDefaultRotationToLibrary(); return; }
+    if (!raw) return;
     const saved: Partial<PersistedState> = JSON.parse(raw);
     if (saved.MOCK_TODAY !== undefined) MOCK_TODAY = saved.MOCK_TODAY;
     if (saved.PAYMENT_METHODS !== undefined) PAYMENT_METHODS = saved.PAYMENT_METHODS;
@@ -2402,40 +2103,6 @@ const fixDinnerOverridesOnceV2 = () => {
     if (saved.LOYALTY_TIERS !== undefined) LOYALTY_TIERS = saved.LOYALTY_TIERS;
     if (saved.CUSTOMER_GROUPS !== undefined) CUSTOMER_GROUPS = saved.CUSTOMER_GROUPS;
     if (saved.SYSTEM_CONFIG !== undefined) Object.assign(SYSTEM_CONFIG, saved.SYSTEM_CONFIG);
-    lunchMenuStore.hydrate(saved.LUNCH_MENU_OVERRIDES);
-    dinnerMenuStore.hydrate(saved.DINNER_MENU_OVERRIDES);
-    if (saved.MEAL_BASES !== undefined) MEAL_BASES = saved.MEAL_BASES;
-    if (saved.MEAL_DHALS !== undefined) MEAL_DHALS = saved.MEAL_DHALS;
-    if (saved.MEAL_SALADS !== undefined) MEAL_SALADS = saved.MEAL_SALADS;
-    if (saved.MEAL_BEVERAGES !== undefined) MEAL_BEVERAGES = saved.MEAL_BEVERAGES;
-    if (saved.MEAL_DESSERTS !== undefined) MEAL_DESSERTS = saved.MEAL_DESSERTS;
-    if (saved.MAIN_DISHES !== undefined) MAIN_DISHES = saved.MAIN_DISHES;
-    if (saved.ICON_LIBRARY !== undefined) ICON_LIBRARY = saved.ICON_LIBRARY;
-    if (saved.MENU_LIBRARY_MIGRATED !== undefined) MENU_LIBRARY_MIGRATED = saved.MENU_LIBRARY_MIGRATED;
-    if (saved.MAIN_DISH_CONTENT_CLEANED !== undefined) MAIN_DISH_CONTENT_CLEANED = saved.MAIN_DISH_CONTENT_CLEANED;
-    if (saved.LUNCH_DEFAULT_LINK_MAP !== undefined) LUNCH_DEFAULT_LINK_MAP = saved.LUNCH_DEFAULT_LINK_MAP;
-    if (saved.DINNER_DEFAULT_LINK_MAP !== undefined) DINNER_DEFAULT_LINK_MAP = saved.DINNER_DEFAULT_LINK_MAP;
-    if (saved.MENU_PLANNER_CLEARED_ONCE !== undefined) MENU_PLANNER_CLEARED_ONCE = saved.MENU_PLANNER_CLEARED_ONCE;
-    if (saved.DINNER_OVERRIDE_FIX_ONCE !== undefined) DINNER_OVERRIDE_FIX_ONCE = saved.DINNER_OVERRIDE_FIX_ONCE;
-    if (saved.DINNER_OVERRIDE_FIX_V2_ONCE !== undefined) DINNER_OVERRIDE_FIX_V2_ONCE = saved.DINNER_OVERRIDE_FIX_V2_ONCE;
-    runMenuLibraryMigrationOnce();
-    cleanupMainDishContentOnce();
-    // Unconditional (not just on the fresh-install path above) — see
-    // relinkDefaultRotationToLibrary's comment for why this must run on
-    // every load, not just once.
-    relinkDefaultRotationToLibrary();
-    // One-time Menu Planner wipe — see clearMenuPlannerOnce's comment above
-    // for why this only ever runs from this branch (existing installation),
-    // never the fresh-install branch above.
-    clearMenuPlannerOnce();
-    // See fixDinnerOverridesOnce's comment above — a targeted second pass
-    // that only touches Dinner's three current weeks, once, to correct
-    // what the first clear left inconsistent.
-    fixDinnerOverridesOnce();
-    // See fixDinnerOverridesOnceV2's comment above — the hardened body in
-    // the function above never got to run because it shared a flag that
-    // was already persisted true; this is the actual fix, on its own flag.
-    fixDinnerOverridesOnceV2();
   } catch (e) {
     console.warn('BonManzE: failed to restore persisted state', e);
   }

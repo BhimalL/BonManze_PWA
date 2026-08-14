@@ -707,8 +707,8 @@ Operations to confirm is the next scoped piece of work.
 
 ## 2026-08-13 — Customer App "Pay"/"Pay order"/"Pay balance" Wired to Real Firestore Writes, Confirmed Live
 
-**Verified:** `npx tsc --noEmit` clean, `vite build` clean. Not yet
-committed via Antigravity as of this write-up.
+**Verified:** `npx tsc --noEmit` clean, `vite build` clean.
+**Commit:** [`2dc393b`](https://github.com/BhimalL/BonManze_PWA/commit/2dc393bafb857279a78e4a29166e768903ed3cfc) "Wire Customer App payment submission to real Firestore", pushed to `main` by Antigravity.
 
 **What changed (`modules/CustomerPortal.tsx`, `firestore.rules`):**
 - "Pay" (per meal), "Pay order," and "Pay balance" now perform a real
@@ -771,3 +771,151 @@ the raw `firebase emulators:start`, in this OneDrive-synced repo.
 
 **Next step:** hand `modules/CustomerPortal.tsx` and `firestore.rules` to
 Antigravity to commit.
+
+## 2026-08-13 — Meal Library / Menu Planner / Add-On Catalogs / Icon Library Wired to Real Firestore (Bhimal's choice: "Meal Library/Menu Planner" → "Everything in one round")
+
+**Verified:** `npx tsc --noEmit` clean, `vite build` clean. Not yet
+live-tested by Bhimal or committed via Antigravity as of this write-up.
+
+**Why this round looked different from the last few:** every prior
+Firestore-wiring round (orders, customers, payments) wired a component's
+own `onSnapshot` listener directly in `Operations.tsx`/`CustomerPortal.tsx`.
+That pattern doesn't work cleanly here — `store.ts`'s `resolveDish()`/
+`specialPriceInfo()`/`filterAddOnOptions()` are plain functions, shared
+verbatim by both apps, that read `MAIN_DISHES`/the five add-on catalogs
+directly as module-level bindings, not as parameters. Duplicating
+listeners into both components would have meant duplicating or exporting
+those utilities too — a bigger, riskier change. Instead, every
+`onSnapshot` listener now lives inside `store.ts` itself and writes
+straight into the same exported `let` bindings those functions already
+read, so every existing call site in both files keeps working completely
+unchanged (confirmed via grep that `CustomerPortal.tsx` does import
+several of the five catalogs as raw bindings directly, not just through
+`subscribeToX` — this is exactly why the fix had to live where it does).
+
+**What changed (`modules/store.ts`):**
+- `MAIN_DISHES` (`mains/{mainId}`, one doc per Main) — `addMainDish`/
+  `updateMainDish`/`removeMainDish` now `setDoc`/`updateDoc`/`deleteDoc`
+  for real, synced back via a `collection(db, 'mains')` listener.
+- The weekly Lunch/Dinner menu stores (`menuWeeks/{weekStart}`,
+  `menuDefaults/current`) — the shared `createWeeklyMenuStore` factory
+  was restructured: `update`/`addDish`/`removeDish`/`setWeekMenu` now
+  `setDoc(..., {merge:true})` just their own service's key (`lunch` or
+  `dinner`) onto the week's doc, leaving the other service's key on the
+  same doc untouched. A single shared `menuWeeks` collection listener
+  feeds both stores' local override state, and a `menuDefaults/current`
+  listener supplies the fallback — read-only from the client, since
+  Operations' Menu Planner never edits an abstract "default," only a real
+  calendar week (confirmed via `activeMenuWeekStart`).
+- The five add-on catalogs (`mealBases`/`mealDhals`/`mealSalads`/
+  `mealBeverages`/`mealDesserts`) and `iconLibrary` — each a single
+  `{ items: [...], updatedAt }` doc at `.../current`, already seeded by
+  `scripts/migrateConfigDocs.js` and already read server-side by
+  `confirmCheckout`. Add/update/remove now read-modify-write the whole
+  `items` array via `setDoc`.
+- `iconLibrary/current`'s read is staff-only in `firestore.rules`
+  (`isActiveStaff()` — it's an admin-only picker, never customer-facing),
+  but `store.ts` loads unconditionally in both apps. A signed-in customer
+  session was going to fail that one read every time — correct per the
+  rule, but it would have logged an unhandled `permission-denied` error
+  to the console on every customer page load. Fixed with a no-op error
+  callback on that specific listener.
+- **A real, latent data-integrity risk removed, not just left alone:**
+  `store.ts` carried a chain of one-time, `localStorage`-flag-gated
+  migration/cleanup passes from the mock-data era (`migrateMenuToLibrary`,
+  `cleanupMainDishContentOnce`, `relinkDefaultRotationToLibrary`,
+  `clearMenuPlannerOnce`, `fixDinnerOverridesOnce`/`V2`) that ran
+  automatically at module load. Every one of those called a mutator that
+  now writes to Firestore for real — left in place, any of them
+  re-firing on a fresh browser profile or cleared `localStorage` (their
+  "ran once" flags live client-side, so a fresh profile has none set)
+  would have replayed old mock-era fixups (duplicate Mains, a force-
+  emptied real planned week) straight onto the real, already-seeded
+  production data. All removed, along with the now-dead
+  `LUNCH_DEFAULT_LINK_MAP`/`DINNER_DEFAULT_LINK_MAP`/
+  `MENU_LIBRARY_MIGRATED`/etc. flags. `persistAll()`/`PersistedState`
+  also dropped the menu-content fields entirely — restoring any of them
+  from a stale `localStorage` snapshot on load would just mask real
+  Firestore data for a moment — and `getSnapshot()`/`hydrate()`/
+  `addRawListener()` (only ever used by that persistence path) were
+  removed from the weekly-menu-store factory along with them.
+- `firestore.rules` needed **no changes** — every collection above
+  already had exactly the `manageMenu`-gated write / public (or
+  staff-only, for icons) read rules this round needed, from the original
+  rules-drafting pass; confirmed present by a fresh read this round.
+
+**What changed (`modules/Operations.tsx`):**
+- ~30 mutator call sites (Mains ×3, Menu Planner ×5 per service ×2
+  services, 5 catalogs' generic add/update/remove ×3, Icon Library ×3,
+  plus reuse-week and CSV-import) now route through one new shared
+  `runMenuWrite()` helper instead of building ~15 separate per-action
+  spinner/error UIs. It reuses the `opsActionError` banner state already
+  added for Mark Delivered/Mark Paid — now also rendered at the top of
+  the Menu Planner tab, the Meal Library tab, and Settings → Icons.
+- A stale comment referencing the now-deleted `migrateMenuToLibrary`/
+  `runMenuLibraryMigrationOnce` was rewritten to describe the real
+  current wiring instead.
+
+**Known, non-blocking residual gap:** `CustomerPortal.tsx` doesn't force
+a re-render specifically when the five add-on catalogs/Mains/Icon Library
+change value (it only bumps a tick for Lunch/Dinner menu placement
+changes). Values are always correct the next time anything re-renders —
+this is a live-binding read, not a stale copy — just not guaranteed to
+repaint the instant Operations saves a catalog edit while a customer's
+app is already open and idle. Not fixed this round; noted in the schema
+doc's open items if it's ever worth revisiting.
+
+**Not done this round, deliberately out of scope:** dish-photo upload
+still writes base64 directly (unrelated pre-existing gap, tracked
+separately in the schema doc); Meal Library Main editor's photo field
+itself was untouched.
+
+**Next step:** live-test against the local emulator (add/edit/remove a
+Main, a day-slot dish, a catalog entry, an icon; try a CSV import; check
+the customer-facing menu still renders correctly), then hand
+`modules/store.ts` and `modules/Operations.tsx` to Antigravity to commit.
+
+**Real bug found on Bhimal's first live edit, fixed same day:** editing an
+existing Main (Paneer Curry) threw `Function updateDoc() called with
+invalid data. Unsupported field value: undefined (found in field cost in
+document mains/main-...)`. Root cause: every optional field across this
+file (`MainDish.cost`/`photoUrl`, `CurryOption.baseOptionIds`/etc.,
+`AddOnOption.price`/`up`/`group`) has always used `field: undefined` to
+mean "no value" — harmless for a plain JS object/spread (the mock era),
+but the Firestore SDK rejects a literal `undefined` anywhere in written
+data outright. `saveMainEditor`'s patch object unconditionally includes
+`baseGroup: undefined`, so this fired on every single Main edit, not just
+this one. Nothing was written to Firestore when this happened — the SDK
+rejects the payload client-side before any network call, so no data was
+at risk. **Fixed** with two small helpers in `store.ts`: `dropUndefined()`
+(strips undefined-valued keys/array entries recursively — correct for
+`setDoc`, and for the menu-week arrays that get fully replaced on every
+write regardless) and `toUpdatePayload()` (converts an explicit `undefined`
+in an `updateDoc` call into Firestore's `deleteField()` sentinel instead of
+just dropping the key — needed so "clear this field" still actually clears
+it in Firestore, rather than silently leaving the prior value in place).
+Applied to every write path in the file: `addMainDish`/`updateMainDish`,
+the weekly-menu-store's `writeWeek` (covers `update`/`addDish`/`removeDish`/
+`setWeekMenu` for both services), and all five add-on catalogs' + Icon
+Library's add/update/remove. `tsc`/`vite build` both clean after the fix.
+Updated `store.ts` delivered to the device; not yet re-tested live or
+committed via Antigravity as of this write-up.
+
+**Second observation from Bhimal's live test, fixed same day:** once a
+draft order was confirmed, the "My Order" screen's day header collapsed
+from a full date (e.g. "Tuesday, Aug 11" — what the pre-confirmation
+draft view shows) down to just the abbreviated weekday ("MON"). Root
+cause: `CustomerPortal.tsx`'s `groupByOrderServiceDay` (used only for
+confirmed orders) built each day-group's `label` straight from
+`OrderItem.deliveryDay`, a terse weekday string, instead of computing a
+full date the way the draft view's `getThisWeekDays` does from the day's
+actual date. **Fixed** by adding `formatFullDateLabel()` — the same
+`toLocaleDateString('en-US', { weekday: 'long', month: 'short', day:
+'numeric' })` formatting `getThisWeekDays` already uses, applied to
+`line.item.deliveryDate` (parsed from y/m/d components, not
+`new Date(dateStr)`, to avoid a UTC-parsing timezone shift landing on the
+wrong day) — and using it in place of the raw `deliveryDay` field, with a
+fallback to the old abbreviated label if a date is ever missing/
+unparseable. `tsc`/`vite build` both clean. Updated `CustomerPortal.tsx`
+delivered to the device; not yet re-tested live or committed via
+Antigravity as of this write-up.

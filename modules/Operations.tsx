@@ -265,6 +265,27 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [pendingPaymentKey, setPendingPaymentKey] = useState<string | null>(null);
   const [opsActionError, setOpsActionError] = useState<string | null>(null);
 
+  // Meal Library / Menu Planner / add-on catalogs / Icon Library mutators
+  // (addMainDish, updateBaseOption, lunchMenuStore's update/addDish/etc.,
+  // addIconEntry, ...) are now real Firestore writes (store.ts) and can
+  // reject — a permission-denied rule, a dropped connection. There are
+  // ~30 call sites across this tab set; rather than build a per-action
+  // spinner/error block for each (the pattern handleMarkDelivered/markPaid
+  // use below, appropriate there because those are two specific, high-
+  // stakes actions), every Meal Library/Menu Planner call site instead
+  // fires its write through this shared helper, which reuses the same
+  // opsActionError banner already shown on the Delivery/Payments tabs.
+  // Deliberately fire-and-forget from the caller's point of view (matches
+  // every one of these call sites' existing synchronous-looking style —
+  // e.g. saveMainEditor closes the modal immediately) — a failure surfaces
+  // via the banner a moment later instead of blocking the UI on the write.
+  const runMenuWrite = (write: Promise<unknown>) => {
+    setOpsActionError(null);
+    write.catch(err => {
+      setOpsActionError(err instanceof Error ? err.message : 'That change failed to save — please try again.');
+    });
+  };
+
   // Meal Library Main editor — opens as a modal, used from the Library tab
   // ("Add Main"/pencil on a Main) — base group, dhal/salad applicability
   // and which specific catalog options each allows all live here now,
@@ -971,10 +992,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   // --- Meal Library: Main add/edit/remove ---
-  // The one-time Menu Planner → Library migration (migrateMenuToLibrary in
-  // store.ts) now runs itself automatically on first load — see
-  // MENU_LIBRARY_MIGRATED / runMenuLibraryMigrationOnce there — so there's
-  // no admin button here to trigger it manually anymore.
+  // mainDishes/bases/dhals/.../icons below (subscribeToMainDishes etc.,
+  // wired in the useEffect further down) now come straight from Firestore
+  // (mains/{mainId}, mealBases/current, etc. — see store.ts) rather than
+  // the mock arrays these used to be. addMainDish/updateMainDish/
+  // removeMainDish are real Firestore writes now; the one-time migration
+  // that used to auto-seed the Library from the mock Menu Planner
+  // (migrateMenuToLibrary) has been removed from store.ts entirely, since
+  // Firestore is already correctly seeded (scripts/migrateMenuLibrary.js).
 
   const startAddMain = () => {
     setMainEditor({ mode: 'add' });
@@ -1067,12 +1092,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       dessertOptionIds: mainForm.dessertOptionIds ?? undefined
     };
     if (mainEditor.mode === 'add') {
-      addMainDish({
+      runMenuWrite(addMainDish({
         id: `main-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
         ...patch
-      } as MainDish);
+      } as MainDish));
     } else if (mainEditor.mainId) {
-      updateMainDish(mainEditor.mainId, patch);
+      runMenuWrite(updateMainDish(mainEditor.mainId, patch));
     }
     setMainEditor(null);
   };
@@ -1097,20 +1122,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     if (!mainPickerFor) return;
     const add = mainPickerFor.service === 'Dinner' ? addDinnerDish : addLunchDish;
     const { cost, id, ...rest } = main;
-    add(mainPickerFor.weekStart, mainPickerFor.day, {
+    runMenuWrite(add(mainPickerFor.weekStart, mainPickerFor.day, {
       id: `dish-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       ...rest,
       // Library-sourced copies remember which Main they came from, for the
       // special-price comparison — cost is deliberately not copied down
       // (it's an admin-only Library concern, no day-slot field for it).
       mainId: id
-    } as CurryOption);
+    } as CurryOption));
     cancelMainPicker();
   };
 
   const handleRemoveDish = (day: WeekdayKey, service: Service, weekStart: string, dishId: string) => {
     const remove = service === 'Dinner' ? removeDinnerDish : removeLunchDish;
-    remove(weekStart, day, dishId);
+    runMenuWrite(remove(weekStart, day, dishId));
   };
 
   const startEditDaySlot = (day: WeekdayKey, service: Service, weekStart: string, dish: CurryOption) => {
@@ -1132,17 +1157,17 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     // the whole point of a special price). Only a legacy day-slot dish with
     // no mainId (never picked through the Library) still allows editing its
     // own name/desc directly.
-    update(editingDaySlot.weekStart, editingDaySlot.day, editingDaySlot.curryId,
+    runMenuWrite(update(editingDaySlot.weekStart, editingDaySlot.day, editingDaySlot.curryId,
       existing?.mainId
         ? { price }
         : { name: daySlotEditForm.name.trim() || existing?.name || '', desc: daySlotEditForm.desc.trim(), price }
-    );
+    ));
     setEditingDaySlot(null);
   };
 
   // --- Add-on catalog management (Base / Dhal / Salad / Beverage / Dessert) ---
 
-  const CATALOG_META: Record<CatalogKey, { label: string; items: AddOnOption[]; add: (i: AddOnOption) => void; update: (id: string, u: Partial<AddOnOption>) => void; remove: (id: string) => void; hasGroup: boolean; hasPrice: boolean }> = {
+  const CATALOG_META: Record<CatalogKey, { label: string; items: AddOnOption[]; add: (i: AddOnOption) => Promise<void>; update: (id: string, u: Partial<AddOnOption>) => Promise<void>; remove: (id: string) => Promise<void>; hasGroup: boolean; hasPrice: boolean }> = {
     base: { label: 'Base', items: bases, add: addBaseOption, update: updateBaseOption, remove: removeBaseOption, hasGroup: true, hasPrice: true },
     dhal: { label: 'Dhal', items: dhals, add: addDhalOption, update: updateDhalOption, remove: removeDhalOption, hasGroup: false, hasPrice: false },
     salad: { label: 'Salad', items: salads, add: addSaladOption, update: updateSaladOption, remove: removeSaladOption, hasGroup: false, hasPrice: false },
@@ -1160,12 +1185,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     const meta = CATALOG_META[editingAddOn.catalog];
     const parsedPrice = parseFloat(addOnForm.price);
     const priceField = editingAddOn.catalog === 'base' ? 'up' : 'price';
-    meta.update(editingAddOn.id, {
+    runMenuWrite(meta.update(editingAddOn.id, {
       emoji: addOnForm.emoji.trim() || '•',
       name: addOnForm.name.trim() || 'Untitled',
       [priceField]: isNaN(parsedPrice) ? 0 : parsedPrice,
       ...(meta.hasGroup ? { group: addOnForm.group.trim() || DEFAULT_BASE_GROUP } : {})
-    } as Partial<AddOnOption>);
+    } as Partial<AddOnOption>));
     setEditingAddOn(null);
   };
 
@@ -1182,7 +1207,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     if (catalog === 'base') item.up = isNaN(parsedPrice) ? 0 : parsedPrice;
     else item.price = isNaN(parsedPrice) ? 0 : parsedPrice;
     if (meta.hasGroup) item.group = draft.group.trim() || DEFAULT_BASE_GROUP;
-    meta.add(item);
+    runMenuWrite(meta.add(item));
     setNewAddOnForm(f => ({ ...f, [catalog]: { emoji: draft.emoji, name: '', price: catalog === 'dhal' || catalog === 'salad' ? '' : '0', group: meta.hasGroup ? draft.group : '' } }));
   };
 
@@ -1195,17 +1220,17 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const saveIconEdit = () => {
     if (!editingIcon) return;
-    updateIconEntry(editingIcon, { emoji: iconForm.emoji.trim() || '❓', label: iconForm.label.trim() || 'Untitled' });
+    runMenuWrite(updateIconEntry(editingIcon, { emoji: iconForm.emoji.trim() || '❓', label: iconForm.label.trim() || 'Untitled' }));
     setEditingIcon(null);
   };
 
   const saveNewIcon = () => {
     if (!newIconForm.emoji.trim() || !newIconForm.label.trim()) return;
-    addIconEntry({
+    runMenuWrite(addIconEntry({
       id: `ic-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       emoji: newIconForm.emoji.trim(),
       label: newIconForm.label.trim()
-    });
+    }));
     setNewIconForm({ emoji: '', label: '' });
   };
 
@@ -1226,7 +1251,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     // sourceMenu is a plain snapshot object (forWeek() never returns a live
     // reference into another week's override), so this is a one-time copy —
     // editing the destination afterwards never changes the source week.
-    setMenu(destinationWeekStart, sourceMenu);
+    runMenuWrite(setMenu(destinationWeekStart, sourceMenu));
     setReusePickerFor(null);
     setReuseSourceWeek('');
   };
@@ -1359,7 +1384,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         if (!mainId) {
           mainId = `main-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
           const { id, ...rest } = dish;
-          addMainDish({ id: mainId, ...rest });
+          runMenuWrite(addMainDish({ id: mainId, ...rest }));
           byName.set(key, mainId);
         }
         return { ...dish, mainId };
@@ -1380,7 +1405,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       if (error) { setCsvError(error); return; }
       setCsvError('');
       const setMenu = service === 'Dinner' ? setDinnerWeekMenu : setLunchWeekMenu;
-      setMenu(activeMenuWeekStart, linkMenuDishesToLibrary(menu));
+      runMenuWrite(setMenu(activeMenuWeekStart, linkMenuDishesToLibrary(menu)));
       setCsvImportTarget(null);
     };
     reader.readAsText(file);
@@ -1698,6 +1723,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
     return (
       <div className="space-y-6">
+        {opsActionError && (
+          <div className="bg-danger/10 text-danger text-xs font-bold rounded-xl px-4 py-3 flex items-center gap-2">
+            <AlertCircle className="size-4 shrink-0" /> {opsActionError}
+          </div>
+        )}
         <input ref={csvFileInputRef} type="file" accept=".csv" className="hidden" onChange={handleCsvFileChange} />
 
         {/* Week Switcher with Week Range Header */}
@@ -1829,7 +1859,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           {meta.hasGroup && <span className="text-[10px] font-bold text-slate-400 bg-white px-2 py-0.5 rounded-full border border-slate-200 shrink-0">{item.group || DEFAULT_BASE_GROUP}</span>}
                           {meta.hasPrice && <span className="text-[11px] font-black text-slate-500 shrink-0">{formatCurrency(item.price ?? item.up ?? 0)}</span>}
                           <button onClick={() => startEditAddOn(key, item)} className="p-1 text-slate-300 hover:text-primary shrink-0"><Edit3 className="size-3.5" /></button>
-                          <button onClick={() => meta.remove(item.id)} className="p-1 text-slate-300 hover:text-red-500 shrink-0"><Trash2 className="size-3.5" /></button>
+                          <button onClick={() => runMenuWrite(meta.remove(item.id))} className="p-1 text-slate-300 hover:text-red-500 shrink-0"><Trash2 className="size-3.5" /></button>
                         </div>
                       );
                     })}
@@ -1861,6 +1891,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
     return (
       <div className="space-y-6 animate-fade-in">
+        {opsActionError && (
+          <div className="bg-danger/10 text-danger text-xs font-bold rounded-xl px-4 py-3 flex items-center gap-2">
+            <AlertCircle className="size-4 shrink-0" /> {opsActionError}
+          </div>
+        )}
         <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
           <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
             <div>
@@ -1903,7 +1938,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <button onClick={() => startEditMain(m)} className="p-1.5 text-slate-300 hover:text-primary"><Edit3 className="size-3.5" /></button>
-                        <button onClick={() => removeMainDish(m.id)} className="p-1.5 text-slate-300 hover:text-red-500"><Trash2 className="size-3.5" /></button>
+                        <button onClick={() => runMenuWrite(removeMainDish(m.id))} className="p-1.5 text-slate-300 hover:text-red-500"><Trash2 className="size-3.5" /></button>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 mt-3 flex-wrap">
@@ -2126,6 +2161,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
         {settingsSubTab === 'icons' ? (
           <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
+            {opsActionError && (
+              <div className="bg-danger/10 text-danger text-xs font-bold rounded-xl px-4 py-3 flex items-center gap-2">
+                <AlertCircle className="size-4 shrink-0" /> {opsActionError}
+              </div>
+            )}
             <div>
               <h3 className="text-base font-black text-slate-900">Icon Library</h3>
               <p className="text-xs text-slate-400 font-medium mt-1">
@@ -2150,7 +2190,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     <span className="text-lg shrink-0">{icon.emoji}</span>
                     <span className="flex-1 min-w-0 text-xs font-bold text-slate-700 truncate">{icon.label}</span>
                     <button onClick={() => startEditIcon(icon)} className="p-1 text-slate-300 hover:text-primary shrink-0"><Edit3 className="size-3.5" /></button>
-                    <button onClick={() => removeIconEntry(icon.id)} className="p-1 text-slate-300 hover:text-red-500 shrink-0"><Trash2 className="size-3.5" /></button>
+                    <button onClick={() => runMenuWrite(removeIconEntry(icon.id))} className="p-1 text-slate-300 hover:text-red-500 shrink-0"><Trash2 className="size-3.5" /></button>
                   </div>
                 );
               })}

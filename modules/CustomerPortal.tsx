@@ -144,6 +144,23 @@ const serviceOf = (item: OrderItem): Service => (item.serviceSlot || '').startsW
 // same-day sequence number used for the "Extra" badge.
 interface OrderLine { order: Order; item: OrderItem; seq?: number; }
 
+// Full "Tuesday, Aug 11"-style label for a 'YYYY-MM-DD' date string — the
+// same format getThisWeekDays (below) uses for the draft cart, so a
+// confirmed order's day header reads the same way once it's locked in,
+// instead of the terser abbreviated weekday ("MON") it showed before.
+// Built from y/m/d components (not `new Date(dateStr)`) to avoid the
+// UTC-parsing timezone shift that can land on the wrong calendar day.
+// Falls back to the raw deliveryDay if the date is missing/unparseable,
+// rather than rendering a blank header.
+const formatFullDateLabel = (dateStr: string, fallback: string): string => {
+  if (!dateStr) return fallback;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!y || !m || !d) return fallback;
+  const dt = new Date(y, m - 1, d);
+  if (Number.isNaN(dt.getTime())) return fallback;
+  return dt.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+};
+
 // Order -> Offering -> Day, in that nesting order — an order can contain
 // both Lunch and Dinner items for the same day (or, for a receipt spanning
 // a "Pay balance" claim, more than one order), and each level is cooked/
@@ -163,7 +180,7 @@ function groupByOrderServiceDay(lines: OrderLine[]) {
           const date = line.item.deliveryDate || '';
           const last = days[days.length - 1];
           if (last && last.date === date) last.items.push(line);
-          else days.push({ date, label: line.item.deliveryDay || '', items: [line] });
+          else days.push({ date, label: formatFullDateLabel(date, line.item.deliveryDay || ''), items: [line] });
         });
         return { service, days };
       })
