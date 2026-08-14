@@ -112,6 +112,21 @@ export const SYSTEM_CONFIG = {
   // -2 = two days before, and so on. Kept as a signed integer rather than a
   // pair of enums so "3 days before" etc. just works without adding cases.
   cutoffDayOffset: 0,
+  // Separated ordering and cancellation/edit cutoffs:
+  orderCutoffTime: '09:00',
+  orderCutoffDayOffset: 0,
+  cancelCutoffTime: '09:00',
+  cancelCutoffDayOffset: 0,
+  // Lunch specific cutoffs:
+  lunchOrderCutoffTime: '12:00',
+  lunchOrderCutoffDayOffset: -1,
+  lunchCancelCutoffTime: '09:00',
+  lunchCancelCutoffDayOffset: 0,
+  // Dinner specific cutoffs:
+  dinnerOrderCutoffTime: '12:00',
+  dinnerOrderCutoffDayOffset: 0,
+  dinnerCancelCutoffTime: '14:00',
+  dinnerCancelCutoffDayOffset: 0,
   // Delivery arrival windows shown to customers — free text since it's
   // display-only, not used for any scheduling logic. Dinner gets its own
   // window since it naturally arrives later in the day than Lunch.
@@ -993,6 +1008,33 @@ export const removeIconEntry = async (id: string) => {
   await setDoc(doc(db, 'iconLibrary', 'current'), { items: dropUndefined(ICON_LIBRARY.filter(i => i.id !== id)), updatedAt: serverTimestamp() });
 };
 
+// config/system — live sync of system configurations (Operating Days, VAT, Cutoffs, Business Identity, etc.)
+onSnapshot(doc(db, 'config', 'system'), snap => {
+  if (!snap.exists()) return;
+  const data = snap.data();
+  Object.assign(SYSTEM_CONFIG, {
+    ...data,
+    // Fallbacks for the new separate cutoff properties if they aren't in the DB yet:
+    orderCutoffTime: data.orderCutoffTime || data.cutoffTime || '09:00',
+    orderCutoffDayOffset: data.orderCutoffDayOffset !== undefined ? data.orderCutoffDayOffset : (data.cutoffDayOffset !== undefined ? data.cutoffDayOffset : 0),
+    cancelCutoffTime: data.cancelCutoffTime || data.cutoffTime || '09:00',
+    cancelCutoffDayOffset: data.cancelCutoffDayOffset !== undefined ? data.cancelCutoffDayOffset : (data.cutoffDayOffset !== undefined ? data.cutoffDayOffset : 0),
+    
+    // Lunch Service Cutoffs
+    lunchOrderCutoffTime: data.lunchOrderCutoffTime || data.orderCutoffTime || data.cutoffTime || '12:00',
+    lunchOrderCutoffDayOffset: data.lunchOrderCutoffDayOffset !== undefined ? data.lunchOrderCutoffDayOffset : (data.orderCutoffDayOffset !== undefined ? data.orderCutoffDayOffset : (data.cutoffDayOffset !== undefined ? data.cutoffDayOffset : -1)),
+    lunchCancelCutoffTime: data.lunchCancelCutoffTime || data.cancelCutoffTime || data.cutoffTime || '09:00',
+    lunchCancelCutoffDayOffset: data.lunchCancelCutoffDayOffset !== undefined ? data.lunchCancelCutoffDayOffset : (data.cancelCutoffDayOffset !== undefined ? data.cancelCutoffDayOffset : (data.cutoffDayOffset !== undefined ? data.cutoffDayOffset : 0)),
+
+    // Dinner Service Cutoffs
+    dinnerOrderCutoffTime: data.dinnerOrderCutoffTime || data.orderCutoffTime || data.cutoffTime || '12:00',
+    dinnerOrderCutoffDayOffset: data.dinnerOrderCutoffDayOffset !== undefined ? data.dinnerOrderCutoffDayOffset : (data.orderCutoffDayOffset !== undefined ? data.orderCutoffDayOffset : (data.cutoffDayOffset !== undefined ? data.cutoffDayOffset : 0)),
+    dinnerCancelCutoffTime: data.dinnerCancelCutoffTime || data.cancelCutoffTime || data.cutoffTime || '14:00',
+    dinnerCancelCutoffDayOffset: data.dinnerCancelCutoffDayOffset !== undefined ? data.dinnerCancelCutoffDayOffset : (data.cancelCutoffDayOffset !== undefined ? data.cancelCutoffDayOffset : (data.cutoffDayOffset !== undefined ? data.cutoffDayOffset : 0)),
+  });
+  configListeners.forEach(l => l());
+});
+
 // Real dish photography (three actual photos, licensed for this app),
 // grouped by protein family so the same three photos cover every curry on
 // the menu without a new photo shoot each time a day's curry changes.
@@ -1863,11 +1905,15 @@ export const subscribeToPaymentMethods = (listener: (methods: PaymentMethod[]) =
   return () => { paymentMethodListeners.delete(listener); };
 };
 
-export const updateSystemConfig = (updates: Partial<typeof SYSTEM_CONFIG>) => {
+export const updateSystemConfig = async (updates: Partial<typeof SYSTEM_CONFIG>) => {
   if (updates.operatingDays) SYSTEM_CONFIG.operatingDays = updates.operatingDays;
   if (updates.activeServices) SYSTEM_CONFIG.activeServices = updates.activeServices;
   if (updates.cutoffTime) SYSTEM_CONFIG.cutoffTime = updates.cutoffTime;
   if (updates.cutoffDayOffset !== undefined) SYSTEM_CONFIG.cutoffDayOffset = updates.cutoffDayOffset;
+  if (updates.orderCutoffTime) SYSTEM_CONFIG.orderCutoffTime = updates.orderCutoffTime;
+  if (updates.orderCutoffDayOffset !== undefined) SYSTEM_CONFIG.orderCutoffDayOffset = updates.orderCutoffDayOffset;
+  if (updates.cancelCutoffTime) SYSTEM_CONFIG.cancelCutoffTime = updates.cancelCutoffTime;
+  if (updates.cancelCutoffDayOffset !== undefined) SYSTEM_CONFIG.cancelCutoffDayOffset = updates.cancelCutoffDayOffset;
   if (updates.lunchDeliveryWindow !== undefined) SYSTEM_CONFIG.lunchDeliveryWindow = updates.lunchDeliveryWindow;
   if (updates.dinnerDeliveryWindow !== undefined) SYSTEM_CONFIG.dinnerDeliveryWindow = updates.dinnerDeliveryWindow;
   if (updates.currencySymbol) SYSTEM_CONFIG.currencySymbol = updates.currencySymbol;
@@ -1884,7 +1930,12 @@ export const updateSystemConfig = (updates: Partial<typeof SYSTEM_CONFIG>) => {
   if (updates.supportEmail !== undefined) SYSTEM_CONFIG.supportEmail = updates.supportEmail;
   if (updates.dinnerEnabled !== undefined) SYSTEM_CONFIG.dinnerEnabled = updates.dinnerEnabled;
   configListeners.forEach(l => l());
+
+  await setDoc(doc(db, 'config', 'system'), dropUndefined({
+    ...SYSTEM_CONFIG
+  }), { merge: true });
 };
+
 
 export const updatePaymentMethods = (methods: PaymentMethod[]) => {
   PAYMENT_METHODS = [...methods];

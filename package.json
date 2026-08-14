@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "emulators": "firebase emulators:start --export-on-exit=\"%LOCALAPPDATA%\\BonManzE\\emulator-data\" --import=\"%LOCALAPPDATA%\\BonManzE\\emulator-data\"",
-    "emulators:reseed": "firebase emulators:start --export-on-exit=\"%LOCALAPPDATA%\\BonManzE\\emulator-data\" --import=\".\\firebase-export-1786624196963eJUdVk\""
+    "emulators:reseed": "firebase emulators:start --export-on-exit=\"%LOCALAPPDATA%\\BonManzE\\emulator-data\" --import=\".\\firebase-export-1786638851259fix8YW\""
   },
   "dependencies": {
     "@google/genai": "^1.36.0",

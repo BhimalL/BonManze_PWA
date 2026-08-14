@@ -130,6 +130,7 @@ export interface Customer {
 }
 
 export interface OrderItem {
+  _fsItemId?: string;
   itemId: string;
   name: string;
   qty: number;

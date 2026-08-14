@@ -171,6 +171,51 @@ function weekdayKeyOf(deliveryDate) {
   return idx >= 0 && idx <= 4 ? WEEKDAY_KEYS[idx] : null;
 }
 
+// Timezone and Cutoff Helpers
+// Mauritius is UTC+4. Cloud Functions run in UTC, so we format/convert using Intl API.
+function getOverrideDate(request) {
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true';
+  return (isEmulator && request && request.data && request.data.systemDate) || null;
+}
+
+function getMauritiusDateTime(systemDateOverride) {
+  const options = { timeZone: 'Indian/Mauritius', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hour12: false };
+  const formatter = new Intl.DateTimeFormat('en-US', options);
+  const parts = formatter.formatToParts(new Date());
+  const map = {};
+  parts.forEach(p => { map[p.type] = p.value; });
+  const y = parseInt(map.year, 10);
+  const m = parseInt(map.month, 10);
+  const d = parseInt(map.day, 10);
+  const h = parseInt(map.hour, 10);
+  const min = parseInt(map.minute, 10);
+  return {
+    dateStr: systemDateOverride || `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+    hours: h,
+    minutes: min
+  };
+}
+
+function addDays(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + days);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+function checkCutoffPassed(deliveryDate, cutoffTime, cutoffDayOffset, systemDateOverride) {
+  const cutoffDateStr = addDays(deliveryDate, cutoffDayOffset);
+  const muTime = getMauritiusDateTime(systemDateOverride);
+  const [cutH, cutM] = cutoffTime.split(':').map(Number);
+  
+  if (muTime.dateStr > cutoffDateStr) return true;
+  if (muTime.dateStr < cutoffDateStr) return false;
+  return muTime.hours > cutH || (muTime.hours === cutH && muTime.minutes >= cutM);
+}
+
 export const confirmCheckout = onCall(async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Sign in required.');
@@ -209,6 +254,26 @@ export const confirmCheckout = onCall(async (request) => {
     db.collection('menuDefaults').doc('current').get(),
   ]);
   const config = configSnap.data() || {};
+  
+  const systemDateOverride = getOverrideDate(request);
+
+  for (const raw of rawItems) {
+    if (raw && typeof raw === 'object' && raw.deliveryDate) {
+      const srv = raw.service === 'Dinner' ? 'dinner' : 'lunch';
+      const timeKey = srv === 'dinner' ? 'dinnerOrderCutoffTime' : 'lunchOrderCutoffTime';
+      const offsetKey = srv === 'dinner' ? 'dinnerOrderCutoffDayOffset' : 'lunchOrderCutoffDayOffset';
+      
+      const cutoffTime = config[timeKey] || config.orderCutoffTime || config.cutoffTime || '09:00';
+      const cutoffDayOffset = typeof config[offsetKey] === 'number' ? config[offsetKey]
+        : (typeof config.orderCutoffDayOffset === 'number' ? config.orderCutoffDayOffset
+        : (typeof config.cutoffDayOffset === 'number' ? config.cutoffDayOffset : (srv === 'dinner' ? 0 : -1)));
+
+      if (checkCutoffPassed(raw.deliveryDate, cutoffTime, cutoffDayOffset, systemDateOverride)) {
+        throw new HttpsError('failed-precondition', `Ordering cutoff time for ${raw.service} delivery on ${raw.deliveryDate} has passed.`);
+      }
+    }
+  }
+
   const tiersArr = (tiersSnap.data() || {}).items || [];
   const groupsArr = (groupsSnap.data() || {}).items || [];
   const basesArr = (basesSnap.data() || {}).items || [];
@@ -472,3 +537,366 @@ export const onItemPaymentConfirmed = onDocumentUpdated('orders/{orderId}/items/
     });
   });
 });
+
+// Helper: Calculate net order total for a list of items, replicating confirmCheckout pricing rules
+function calculateItemsTotal(items, customer, tiersArr, groupsArr, config) {
+  if (items.length === 0) {
+    return { subtotal: 0, total: 0 };
+  }
+
+  const mappedItems = items.map(item => {
+    const weekStart = weekStartOf(item.deliveryDate);
+    const weekdayKey = weekdayKeyOf(item.deliveryDate);
+    const service = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
+    return {
+      ...item,
+      _weekStart: weekStart,
+      _service: service,
+      _weekdayKey: weekdayKey
+    };
+  });
+
+  const tierAtOrder = mappedItems[0].tierAtOrder || customer.tier;
+  const tierObj = tiersArr.find((t) => t.id === tierAtOrder);
+  const groupObj = customer.group ? groupsArr.find((g) => g.id === customer.group) : null;
+  const standardTierRate = tierObj?.standardDiscount || 0;
+  const birthdayTierRate = tierObj?.birthdayDiscount || 0;
+  const groupRate = groupObj?.discountPercentage || 0;
+  const effectiveStandardRate = Math.max(standardTierRate, groupRate);
+
+  let bMonth = -1, bDay = -1;
+  if (customer.birthday) {
+    const [, bm, bd] = customer.birthday.split('-').map(Number);
+    bMonth = bm;
+    bDay = bd;
+  }
+
+  let standardDiscount = 0, birthdayDiscount = 0;
+  mappedItems.forEach((p) => {
+    standardDiscount += p.price * (effectiveStandardRate / 100);
+    const [, fm, fd] = p.deliveryDate.split('-').map(Number);
+    if (fm === bMonth && fd === bDay && birthdayTierRate > 0) {
+      birthdayDiscount += p.price * (birthdayTierRate / 100);
+    }
+  });
+
+  let bulkDiscount = 0;
+  if (config.bulkDiscountEnabled) {
+    const weekStarts = new Set(mappedItems.map((p) => p._weekStart));
+    weekStarts.forEach((ws) => {
+      const lunchDaysCovered = new Set(
+        mappedItems.filter((p) => p._weekStart === ws && p._service === 'Lunch').map((p) => p._weekdayKey)
+      );
+      if (lunchDaysCovered.size >= WEEKDAY_KEYS.length) {
+        const weekSubtotal = mappedItems.filter((p) => p._weekStart === ws).reduce((t, p) => t + p.price, 0);
+        bulkDiscount += weekSubtotal * ((config.bulkDiscountRate || 0) / 100);
+      }
+    });
+  }
+
+  const subtotal = mappedItems.reduce((t, p) => t + p.price, 0);
+  const totalDiscount = standardDiscount + birthdayDiscount + bulkDiscount;
+  const netTotal = Math.max(0, subtotal - totalDiscount);
+  const vatRate = config.vatEnabled ? (config.vatRate || 0) / 100 : 0;
+  const vat = netTotal * vatRate;
+  const total = Math.round((netTotal + vat) * 100) / 100;
+
+  return { subtotal, standardDiscount, birthdayDiscount, bulkDiscount, vat, total };
+}
+
+// cancelOrderItem — Callable. Sets an item status to Cancelled and recalculates the order.
+// If the item was already Paid, calculates the refund and credits storeCredit in customers/{uid}.
+export const cancelOrderItem = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
+  }
+  const uid = request.auth.uid;
+  const { orderId, itemId } = request.data || {};
+
+  if (!orderId || !itemId) {
+    throw new HttpsError('invalid-argument', 'Missing orderId or itemId.');
+  }
+
+  const itemRef = db.collection('orders').doc(orderId).collection('items').doc(itemId);
+  const itemSnap = await itemRef.get();
+  if (!itemSnap.exists) {
+    throw new HttpsError('not-found', 'Order item not found.');
+  }
+  const item = itemSnap.data();
+
+  if (item.customerId !== uid) {
+    throw new HttpsError('permission-denied', 'You do not own this order.');
+  }
+  if (item.status === 'Cancelled') {
+    throw new HttpsError('failed-precondition', 'This item is already cancelled.');
+  }
+
+  // Load configuration for cancel cutoff:
+  const configSnap = await db.collection('config').doc('system').get();
+  const config = configSnap.data() || {};
+
+  const srv = item.serviceSlot.startsWith('Dinner') ? 'dinner' : 'lunch';
+  const timeKey = srv === 'dinner' ? 'dinnerCancelCutoffTime' : 'lunchCancelCutoffTime';
+  const offsetKey = srv === 'dinner' ? 'dinnerCancelCutoffDayOffset' : 'lunchCancelCutoffDayOffset';
+
+  const cancelCutoffTime = config[timeKey] || config.cancelCutoffTime || config.cutoffTime || '09:00';
+  const cancelCutoffDayOffset = typeof config[offsetKey] === 'number' ? config[offsetKey]
+    : (typeof config.cancelCutoffDayOffset === 'number' ? config.cancelCutoffDayOffset
+    : (typeof config.cutoffDayOffset === 'number' ? config.cutoffDayOffset : 0));
+
+  const systemDateOverride = getOverrideDate(request);
+
+  if (checkCutoffPassed(item.deliveryDate, cancelCutoffTime, cancelCutoffDayOffset, systemDateOverride)) {
+    throw new HttpsError('failed-precondition', `The cancellation cutoff time for this ${srv} delivery day has passed.`);
+  }
+
+  const orderRef = db.collection('orders').doc(orderId);
+  const customerRef = db.collection('customers').doc(uid);
+
+  let refundAmount = 0;
+  let newTotal = 0;
+
+  await db.runTransaction(async (tx) => {
+    const [customerSnap, tiersSnap, groupsSnap, orderSnap, itemsSnap] = await Promise.all([
+      tx.get(customerRef),
+      tx.get(db.collection('loyaltyTiers').doc('current')),
+      tx.get(db.collection('customerGroups').doc('current')),
+      tx.get(orderRef),
+      tx.get(orderRef.collection('items'))
+    ]);
+    const customer = customerSnap.data() || {};
+    const tiersArr = (tiersSnap.data() || {}).items || [];
+    const groupsArr = (groupsSnap.data() || {}).items || [];
+    const order = orderSnap.data() || {};
+
+    const isPaid = item.paymentStatus === 'Paid';
+
+    // 1. Cancel the item
+    tx.update(itemRef, {
+      status: 'Cancelled',
+      paymentStatus: isPaid ? 'Refunded' : item.paymentStatus,
+      updatedAt: Timestamp.now()
+    });
+
+    // 2. Recalculate parent order total from remaining active items
+    const activeItems = [];
+    itemsSnap.forEach(doc => {
+      const it = doc.data();
+      if (doc.id === itemId) {
+        // Exclude the cancelled item
+      } else if (it.status !== 'Cancelled') {
+        activeItems.push(it);
+      }
+    });
+
+    const pricing = calculateItemsTotal(activeItems, customer, tiersArr, groupsArr, config);
+    newTotal = pricing.total;
+
+    // 3. Update order document with new total
+    tx.update(orderRef, {
+      total: newTotal,
+      updatedAt: Timestamp.now()
+    });
+
+    // 4. If paid, refund customer via storeCredit
+    if (isPaid) {
+      const originalTotal = order.total || 0;
+      refundAmount = Math.max(0, originalTotal - newTotal);
+      if (refundAmount > 0) {
+        tx.update(customerRef, {
+          storeCredit: (customer.storeCredit || 0) + refundAmount,
+          updatedAt: Timestamp.now()
+        });
+
+        // 5. Append to audit log
+        const auditRef = db.collection('auditLog').doc();
+        tx.set(auditRef, {
+          timestamp: Timestamp.now(),
+          userId: uid,
+          userName: customer.name || '',
+          action: 'ORDER_ITEM_CANCEL',
+          details: `Cancelled prepaid item ${itemId} from order ${orderId}. Refunded Rs ${refundAmount} as store credit.`,
+        });
+      }
+    }
+  });
+
+  return { refundAmount, newTotal };
+});
+
+// editOrderItemSelection — Callable. Customizes the selection of a confirmed order item.
+export const editOrderItemSelection = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
+  }
+  const uid = request.auth.uid;
+  const { orderId, itemId, selection } = request.data || {};
+
+  if (!orderId || !itemId || !selection) {
+    throw new HttpsError('invalid-argument', 'Missing orderId, itemId, or selection.');
+  }
+
+  const itemRef = db.collection('orders').doc(orderId).collection('items').doc(itemId);
+  const itemSnap = await itemRef.get();
+  if (!itemSnap.exists) {
+    throw new HttpsError('not-found', 'Order item not found.');
+  }
+  const item = itemSnap.data();
+
+  if (item.customerId !== uid) {
+    throw new HttpsError('permission-denied', 'You do not own this order.');
+  }
+  if (item.status === 'Cancelled') {
+    throw new HttpsError('failed-precondition', 'Cannot edit a cancelled item.');
+  }
+
+  // Load configuration for cancel/edit cutoff:
+  const configSnap = await db.collection('config').doc('system').get();
+  const config = configSnap.data() || {};
+
+  const srv = item.serviceSlot.startsWith('Dinner') ? 'dinner' : 'lunch';
+  const timeKey = srv === 'dinner' ? 'dinnerCancelCutoffTime' : 'lunchCancelCutoffTime';
+  const offsetKey = srv === 'dinner' ? 'dinnerCancelCutoffDayOffset' : 'lunchCancelCutoffDayOffset';
+
+  const cancelCutoffTime = config[timeKey] || config.cancelCutoffTime || config.cutoffTime || '09:00';
+  const cancelCutoffDayOffset = typeof config[offsetKey] === 'number' ? config[offsetKey]
+    : (typeof config.cancelCutoffDayOffset === 'number' ? config.cancelCutoffDayOffset
+    : (typeof config.cutoffDayOffset === 'number' ? config.cutoffDayOffset : 0));
+
+  const systemDateOverride = getOverrideDate(request);
+
+  if (checkCutoffPassed(item.deliveryDate, cancelCutoffTime, cancelCutoffDayOffset, systemDateOverride)) {
+    throw new HttpsError('failed-precondition', `The editing cutoff time for this ${srv} delivery day has passed.`);
+  }
+
+  // Load current catalogs, menus, and menu defaults
+  const [basesSnap, bevSnap, desSnap, defaultsSnap, dhalsSnap, saladsSnap] = await Promise.all([
+    db.collection('mealBases').doc('current').get(),
+    db.collection('mealBeverages').doc('current').get(),
+    db.collection('mealDesserts').doc('current').get(),
+    db.collection('menuDefaults').doc('current').get(),
+    db.collection('mealDhals').doc('current').get(),
+    db.collection('mealSalads').doc('current').get(),
+  ]);
+  const basesArr = (basesSnap.data() || {}).items || [];
+  const bevArr = (bevSnap.data() || {}).items || [];
+  const desArr = (desSnap.data() || {}).items || [];
+  const menuDefaults = defaultsSnap.data() || {};
+  const dhalsArr = (dhalsSnap.data() || {}).items || [];
+  const saladsArr = (saladsSnap.data() || {}).items || [];
+
+  // Find dish on the menu to check price
+  const { baseId, beverageId, dessertId, dhalId, saladId, note } = selection;
+  const deliveryDate = item.deliveryDate;
+  const service = item.serviceSlot.startsWith('Dinner') ? 'Dinner' : 'Lunch';
+  
+  const weekStart = weekStartOf(deliveryDate);
+  const weekdayKey = weekdayKeyOf(deliveryDate);
+  const serviceKey = service === 'Dinner' ? 'dinner' : 'lunch';
+  
+  const weekOverrideSnap = await db.collection('menuWeeks').doc(weekStart).get();
+  const weekOverride = weekOverrideSnap.exists ? weekOverrideSnap.data() : {};
+  const daySource =
+    (weekOverride[serviceKey] && weekOverride[serviceKey][weekdayKey]) ||
+    (menuDefaults[serviceKey] && menuDefaults[serviceKey][weekdayKey]) ||
+    [];
+  const dish = daySource.find((c) => c.id === item.itemId);
+  if (!dish) {
+    throw new HttpsError('invalid-argument', `Dish is no longer on the menu for ${deliveryDate}.`);
+  }
+
+  const base = basesArr.find((b) => b.id === baseId);
+  const beverage = beverageId && beverageId !== 'none' ? bevArr.find((b) => b.id === beverageId) : null;
+  const dessert = dessertId && dessertId !== 'none' ? desArr.find((d) => d.id === dessertId) : null;
+
+  const newPrice = (dish.price || 0) + (base?.up || 0) + (beverage?.price || 0) + (dessert?.price || 0);
+
+  // Recalculate notes string:
+  const parts = [];
+  if (base) parts.push(base.name);
+  const dh = dhalId && dhalId !== 'none' ? dhalsArr.find(x => x.id === dhalId) : null;
+  if (dh) parts.push(dh.name);
+  const sl = saladId && saladId !== 'none' ? saladsArr.find(x => x.id === saladId) : null;
+  if (sl) parts.push(sl.name);
+  if (beverage) parts.push(beverage.name);
+  if (dessert) parts.push(dessert.name);
+  if (note && note.trim()) parts.push(`for ${note.trim()}`);
+  const newNotes = parts.join(' · ');
+
+  const orderRef = db.collection('orders').doc(orderId);
+  const customerRef = db.collection('customers').doc(uid);
+
+  let newTotal = 0;
+  let refundAmount = 0;
+
+  await db.runTransaction(async (tx) => {
+    const [customerSnap, tiersSnap, groupsSnap, orderSnap, itemsSnap] = await Promise.all([
+      tx.get(customerRef),
+      tx.get(db.collection('loyaltyTiers').doc('current')),
+      tx.get(db.collection('customerGroups').doc('current')),
+      tx.get(orderRef),
+      tx.get(orderRef.collection('items'))
+    ]);
+    const customer = customerSnap.data() || {};
+    const tiersArr = (tiersSnap.data() || {}).items || [];
+    const groupsArr = (groupsSnap.data() || {}).items || [];
+    const order = orderSnap.data() || {};
+
+    const isPaid = item.paymentStatus === 'Paid';
+
+    // 1. Update the item
+    tx.update(itemRef, {
+      price: newPrice,
+      notes: newNotes,
+      name: `${dish.emoji || ''} ${dish.name || 'Meal'}`.trim(),
+      updatedAt: Timestamp.now()
+    });
+
+    // 2. Recalculate parent order total
+    const activeItems = [];
+    itemsSnap.forEach(doc => {
+      const it = doc.data();
+      if (doc.id === itemId) {
+        activeItems.push({
+          ...it,
+          price: newPrice,
+          notes: newNotes
+        });
+      } else if (it.status !== 'Cancelled') {
+        activeItems.push(it);
+      }
+    });
+
+    const pricing = calculateItemsTotal(activeItems, customer, tiersArr, groupsArr, config);
+    newTotal = pricing.total;
+
+    // 3. Update order document with new total
+    tx.update(orderRef, {
+      total: newTotal,
+      updatedAt: Timestamp.now()
+    });
+
+    // 4. If paid, adjust customer store credit
+    if (isPaid) {
+      const originalTotal = order.total || 0;
+      refundAmount = originalTotal - newTotal; // Positive if refund, negative if extra cost
+      tx.update(customerRef, {
+        storeCredit: (customer.storeCredit || 0) + refundAmount,
+        updatedAt: Timestamp.now()
+      });
+
+      // 5. Append to audit log
+      const auditRef = db.collection('auditLog').doc();
+      tx.set(auditRef, {
+        timestamp: Timestamp.now(),
+        userId: uid,
+        userName: customer.name || '',
+        action: 'ORDER_ITEM_EDIT',
+        details: `Edited item ${itemId} in order ${orderId}. Adjusted store credit by Rs ${refundAmount} (new total: ${newTotal}).`,
+      });
+    }
+  });
+
+  return { newPrice, newTotal, refundAmount };
+});
+

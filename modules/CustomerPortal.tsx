@@ -93,13 +93,34 @@ import {
 // days before the cutoff day are always open. Uses real wall-clock time for
 // the same-day check since the app's simulated "today" (systemDate) only
 // ever moves in whole days.
-const isPastCutoff = (deliveryDate: string, systemDate: string): boolean => {
+const isPastOrderCutoff = (deliveryDate: string, service: 'Lunch' | 'Dinner' | Service, systemDate: string): boolean => {
   if (!deliveryDate) return false;
   if (deliveryDate < systemDate) return true;
-  const cutoffDate = addDays(deliveryDate, SYSTEM_CONFIG.cutoffDayOffset);
+  const isDinner = service === 'Dinner';
+  const offset = isDinner
+    ? (SYSTEM_CONFIG.dinnerOrderCutoffDayOffset !== undefined ? SYSTEM_CONFIG.dinnerOrderCutoffDayOffset : 0)
+    : (SYSTEM_CONFIG.lunchOrderCutoffDayOffset !== undefined ? SYSTEM_CONFIG.lunchOrderCutoffDayOffset : -1);
+  const cutoffDate = addDays(deliveryDate, offset);
   if (systemDate < cutoffDate) return false;
   if (systemDate > cutoffDate) return true;
-  const [cutH, cutM] = SYSTEM_CONFIG.cutoffTime.split(':').map(n => parseInt(n, 10) || 0);
+  const time = isDinner ? SYSTEM_CONFIG.dinnerOrderCutoffTime : SYSTEM_CONFIG.lunchOrderCutoffTime;
+  const [cutH, cutM] = time.split(':').map(n => parseInt(n, 10) || 0);
+  const now = new Date();
+  return now.getHours() > cutH || (now.getHours() === cutH && now.getMinutes() >= cutM);
+};
+
+const isPastCancelCutoff = (deliveryDate: string, service: 'Lunch' | 'Dinner' | Service, systemDate: string): boolean => {
+  if (!deliveryDate) return false;
+  if (deliveryDate < systemDate) return true;
+  const isDinner = service === 'Dinner';
+  const offset = isDinner
+    ? (SYSTEM_CONFIG.dinnerCancelCutoffDayOffset !== undefined ? SYSTEM_CONFIG.dinnerCancelCutoffDayOffset : 0)
+    : (SYSTEM_CONFIG.lunchCancelCutoffDayOffset !== undefined ? SYSTEM_CONFIG.lunchCancelCutoffDayOffset : 0);
+  const cutoffDate = addDays(deliveryDate, offset);
+  if (systemDate < cutoffDate) return false;
+  if (systemDate > cutoffDate) return true;
+  const time = isDinner ? SYSTEM_CONFIG.dinnerCancelCutoffTime : SYSTEM_CONFIG.lunchCancelCutoffTime;
+  const [cutH, cutM] = time.split(':').map(n => parseInt(n, 10) || 0);
   const now = new Date();
   return now.getHours() > cutH || (now.getHours() === cutH && now.getMinutes() >= cutM);
 };
@@ -113,11 +134,17 @@ const formatTimeLabel = (time: string): string => {
   return `${h12}:${String(m).padStart(2, '0')} ${period}`;
 };
 
-// "on its delivery day" / "the day before delivery" / "3 days before
-// delivery" — turns the signed cutoffDayOffset into a phrase that reads
-// naturally in the guide/status copy, rather than showing the raw integer.
-const cutoffDayPhrase = (): string => {
-  const offset = SYSTEM_CONFIG.cutoffDayOffset;
+const orderCutoffDayPhrase = (service: 'Lunch' | 'Dinner' | Service): string => {
+  const isDinner = service === 'Dinner';
+  const offset = isDinner ? SYSTEM_CONFIG.dinnerOrderCutoffDayOffset : SYSTEM_CONFIG.lunchOrderCutoffDayOffset;
+  if (offset === 0) return 'on its delivery day';
+  if (offset === -1) return 'the day before delivery';
+  return `${Math.abs(offset)} days before delivery`;
+};
+
+const cancelCutoffDayPhrase = (service: 'Lunch' | 'Dinner' | Service): string => {
+  const isDinner = service === 'Dinner';
+  const offset = isDinner ? SYSTEM_CONFIG.dinnerCancelCutoffDayOffset : SYSTEM_CONFIG.lunchCancelCutoffDayOffset;
   if (offset === 0) return 'on its delivery day';
   if (offset === -1) return 'the day before delivery';
   return `${Math.abs(offset)} days before delivery`;
@@ -337,7 +364,11 @@ const isPayNowMethod = (name: string) => name.includes('Juice');
 // act; "awaiting" just needs Operations to check their bank/wallet statement.
 const isUnclaimed = (item: OrderItem) => item.paymentStatus !== 'Paid' && !item.paymentMethodName;
 const isAwaitingConfirmation = (item: OrderItem) => item.paymentStatus !== 'Paid' && !!item.paymentMethodName;
-const paymentStatusInfo = (item: OrderItem): { label: string; tone: 'success' | 'warning' | 'danger' } => {
+const paymentStatusInfo = (item: OrderItem): { label: string; tone: 'success' | 'warning' | 'danger' | 'slate' } => {
+  if (item.status === 'Cancelled') {
+    if (item.paymentStatus === 'Refunded') return { label: 'Refunded', tone: 'warning' };
+    return { label: 'No payment due', tone: 'slate' };
+  }
   if (item.paymentStatus === 'Refunded') return { label: 'Refunded', tone: 'warning' };
   if (item.paymentStatus === 'Paid') return { label: 'Paid', tone: 'success' };
   if (item.paymentMethodName) return { label: 'Awaiting confirmation', tone: 'warning' };
@@ -413,12 +444,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [fsItemDocs, setFsItemDocs] = useState<Record<string, any[]>>({});
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [builderSaving, setBuilderSaving] = useState(false);
+  const [cancellingItemId, setCancellingItemId] = useState<string | null>(null);
 
   const [builder, setBuilder] = useState<{
     day: WeekDay; service: Service; weekStart: string; openSection: 1 | 2 | 3; sel: MealSelection; editIndex: number | null;
     // Set only when editing an already-confirmed meal (as opposed to a
     // draft-cart one, which uses editIndex) — commitBuilder branches on this.
-    editingConfirmed: { orderId: string; date: string; slot: string } | null;
+    editingConfirmed: { orderId: string; date: string; slot: string; fsItemId?: string } | null;
   } | null>(null);
 
   // Picking "None" for Dhal/Salad just updates the selection immediately —
@@ -815,8 +848,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // The confirmed meal could fall in either orderable week, so this searches
   // both to find the matching day and which week it belongs to.
   const openEditConfirmed = (line: Line) => {
-    if (isPastCutoff(line.item.deliveryDate || '', systemDate)) {
-      toast(`Locked — the ${formatTimeLabel(SYSTEM_CONFIG.cutoffTime)} cutoff (${cutoffDayPhrase()}) has passed`);
+    const service: Service = (line.item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
+    if (isPastCancelCutoff(line.item.deliveryDate || '', service, systemDate)) {
+      const cutoffTime = service === 'Dinner' ? SYSTEM_CONFIG.dinnerCancelCutoffTime : SYSTEM_CONFIG.lunchCancelCutoffTime;
+      toast(`Locked — the ${formatTimeLabel(cutoffTime)} cutoff (${cancelCutoffDayPhrase(service)}) has passed`);
       return;
     }
     let day: WeekDay | undefined;
@@ -826,14 +861,13 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       if (found) { day = found; weekStart = week.start; break; }
     }
     if (!day) return;
-    const service: Service = (line.item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
     setBuilder({
       day,
       service,
       weekStart,
       openSection: 1,
       editIndex: null,
-      editingConfirmed: { orderId: line.order.id, date: line.item.deliveryDate || '', slot: line.item.serviceSlot || 'Lunch' },
+      editingConfirmed: { orderId: line.order.id, date: line.item.deliveryDate || '', slot: line.item.serviceSlot || 'Lunch', fsItemId: line.item._fsItemId },
       sel: reconstructSelection(line.item)
     });
   };
@@ -929,6 +963,47 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const { day, service, weekStart, sel, editIndex, editingConfirmed } = builder;
 
     if (editingConfirmed) {
+      if (editingConfirmed.fsItemId) {
+        setBuilderSaving(true);
+        const editFn = httpsCallable(functions, 'editOrderItemSelection');
+        editFn({
+          orderId: editingConfirmed.orderId,
+          itemId: editingConfirmed.fsItemId,
+          selection: {
+            curryId: sel.curryId,
+            baseId: sel.baseId,
+            dhalId: sel.dhalId,
+            saladId: sel.saladId,
+            beverageId: sel.beverageId,
+            dessertId: sel.dessertId,
+            note: sel.note
+          },
+          systemDate,
+        })
+          .then((res: any) => {
+            const data = res.data as { refundAmount?: number } | undefined;
+            if (data?.refundAmount && data.refundAmount !== 0) {
+              const diff = data.refundAmount;
+              if (diff > 0) {
+                toast(`Meal updated · Rs ${diff.toFixed(0)} credit refunded`);
+              } else {
+                toast(`Meal updated · Rs ${Math.abs(diff).toFixed(0)} charged`);
+              }
+            } else {
+              toast('Meal updated');
+            }
+            closeBuilder();
+          })
+          .catch((err: any) => {
+            console.error('Edit failed', err);
+            toast(`Edit failed: ${err.message || 'Please try again.'}`);
+          })
+          .finally(() => {
+            setBuilderSaving(false);
+          });
+        return;
+      }
+
       const c = menuFor(service, weekStart)[day.key].find(x => x.id === sel.curryId);
       editOrderItem(editingConfirmed.orderId, editingConfirmed.date, editingConfirmed.slot, {
         itemId: sel.curryId,
@@ -1094,6 +1169,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         items: payloadItems,
         type: 'Meal Plan',
         paymentScheme: 'Per-Delivery',
+        systemDate,
       });
       const data = result.data as { total?: number } | undefined;
       const confirmedTotal = typeof data?.total === 'number' ? data.total : cartTotals.total;
@@ -1142,7 +1218,6 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const thisWeekLines: Line[] = useMemo(() => {
     const out: Line[] = [];
     myOrders.forEach(o => o.items.forEach(item => {
-      if (item.status === 'Cancelled') return;
       if (item.deliveryDate && weekDateKeys.has(item.deliveryDate)) out.push({ order: o, item });
     }));
     return out.sort((a, b) => (a.item.deliveryDate || '').localeCompare(b.item.deliveryDate || ''));
@@ -1157,6 +1232,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const counts: Record<string, number> = {};
     return thisWeekLines.map(line => {
       const key = line.item.deliveryDate || '';
+      if (line.item.status === 'Cancelled') {
+        return { ...line, seq: -1 }; // -1 indicates no sequence badge for cancelled items
+      }
       const seq = counts[key] || 0;
       counts[key] = seq + 1;
       return { ...line, seq };
@@ -1204,7 +1282,6 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const pastLines: Line[] = useMemo(() => {
     const out: Line[] = [];
     myOrders.forEach(o => o.items.forEach(item => {
-      if (item.status === 'Cancelled') return;
       if (item.deliveryDate && !weekDateKeys.has(item.deliveryDate) && item.deliveryDate < systemDate && item.deliveryDate >= orderHistoryCutoff) out.push({ order: o, item });
     }));
     return out.sort((a, b) => (b.item.deliveryDate || '').localeCompare(a.item.deliveryDate || ''));
@@ -1214,12 +1291,12 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // method" — once they've claimed one, it moves to awaitingConfirmation
   // below (still unpaid, but nothing left for the customer to do).
   const outstandingTotal = useMemo(
-    () => thisWeekLines.filter(l => isUnclaimed(l.item)).reduce((t, l) => t + l.item.qty * l.item.price, 0),
+    () => thisWeekLines.filter(l => l.item.status !== 'Cancelled' && isUnclaimed(l.item)).reduce((t, l) => t + l.item.qty * l.item.price, 0),
     [thisWeekLines]
   );
 
   const awaitingConfirmationLines = useMemo(
-    () => thisWeekLines.filter(l => isAwaitingConfirmation(l.item)),
+    () => thisWeekLines.filter(l => l.item.status !== 'Cancelled' && isAwaitingConfirmation(l.item)),
     [thisWeekLines]
   );
 
@@ -1328,11 +1405,28 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     }
   };
 
-  const handleCancel = (line: Line) => {
+  const handleCancel = async (line: Line) => {
     const isPaid = line.item.paymentStatus === 'Paid';
-    const refundAmt = isPaid ? calculateTotal(line.item.price * line.item.qty) : 0;
-    cancelOrderItem(line.order.id, line.item.deliveryDate || '', line.item.serviceSlot || 'Lunch', line.item.itemId);
-    toast(isPaid ? `Meal cancelled · Rs ${refundAmt.toFixed(0)} credit added` : 'Meal cancelled');
+    if (firestoreOrderIds.has(line.order.id)) {
+      if (!line.item._fsItemId) return;
+      setCancellingItemId(line.item._fsItemId);
+      try {
+        const cancelFn = httpsCallable(functions, 'cancelOrderItem');
+        const result = await cancelFn({ orderId: line.order.id, itemId: line.item._fsItemId, systemDate });
+        const data = result.data as { refundAmount?: number } | undefined;
+        const refundAmt = data?.refundAmount || 0;
+        toast(isPaid ? `Meal cancelled · Rs ${refundAmt.toFixed(0)} credit added` : 'Meal cancelled');
+      } catch (err: any) {
+        console.error('Cancellation failed', err);
+        toast(`Cancel failed: ${err.message || 'Please try again.'}`);
+      } finally {
+        setCancellingItemId(null);
+      }
+    } else {
+      const refundAmt = isPaid ? calculateTotal(line.item.price * line.item.qty) : 0;
+      cancelOrderItem(line.order.id, line.item.deliveryDate || '', line.item.serviceSlot || 'Lunch', line.item.itemId);
+      toast(isPaid ? `Meal cancelled · Rs ${refundAmt.toFixed(0)} credit added` : 'Meal cancelled');
+    }
   };
 
   const openRating = (line: Line) => {
@@ -1369,7 +1463,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const homeStatus = useMemo(() => {
     if (cartCount === 0 && thisWeekLinesWithSeq.length === 0) {
       const offerings = SYSTEM_CONFIG.dinnerEnabled ? 'Lunch & Dinner' : 'Lunch';
-      return { icon: '🍽️', tone: 'bg-slate-100', title: "This week's & next week's menus are ready", subtitle: `${offerings} · order by ${formatTimeLabel(SYSTEM_CONFIG.cutoffTime)} ${cutoffDayPhrase()}`, ctaLabel: 'Browse the menu', action: () => setView('menu') };
+      return { icon: '🍽️', tone: 'bg-slate-100', title: "This week's & next week's menus are ready", subtitle: `${offerings} · order by ${formatTimeLabel(SYSTEM_CONFIG.lunchOrderCutoffTime)} ${orderCutoffDayPhrase('Lunch')}`, ctaLabel: 'Browse the menu', action: () => setView('menu') };
     }
     if (thisWeekLinesWithSeq.length === 0) {
       return { icon: '🍱', tone: 'bg-slate-100', title: `${cartCount} meal${cartCount !== 1 ? 's' : ''} selected`, subtitle: `${formatCurrency(cartTotals.total)} · not yet confirmed`, ctaLabel: 'Review & confirm', action: () => setView('order') };
@@ -1827,8 +1921,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   <div className="flex items-start gap-3">
                     <div className="size-8 rounded-xl bg-warning/10 text-warning flex items-center justify-center shrink-0"><Clock className="size-4" /></div>
                     <div className="min-w-0 pt-0.5">
-                      <p className="text-xs font-black text-slate-800">Confirm before {formatTimeLabel(SYSTEM_CONFIG.cutoffTime)}</p>
-                      <p className="text-[11px] text-slate-500 font-medium mt-0.5">Each meal locks for changes at {formatTimeLabel(SYSTEM_CONFIG.cutoffTime)}, {cutoffDayPhrase()} — order any time before that.</p>
+                      <p className="text-xs font-black text-slate-800">Confirm before {formatTimeLabel(SYSTEM_CONFIG.lunchOrderCutoffTime)}</p>
+                      <p className="text-[11px] text-slate-500 font-medium mt-0.5">Each meal locks for changes at {formatTimeLabel(SYSTEM_CONFIG.lunchCancelCutoffTime)}, {cancelCutoffDayPhrase('Lunch')} — order any time before that.</p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
@@ -1890,11 +1984,19 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
             </div>
             {activeDays.map(d => {
               const meals = cartFor(activeService)[d.date] || [];
+              const pastCutoff = isPastOrderCutoff(d.date, activeService, systemDate);
               return (
-                <div key={d.key} className="bg-white rounded-3xl border border-[#E7E0D0] p-5">
+                <div key={d.key} className={`bg-white rounded-3xl border border-[#E7E0D0] p-5 transition-all ${pastCutoff ? 'opacity-65 bg-slate-50/50' : ''}`}>
                   <div className="flex items-center justify-between mb-3">
-                    <p className="text-sm font-black text-slate-900">{d.label}</p>
-                    {meals.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-black text-slate-900">{d.label}</p>
+                      {pastCutoff && (
+                        <span className="px-2 py-0.5 rounded-full bg-danger/10 text-danger text-[9px] font-black uppercase tracking-widest animate-fade-in">
+                          Past Cut-off
+                        </span>
+                      )}
+                    </div>
+                    {meals.length > 0 && !pastCutoff && (
                       <button onClick={() => openBuilder(d, activeService, activeWeekStart)} className="text-[10px] font-black uppercase tracking-widest text-primary flex items-center gap-1">
                         <Plus className="size-3" /> Add another
                       </button>
@@ -1906,8 +2008,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       return (
                         <button
                           key={c.id}
+                          disabled={pastCutoff}
                           onClick={() => openBuilder(d, activeService, activeWeekStart, c.id)}
-                          className="relative rounded-2xl overflow-hidden border border-[#E7E0D0] text-left h-32"
+                          className={`relative rounded-2xl overflow-hidden border border-[#E7E0D0] text-left h-32 ${pastCutoff ? 'cursor-not-allowed filter grayscale-[30%]' : ''}`}
                         >
                           <img src={dishPhotoFor(c)} className="absolute inset-0 w-full h-full object-cover" alt={c.name} />
                           <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent" />
@@ -1937,7 +2040,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="font-black text-primary">Rs {mealPrice(m, d.key, activeService, activeWeekStart)}</span>
-                            <button onClick={() => openBuilder(d, activeService, activeWeekStart, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
+                            {!pastCutoff && (
+                              <button onClick={() => openBuilder(d, activeService, activeWeekStart, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
+                            )}
                             <button onClick={() => removeCartMeal(d.date, i, activeService)} className="p-1.5 text-slate-400 hover:text-danger"><Trash2 className="size-3.5" /></button>
                           </div>
                         </div>
@@ -2071,7 +2176,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                               )}
                               <div className="space-y-3">
                                 {sg.days.map(group => {
-                                  const locked = isPastCutoff(group.date, systemDate);
+                                  const locked = isPastCancelCutoff(group.date, sg.service, systemDate);
                                   return (
                                     <div key={group.date} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
                                       <div className="flex items-center gap-1.5 mb-2 flex-wrap">
@@ -2083,27 +2188,28 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                           const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
                                           const isCompleted = line.item.status === 'Completed';
                                           const isActive = line.item.status === 'Active';
+                                          const isCancelled = line.item.status === 'Cancelled';
                                           const payInfo = paymentStatusInfo(line.item);
                                           const { detail, person } = splitNotesTag(line.item.notes);
                                           return (
                                             <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
                                               <div className="flex items-start justify-between gap-3 mb-1">
-                                                <p className="text-sm font-bold text-slate-900 min-w-0">{line.item.name}</p>
-                                                <span className="text-sm font-black text-slate-900 shrink-0">Rs {line.item.price}</span>
+                                                <p className={`text-sm font-bold min-w-0 ${isCancelled ? 'text-slate-400 line-through' : 'text-slate-900'}`}>{line.item.name}</p>
+                                                <span className={`text-sm font-black shrink-0 ${isCancelled ? 'text-slate-400 line-through' : 'text-slate-900'}`}>Rs {line.item.price}</span>
                                               </div>
-                                              {detail && <p className="text-[11px] text-slate-400 mb-1.5">{detail}</p>}
+                                              {detail && <p className={`text-[11px] mb-1.5 ${isCancelled ? 'text-slate-300 line-through' : 'text-slate-400'}`}>{detail}</p>}
                                               <div className="flex items-center gap-1.5 flex-wrap mb-2">
                                                 {line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {line.seq + 1}</span>}
                                                 <StatusBadge label={payInfo.label} tone={payInfo.tone} />
-                                                <StatusBadge label={line.item.status || ''} tone="slate" />
+                                                <StatusBadge label={line.item.status || ''} tone={isCancelled ? 'danger' : 'slate'} />
                                                 {person && <PersonTag name={person} />}
                                               </div>
                                               <div className="flex gap-2">
                                                 {line.item.paymentStatus === 'Paid' && <button onClick={() => openReceipt(line)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Receipt className="size-3" /> Receipt</button>}
-                                                {isUnclaimed(line.item) && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
-                                                {isActive && !locked && !firestoreOrderIds.has(line.order.id) && <button onClick={() => openEditConfirmed(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest">Edit</button>}
-                                                {isActive && !locked && !firestoreOrderIds.has(line.order.id) && <button onClick={() => handleCancel(line)} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Cancel</button>}
-                                                {isActive && firestoreOrderIds.has(line.order.id) && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-slate-400" title="Editing/cancelling real orders isn't wired up yet — contact us for changes.">Contact us to change</span>}
+                                                {isUnclaimed(line.item) && !isCancelled && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
+                                                {isActive && !locked && <button onClick={() => openEditConfirmed(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest">Edit</button>}
+                                                {isActive && !locked && <button onClick={() => handleCancel(line)} disabled={cancellingItemId === line.item._fsItemId} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">{cancellingItemId === line.item._fsItemId ? 'Cancelling...' : 'Cancel'}</button>}
+                                                {isActive && locked && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-slate-400" title="The cutoff has passed — contact us for changes.">Contact us to change</span>}
                                                 {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
                                                 {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
                                               </div>
@@ -2489,11 +2595,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 <span className="text-base font-black text-slate-900">Rs {mealPrice(builder.sel, builder.day.key, builder.service, builder.weekStart)}</span>
               </div>
               <button
-                disabled={!builderReady(builder)}
+                disabled={!builderReady(builder) || builderSaving}
                 onClick={commitBuilder}
                 className="px-6 py-3 rounded-xl bg-primary text-white text-xs font-black uppercase shadow-lg shadow-primary/20 disabled:opacity-40"
               >
-                {(builder.editIndex !== null || builder.editingConfirmed) ? 'Save changes' : 'Add to order'}
+                {builderSaving ? 'Saving...' : ((builder.editIndex !== null || builder.editingConfirmed) ? 'Save changes' : 'Add to order')}
               </button>
             </div>
           </div>

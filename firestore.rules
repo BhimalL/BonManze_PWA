@@ -56,11 +56,15 @@ service cloud.firestore {
         && !('storeCredit' in request.resource.data)
         && !('tier' in request.resource.data)
         && !('ltv' in request.resource.data);
-      allow update: if (isCustomer(uid) || isStaffAllowed('manageCustomers'))
-        && request.resource.data.points == resource.data.points
-        && request.resource.data.storeCredit == resource.data.storeCredit
-        && request.resource.data.tier == resource.data.tier
-        && request.resource.data.ltv == resource.data.ltv;
+      allow update: if (isCustomer(uid)
+          && request.resource.data.points == resource.data.points
+          && request.resource.data.storeCredit == resource.data.storeCredit
+          && request.resource.data.tier == resource.data.tier
+          && request.resource.data.ltv == resource.data.ltv)
+        || (isStaffAllowed('manageCustomers')
+          && request.resource.data.points == resource.data.points
+          && request.resource.data.storeCredit == resource.data.storeCredit
+          && request.resource.data.ltv == resource.data.ltv);
       allow delete: if false; // no hard-delete from the client, ever
     }
 

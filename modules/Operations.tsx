@@ -37,7 +37,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc, collection, collectionGroup, onSnapshot, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseClient';
 import { Order, OrderItem, Customer, PaymentMethod } from '../types';
 import { Portal } from './Portal';
@@ -47,6 +47,7 @@ import {
   updateOrderPayment,
   clearAllOrders,
   subscribeToCustomers,
+  updateCustomerRecord,
   resetCustomerLoyalty,
   LOYALTY_TIERS,
   CUSTOMER_GROUPS,
@@ -432,13 +433,24 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // the app's own claims stay accurate. Edited as a draft, pushed on Save,
   // same pattern as branding/VAT above.
   const [deliveryForm, setDeliveryForm] = useState({
-    cutoffTime: SYSTEM_CONFIG.cutoffTime,
-    cutoffDayOffset: String(SYSTEM_CONFIG.cutoffDayOffset),
+    lunchOrderCutoffTime: SYSTEM_CONFIG.lunchOrderCutoffTime || '12:00',
+    lunchOrderCutoffDayOffset: String(SYSTEM_CONFIG.lunchOrderCutoffDayOffset !== undefined ? SYSTEM_CONFIG.lunchOrderCutoffDayOffset : -1),
+    lunchCancelCutoffTime: SYSTEM_CONFIG.lunchCancelCutoffTime || '09:00',
+    lunchCancelCutoffDayOffset: String(SYSTEM_CONFIG.lunchCancelCutoffDayOffset !== undefined ? SYSTEM_CONFIG.lunchCancelCutoffDayOffset : 0),
+    dinnerOrderCutoffTime: SYSTEM_CONFIG.dinnerOrderCutoffTime || '12:00',
+    dinnerOrderCutoffDayOffset: String(SYSTEM_CONFIG.dinnerOrderCutoffDayOffset !== undefined ? SYSTEM_CONFIG.dinnerOrderCutoffDayOffset : 0),
+    dinnerCancelCutoffTime: SYSTEM_CONFIG.dinnerCancelCutoffTime || '14:00',
+    dinnerCancelCutoffDayOffset: String(SYSTEM_CONFIG.dinnerCancelCutoffDayOffset !== undefined ? SYSTEM_CONFIG.dinnerCancelCutoffDayOffset : 0),
     lunchDeliveryWindow: SYSTEM_CONFIG.lunchDeliveryWindow,
     dinnerDeliveryWindow: SYSTEM_CONFIG.dinnerDeliveryWindow
   });
 
   const [customerSearch, setCustomerSearch] = useState('');
+  const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
+  const [editCustPhone, setEditCustPhone] = useState('');
+  const [editCustTier, setEditCustTier] = useState('');
+  const [editCustStreet, setEditCustStreet] = useState('');
+  const [editCustCity, setEditCustCity] = useState('');
   const [confirmPaymentId, setConfirmPaymentId] = useState<string | null>(null);
   // Settings → Danger Zone — same arm-then-confirm pattern as payment
   // collection above, since this is destructive and, unlike everything
@@ -658,7 +670,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         supportEmail: SYSTEM_CONFIG.supportEmail
       });
       setDinnerEnabledLocal(SYSTEM_CONFIG.dinnerEnabled);
-      setDeliveryForm({ cutoffTime: SYSTEM_CONFIG.cutoffTime, cutoffDayOffset: String(SYSTEM_CONFIG.cutoffDayOffset), lunchDeliveryWindow: SYSTEM_CONFIG.lunchDeliveryWindow, dinnerDeliveryWindow: SYSTEM_CONFIG.dinnerDeliveryWindow });
+      setDeliveryForm({
+        lunchOrderCutoffTime: SYSTEM_CONFIG.lunchOrderCutoffTime,
+        lunchOrderCutoffDayOffset: String(SYSTEM_CONFIG.lunchOrderCutoffDayOffset),
+        lunchCancelCutoffTime: SYSTEM_CONFIG.lunchCancelCutoffTime,
+        lunchCancelCutoffDayOffset: String(SYSTEM_CONFIG.lunchCancelCutoffDayOffset),
+        dinnerOrderCutoffTime: SYSTEM_CONFIG.dinnerOrderCutoffTime,
+        dinnerOrderCutoffDayOffset: String(SYSTEM_CONFIG.dinnerOrderCutoffDayOffset),
+        dinnerCancelCutoffTime: SYSTEM_CONFIG.dinnerCancelCutoffTime,
+        dinnerCancelCutoffDayOffset: String(SYSTEM_CONFIG.dinnerCancelCutoffDayOffset),
+        lunchDeliveryWindow: SYSTEM_CONFIG.lunchDeliveryWindow,
+        dinnerDeliveryWindow: SYSTEM_CONFIG.dinnerDeliveryWindow
+      });
     });
     const u7 = subscribeToDinnerMenu(() => setMenuTick(t => t + 1));
     const u8 = subscribeToBases(setBases);
@@ -681,8 +704,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       brandForm.logoUrl !== SYSTEM_CONFIG.businessLogoUrl ||
       brandForm.supportPhone !== SYSTEM_CONFIG.supportPhone ||
       brandForm.supportEmail !== SYSTEM_CONFIG.supportEmail ||
-      deliveryForm.cutoffTime !== SYSTEM_CONFIG.cutoffTime ||
-      Number(deliveryForm.cutoffDayOffset) !== SYSTEM_CONFIG.cutoffDayOffset ||
+      deliveryForm.lunchOrderCutoffTime !== SYSTEM_CONFIG.lunchOrderCutoffTime ||
+      Number(deliveryForm.lunchOrderCutoffDayOffset) !== SYSTEM_CONFIG.lunchOrderCutoffDayOffset ||
+      deliveryForm.lunchCancelCutoffTime !== SYSTEM_CONFIG.lunchCancelCutoffTime ||
+      Number(deliveryForm.lunchCancelCutoffDayOffset) !== SYSTEM_CONFIG.lunchCancelCutoffDayOffset ||
+      deliveryForm.dinnerOrderCutoffTime !== SYSTEM_CONFIG.dinnerOrderCutoffTime ||
+      Number(deliveryForm.dinnerOrderCutoffDayOffset) !== SYSTEM_CONFIG.dinnerOrderCutoffDayOffset ||
+      deliveryForm.dinnerCancelCutoffTime !== SYSTEM_CONFIG.dinnerCancelCutoffTime ||
+      Number(deliveryForm.dinnerCancelCutoffDayOffset) !== SYSTEM_CONFIG.dinnerCancelCutoffDayOffset ||
       deliveryForm.lunchDeliveryWindow !== SYSTEM_CONFIG.lunchDeliveryWindow ||
       deliveryForm.dinnerDeliveryWindow !== SYSTEM_CONFIG.dinnerDeliveryWindow ||
       vatEnabled !== SYSTEM_CONFIG.vatEnabled ||
@@ -694,22 +723,44 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const saveAllSettings = () => {
     const parsedRate = parseFloat(vatRateInput);
-    const parsedOffset = parseInt(deliveryForm.cutoffDayOffset, 10);
-    updateSystemConfig({
+    const parsedLunchOrderOffset = parseInt(deliveryForm.lunchOrderCutoffDayOffset, 10);
+    const parsedLunchCancelOffset = parseInt(deliveryForm.lunchCancelCutoffDayOffset, 10);
+    const parsedDinnerOrderOffset = parseInt(deliveryForm.dinnerOrderCutoffDayOffset, 10);
+    const parsedDinnerCancelOffset = parseInt(deliveryForm.dinnerCancelCutoffDayOffset, 10);
+    runMenuWrite(updateSystemConfig({
       businessName: brandForm.name.trim() || SYSTEM_CONFIG.businessName,
       businessTagline: brandForm.tagline.trim(),
       businessLogoUrl: brandForm.logoUrl.trim(),
       supportPhone: brandForm.supportPhone.trim() || SYSTEM_CONFIG.supportPhone,
       supportEmail: brandForm.supportEmail.trim() || SYSTEM_CONFIG.supportEmail,
-      cutoffTime: deliveryForm.cutoffTime || SYSTEM_CONFIG.cutoffTime,
-      cutoffDayOffset: isNaN(parsedOffset) ? SYSTEM_CONFIG.cutoffDayOffset : parsedOffset,
+      
+      // Legacy unified fallbacks to prevent breaking old codebase references:
+      cutoffTime: deliveryForm.lunchOrderCutoffTime,
+      cutoffDayOffset: isNaN(parsedLunchOrderOffset) ? SYSTEM_CONFIG.lunchOrderCutoffDayOffset : parsedLunchOrderOffset,
+      orderCutoffTime: deliveryForm.lunchOrderCutoffTime,
+      orderCutoffDayOffset: isNaN(parsedLunchOrderOffset) ? SYSTEM_CONFIG.lunchOrderCutoffDayOffset : parsedLunchOrderOffset,
+      cancelCutoffTime: deliveryForm.lunchCancelCutoffTime,
+      cancelCutoffDayOffset: isNaN(parsedLunchCancelOffset) ? SYSTEM_CONFIG.lunchCancelCutoffDayOffset : parsedLunchCancelOffset,
+
+      // Lunch Service Cutoffs
+      lunchOrderCutoffTime: deliveryForm.lunchOrderCutoffTime || SYSTEM_CONFIG.lunchOrderCutoffTime,
+      lunchOrderCutoffDayOffset: isNaN(parsedLunchOrderOffset) ? SYSTEM_CONFIG.lunchOrderCutoffDayOffset : parsedLunchOrderOffset,
+      lunchCancelCutoffTime: deliveryForm.lunchCancelCutoffTime || SYSTEM_CONFIG.lunchCancelCutoffTime,
+      lunchCancelCutoffDayOffset: isNaN(parsedLunchCancelOffset) ? SYSTEM_CONFIG.lunchCancelCutoffDayOffset : parsedLunchCancelOffset,
+
+      // Dinner Service Cutoffs
+      dinnerOrderCutoffTime: deliveryForm.dinnerOrderCutoffTime || SYSTEM_CONFIG.dinnerOrderCutoffTime,
+      dinnerOrderCutoffDayOffset: isNaN(parsedDinnerOrderOffset) ? SYSTEM_CONFIG.dinnerOrderCutoffDayOffset : parsedDinnerOrderOffset,
+      dinnerCancelCutoffTime: deliveryForm.dinnerCancelCutoffTime || SYSTEM_CONFIG.dinnerCancelCutoffTime,
+      dinnerCancelCutoffDayOffset: isNaN(parsedDinnerCancelOffset) ? SYSTEM_CONFIG.dinnerCancelCutoffDayOffset : parsedDinnerCancelOffset,
+
       lunchDeliveryWindow: deliveryForm.lunchDeliveryWindow.trim() || SYSTEM_CONFIG.lunchDeliveryWindow,
       dinnerDeliveryWindow: deliveryForm.dinnerDeliveryWindow.trim() || SYSTEM_CONFIG.dinnerDeliveryWindow,
       vatEnabled: vatEnabled,
       vatRate: isNaN(parsedRate) ? SYSTEM_CONFIG.vatRate : parsedRate,
       vatNumber: vatNumberInput.trim(),
       dinnerEnabled: dinnerEnabled
-    });
+    }));
   };
 
   const discardSettings = () => {
@@ -721,8 +772,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       supportEmail: SYSTEM_CONFIG.supportEmail
     });
     setDeliveryForm({
-      cutoffTime: SYSTEM_CONFIG.cutoffTime,
-      cutoffDayOffset: String(SYSTEM_CONFIG.cutoffDayOffset),
+      lunchOrderCutoffTime: SYSTEM_CONFIG.lunchOrderCutoffTime,
+      lunchOrderCutoffDayOffset: String(SYSTEM_CONFIG.lunchOrderCutoffDayOffset),
+      lunchCancelCutoffTime: SYSTEM_CONFIG.lunchCancelCutoffTime,
+      lunchCancelCutoffDayOffset: String(SYSTEM_CONFIG.lunchCancelCutoffDayOffset),
+      dinnerOrderCutoffTime: SYSTEM_CONFIG.dinnerOrderCutoffTime,
+      dinnerOrderCutoffDayOffset: String(SYSTEM_CONFIG.dinnerOrderCutoffDayOffset),
+      dinnerCancelCutoffTime: SYSTEM_CONFIG.dinnerCancelCutoffTime,
+      dinnerCancelCutoffDayOffset: String(SYSTEM_CONFIG.dinnerCancelCutoffDayOffset),
       lunchDeliveryWindow: SYSTEM_CONFIG.lunchDeliveryWindow,
       dinnerDeliveryWindow: SYSTEM_CONFIG.dinnerDeliveryWindow
     });
@@ -730,6 +787,58 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setVatRateInput(String(SYSTEM_CONFIG.vatRate));
     setVatNumberInput(SYSTEM_CONFIG.vatNumber);
     setDinnerEnabledLocal(SYSTEM_CONFIG.dinnerEnabled);
+  };
+
+  const openEditCustomer = (c: Customer) => {
+    setEditCustomer(c);
+    setEditCustPhone(c.phone || '');
+    setEditCustTier(c.tier || 'Bronze');
+    const primaryAddr = c.addresses?.[0];
+    setEditCustStreet(primaryAddr?.street || '');
+    setEditCustCity(primaryAddr?.city || '');
+  };
+
+  const handleSaveCustomer = async () => {
+    if (!editCustomer) return;
+    try {
+      const docRef = doc(db, 'customers', editCustomer.id);
+      
+      const existingAddresses = editCustomer.addresses || [];
+      const updatedAddresses = [...existingAddresses];
+      if (updatedAddresses.length > 0) {
+        updatedAddresses[0] = {
+          ...updatedAddresses[0],
+          street: editCustStreet.trim(),
+          city: editCustCity.trim(),
+        };
+      } else if (editCustStreet.trim() || editCustCity.trim()) {
+        updatedAddresses.push({
+          id: `ADDR-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
+          label: 'Primary',
+          street: editCustStreet.trim(),
+          city: editCustCity.trim(),
+          zip: '',
+          country: 'Mauritius',
+        });
+      }
+
+      await updateDoc(docRef, {
+        phone: editCustPhone.trim(),
+        tier: editCustTier,
+        addresses: updatedAddresses,
+      });
+
+      updateCustomerRecord(editCustomer.id, {
+        phone: editCustPhone.trim(),
+        tier: editCustTier,
+        addresses: updatedAddresses,
+      });
+
+      setEditCustomer(null);
+    } catch (err) {
+      console.error('Failed to update customer', err);
+      alert('Failed to update customer. Please try again.');
+    }
   };
 
   // Logo upload — there's no backend/file storage in this app, so the
@@ -2281,25 +2390,98 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               Set the rules for lock times and delivery schedule slots to enforce cutoff gates in the customer checkout wizard.
             </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Daily Cutoff Time (e.g. 09:00)</label>
-              <input
-                type="text"
-                value={deliveryForm.cutoffTime}
-                onChange={e => setDeliveryForm(f => ({ ...f, cutoffTime: e.target.value }))}
-                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-              />
+          
+          <div className="space-y-6">
+            {/* Lunch Service Cutoffs */}
+            <div className="space-y-4">
+              <h4 className="text-xs font-black text-primary uppercase tracking-widest pb-1.5 border-b border-slate-100">☀️ Lunch Service Cut-offs</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Ordering Cutoff Time (e.g. 12:00)</label>
+                  <input
+                    type="text"
+                    value={deliveryForm.lunchOrderCutoffTime}
+                    onChange={e => setDeliveryForm(f => ({ ...f, lunchOrderCutoffTime: e.target.value }))}
+                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Ordering Offset Days (-1 = day before, 0 = same day)</label>
+                  <input
+                    type="number"
+                    value={deliveryForm.lunchOrderCutoffDayOffset}
+                    onChange={e => setDeliveryForm(f => ({ ...f, lunchOrderCutoffDayOffset: e.target.value }))}
+                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Cancel/Edit Cutoff Time (e.g. 09:00)</label>
+                  <input
+                    type="text"
+                    value={deliveryForm.lunchCancelCutoffTime}
+                    onChange={e => setDeliveryForm(f => ({ ...f, lunchCancelCutoffTime: e.target.value }))}
+                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Cancel/Edit Offset Days (0 = same day)</label>
+                  <input
+                    type="number"
+                    value={deliveryForm.lunchCancelCutoffDayOffset}
+                    onChange={e => setDeliveryForm(f => ({ ...f, lunchCancelCutoffDayOffset: e.target.value }))}
+                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                  />
+                </div>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Weekly Offset Days (e.g. 1 = Monday cutoff)</label>
-              <input
-                type="number"
-                value={deliveryForm.cutoffDayOffset}
-                onChange={e => setDeliveryForm(f => ({ ...f, cutoffDayOffset: e.target.value }))}
-                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-              />
-            </div>
+
+            {/* Dinner Service Cutoffs */}
+            {dinnerEnabled && (
+              <div className="space-y-4 pt-4 border-t border-slate-100">
+                <h4 className="text-xs font-black text-primary uppercase tracking-widest pb-1.5 border-b border-slate-100">🌙 Dinner Service Cut-offs</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Ordering Cutoff Time (e.g. 12:00)</label>
+                    <input
+                      type="text"
+                      value={deliveryForm.dinnerOrderCutoffTime}
+                      onChange={e => setDeliveryForm(f => ({ ...f, dinnerOrderCutoffTime: e.target.value }))}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Ordering Offset Days (-1 = day before, 0 = same day)</label>
+                    <input
+                      type="number"
+                      value={deliveryForm.dinnerOrderCutoffDayOffset}
+                      onChange={e => setDeliveryForm(f => ({ ...f, dinnerOrderCutoffDayOffset: e.target.value }))}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Cancel/Edit Cutoff Time (e.g. 14:00)</label>
+                    <input
+                      type="text"
+                      value={deliveryForm.dinnerCancelCutoffTime}
+                      onChange={e => setDeliveryForm(f => ({ ...f, dinnerCancelCutoffTime: e.target.value }))}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dinner Cancel/Edit Offset Days (0 = same day)</label>
+                    <input
+                      type="number"
+                      value={deliveryForm.dinnerCancelCutoffDayOffset}
+                      onChange={e => setDeliveryForm(f => ({ ...f, dinnerCancelCutoffDayOffset: e.target.value }))}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-[#E7E0D0]">
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Lunch Delivery Window (Info Text)</label>
               <input
@@ -2871,9 +3053,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             </div>
                           </div>
                         </div>
-                        <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[10px] font-black uppercase tracking-widest">
+                        <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[10px] font-black uppercase tracking-widest animate-fade-in">
                           <span className="text-slate-400">{orderCount} order{orderCount === 1 ? '' : 's'}</span>
-                          <span className="text-slate-900">{formatCurrency(c.ltv)}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-900">{formatCurrency(c.ltv)}</span>
+                            <button
+                              onClick={() => openEditCustomer(c)}
+                              className="p-1 text-primary hover:bg-[#FAF9F5] hover:text-slate-900 rounded-lg transition-all cursor-pointer"
+                              title="Edit Customer"
+                            >
+                              <Edit3 className="size-3.5" />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -2973,6 +3164,97 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </div>
           </div>
         </div>
+        </Portal>
+      )}
+
+      {/* Edit Customer Modal */}
+      {editCustomer && (
+        <Portal>
+          <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <h2 className="text-lg font-black text-slate-900">Edit Customer CRM</h2>
+                <button onClick={() => setEditCustomer(null)} className="p-2 text-slate-400 hover:text-danger">
+                  <X className="size-5" />
+                </button>
+              </div>
+              <div className="p-6 space-y-6">
+                <div>
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-2">Customer Profile</p>
+                  <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100 animate-fade-in">
+                    <img src={editCustomer.avatar} alt={editCustomer.name} className="size-12 rounded-full border border-slate-200" />
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">{editCustomer.name}</p>
+                      <p className="text-xs text-slate-500">{editCustomer.email}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Phone Number</label>
+                    <input
+                      type="text"
+                      value={editCustPhone}
+                      onChange={e => setEditCustPhone(e.target.value)}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Loyalty Tier</label>
+                    <select
+                      value={editCustTier}
+                      onChange={e => setEditCustTier(e.target.value)}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    >
+                      {LOYALTY_TIERS.map(t => (
+                        <option key={t.id} value={t.name}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-4 pt-4 border-t border-slate-100">
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Primary Address</p>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Street Address</label>
+                    <input
+                      type="text"
+                      value={editCustStreet}
+                      onChange={e => setEditCustStreet(e.target.value)}
+                      placeholder="e.g. 12 Rue de la Paix"
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">City / Town</label>
+                    <input
+                      type="text"
+                      value={editCustCity}
+                      onChange={e => setEditCustCity(e.target.value)}
+                      placeholder="e.g. Port Louis"
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="p-6 border-t border-slate-100 flex items-center justify-end gap-3 bg-slate-50">
+                <button
+                  onClick={() => setEditCustomer(null)}
+                  className="px-4 py-2 text-slate-500 hover:text-slate-800 text-xs font-bold transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveCustomer}
+                  className="px-5 py-2 bg-primary text-white hover:bg-primary/95 rounded-xl text-xs font-bold shadow-md transition-all cursor-pointer"
+                >
+                  Save Customer
+                </button>
+              </div>
+            </div>
+          </div>
         </Portal>
       )}
     </div>
