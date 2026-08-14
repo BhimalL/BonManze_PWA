@@ -39,7 +39,7 @@ import {
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, getDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseClient';
-import { Order, OrderItem, Customer, PaymentMethod } from '../types';
+import { Order, OrderItem, Customer, PaymentMethod, LoyaltyTier, CustomerGroup } from '../types';
 import { Portal } from './Portal';
 import { IconPickerButton } from './IconPicker';
 import {
@@ -51,6 +51,11 @@ import {
   resetCustomerLoyalty,
   LOYALTY_TIERS,
   CUSTOMER_GROUPS,
+  subscribeToLoyaltyTiers,
+  updateLoyaltyTiers,
+  subscribeToCustomerGroups,
+  updateCustomerGroups,
+  deleteCustomerGroup,
   subscribeToPaymentMethods,
   subscribeToSystemDate,
   updateSystemDate,
@@ -362,7 +367,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Settings has its own General/Icons sub-tabs now that it manages the
   // Icon Library too — everything that used to be the whole Settings page
   // lives under "General".
-  const [settingsSubTab, setSettingsSubTab] = useState<'general' | 'icons'>('general');
+  const [settingsSubTab, setSettingsSubTab] = useState<'general' | 'icons' | 'loyalty'>('general');
+  const [loyaltyTiers, setLoyaltyTiers] = useState<LoyaltyTier[]>([]);
+  const [customerGroups, setCustomerGroups] = useState<CustomerGroup[]>([]);
 
   // Which existing add-on catalog entry is being edited inline, and its
   // draft form — mirrors editingCurry/editForm's shape for the five add-on
@@ -379,6 +386,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     beverage: { emoji: '🥤', name: '', price: '0', group: '' },
     dessert: { emoji: '🍡', name: '', price: '0', group: '' },
   });
+
+  // Group editing states in Settings > Loyalty
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [groupForm, setGroupForm] = useState({ name: '', discountPercentage: 0, description: '' });
+  const [newGroupForm, setNewGroupForm] = useState({ name: '', discountPercentage: 0, description: '' });
+  const [loyaltyTiersForm, setLoyaltyTiersForm] = useState<LoyaltyTier[]>([]);
+
+  useEffect(() => {
+    setLoyaltyTiersForm(loyaltyTiers);
+  }, [loyaltyTiers]);
 
   // "Reuse a previous week" — which service's picker is open, and the
   // source weekStart currently selected in it. Copying calls
@@ -454,6 +471,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const [customerSearch, setCustomerSearch] = useState('');
   const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
+  const [editCustFirstName, setEditCustFirstName] = useState('');
+  const [editCustLastName, setEditCustLastName] = useState('');
+  const [editCustEmail, setEditCustEmail] = useState('');
+  const [editCustBirthday, setEditCustBirthday] = useState('');
   const [editCustPhone, setEditCustPhone] = useState('');
   const [editCustTier, setEditCustTier] = useState('');
   const [editCustStreet, setEditCustStreet] = useState('');
@@ -700,7 +721,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     const u12 = subscribeToDesserts(setDesserts);
     const u13 = subscribeToMainDishes(setMainDishes);
     const u14 = subscribeToIconLibrary(setIcons);
-    return () => { u3(); u4(); u5(); u6(); u7(); u8(); u9(); u10(); u11(); u12(); u13(); u14(); };
+    const u15 = subscribeToLoyaltyTiers(setLoyaltyTiers);
+    const u16 = subscribeToCustomerGroups(setCustomerGroups);
+    return () => { u3(); u4(); u5(); u6(); u7(); u8(); u9(); u10(); u11(); u12(); u13(); u14(); u15(); u16(); };
   }, []);
 
   const toggleVat = (next: boolean) => setVatEnabledLocal(next);
@@ -797,9 +820,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setVatNumberInput(SYSTEM_CONFIG.vatNumber);
     setDinnerEnabledLocal(SYSTEM_CONFIG.dinnerEnabled);
   };
-
   const openEditCustomer = (c: Customer) => {
     setEditCustomer(c);
+    setEditCustFirstName(c.firstName || '');
+    setEditCustLastName(c.lastName || '');
+    setEditCustEmail(c.email || '');
+    setEditCustBirthday(c.birthday || '');
     setEditCustPhone(c.phone || '');
     setEditCustTier(c.tier || 'Bronze');
     const primaryAddr = c.addresses?.[0];
@@ -831,13 +857,29 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         });
       }
 
+      const firstName = editCustFirstName.trim();
+      const lastName = editCustLastName.trim();
+      const name = `${firstName} ${lastName}`.trim();
+      const email = editCustEmail.trim();
+      const birthday = editCustBirthday.trim();
+
       await updateDoc(docRef, {
+        firstName,
+        lastName,
+        name,
+        email,
+        birthday,
         phone: editCustPhone.trim(),
         tier: editCustTier,
         addresses: updatedAddresses,
       });
 
       updateCustomerRecord(editCustomer.id, {
+        firstName,
+        lastName,
+        name,
+        email,
+        birthday,
         phone: editCustPhone.trim(),
         tier: editCustTier,
         addresses: updatedAddresses,
@@ -849,7 +891,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       alert('Failed to update customer. Please try again.');
     }
   };
-
   // Logo upload — there's no backend/file storage in this app, so the
   // chosen image is read into a base64 data URL and stored directly as
   // businessLogoUrl, same as if a URL had been pasted in. Kept under 1.5MB
@@ -2292,22 +2333,301 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     );
   };
 
+  const handleSaveLoyaltyTiers = async () => {
+    try {
+      await updateLoyaltyTiers(loyaltyTiersForm);
+      alert('Loyalty tiers saved successfully!');
+    } catch (err) {
+      console.error('Failed to save loyalty tiers', err);
+      alert('Failed to save loyalty tiers. Please try again.');
+    }
+  };
+
+  const startEditGroup = (g: CustomerGroup) => {
+    setEditingGroupId(g.id);
+    setGroupForm({ name: g.name, discountPercentage: g.discountPercentage, description: g.description || '' });
+  };
+
+  const saveGroupEdit = async () => {
+    if (!groupForm.name.trim()) return;
+    try {
+      const updated = customerGroups.map(g => g.id === editingGroupId ? { ...g, ...groupForm } : g);
+      await updateCustomerGroups(updated);
+      setEditingGroupId(null);
+    } catch (err) {
+      console.error('Failed to update group', err);
+    }
+  };
+
+  const handleDeleteGroup = async (id: string) => {
+    if (confirm('Are you sure you want to delete this customer group?')) {
+      try {
+        await deleteCustomerGroup(id);
+      } catch (err) {
+        console.error('Failed to delete group', err);
+      }
+    }
+  };
+
+  const handleAddNewGroup = async () => {
+    if (!newGroupForm.name.trim()) return;
+    try {
+      const newGroup: CustomerGroup = {
+        id: `g-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
+        name: newGroupForm.name.trim(),
+        discountPercentage: Number(newGroupForm.discountPercentage),
+        description: newGroupForm.description.trim(),
+        color: 'bg-indigo-600'
+      };
+      await updateCustomerGroups([...customerGroups, newGroup]);
+      setNewGroupForm({ name: '', discountPercentage: 0, description: '' });
+    } catch (err) {
+      console.error('Failed to add group', err);
+    }
+  };
+
+  const renderLoyaltySubTab = () => {
+    return (
+      <div className="space-y-8 animate-fade-in">
+        {/* Loyalty Tiers Card */}
+        <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
+          <div>
+            <h3 className="text-base font-black text-slate-900">Configure Loyalty Tiers</h3>
+            <p className="text-xs text-slate-400 font-medium mt-1">
+              Adjust points thresholds, point multipliers, standard order discounts, and special birthday discount rates for customers in each tier.
+            </p>
+          </div>
+
+          <div className="space-y-6">
+            {loyaltyTiersForm.map((tier, idx) => (
+              <div key={tier.id} className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
+                <div className="flex items-center gap-2">
+                  <span className={`inline-flex items-center gap-1.5 px-3 py-1 ${tier.color || 'bg-primary'} text-white rounded-full text-[10px] font-black uppercase tracking-wider`}>
+                    <Star className="size-3 fill-white text-white" /> {tier.name} Tier
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">ID: {tier.id}</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Points Threshold</label>
+                    <input
+                      type="number"
+                      value={tier.pointsThreshold}
+                      onChange={e => {
+                        const updated = [...loyaltyTiersForm];
+                        updated[idx] = { ...updated[idx], pointsThreshold: Number(e.target.value) };
+                        setLoyaltyTiersForm(updated);
+                      }}
+                      className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Points Multiplier</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={tier.multiplier}
+                      onChange={e => {
+                        const updated = [...loyaltyTiersForm];
+                        updated[idx] = { ...updated[idx], multiplier: Number(e.target.value) };
+                        setLoyaltyTiersForm(updated);
+                      }}
+                      className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Standard Discount (%)</label>
+                    <input
+                      type="number"
+                      value={tier.standardDiscount || 0}
+                      onChange={e => {
+                        const updated = [...loyaltyTiersForm];
+                        updated[idx] = { ...updated[idx], standardDiscount: Number(e.target.value) };
+                        setLoyaltyTiersForm(updated);
+                      }}
+                      className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Birthday Discount (%)</label>
+                    <input
+                      type="number"
+                      value={tier.birthdayDiscount || 0}
+                      onChange={e => {
+                        const updated = [...loyaltyTiersForm];
+                        updated[idx] = { ...updated[idx], birthdayDiscount: Number(e.target.value) };
+                        setLoyaltyTiersForm(updated);
+                      }}
+                      className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="pt-2 border-t border-slate-100 flex justify-end">
+            <button
+              onClick={handleSaveLoyaltyTiers}
+              className="px-6 py-2.5 bg-primary text-white hover:bg-primary/95 rounded-xl text-xs font-black uppercase tracking-widest shadow-md transition-all cursor-pointer"
+            >
+              Save Loyalty Tiers
+            </button>
+          </div>
+        </div>
+
+        {/* Customer Groups Card */}
+        <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
+          <div>
+            <h3 className="text-base font-black text-slate-900">Discount & Customer Groups</h3>
+            <p className="text-xs text-slate-400 font-medium mt-1">
+              Manage custom groups (such as corporate offices, VIPs, or special networks) that receive set percentages of order discounts.
+            </p>
+          </div>
+
+          <div className="overflow-x-auto border border-[#E7E0D0] rounded-2xl">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-[#E7E0D0] bg-[#FAF9F5] text-[10px] font-black uppercase tracking-widest text-slate-400">
+                  <th className="px-4 py-3">Group Name</th>
+                  <th className="px-4 py-3">Discount Rate</th>
+                  <th className="px-4 py-3">Description</th>
+                  <th className="px-4 py-3 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E7E0D0]">
+                {customerGroups.map(group => {
+                  const isEditing = editingGroupId === group.id;
+                  if (isEditing) {
+                    return (
+                      <tr key={group.id} className="bg-primary/[0.02]">
+                        <td className="px-4 py-3">
+                          <input
+                            type="text"
+                            value={groupForm.name}
+                            onChange={e => setGroupForm(f => ({ ...f, name: e.target.value }))}
+                            className="w-full text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              value={groupForm.discountPercentage}
+                              onChange={e => setGroupForm(f => ({ ...f, discountPercentage: Number(e.target.value) }))}
+                              className="w-16 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                            />
+                            <span className="font-bold text-slate-500">%</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <input
+                            type="text"
+                            value={groupForm.description}
+                            onChange={e => setGroupForm(f => ({ ...f, description: e.target.value }))}
+                            className="w-full text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button onClick={saveGroupEdit} className="p-1 bg-primary text-white rounded-lg"><Check className="size-3.5" /></button>
+                            <button onClick={() => setEditingGroupId(null)} className="p-1 bg-slate-100 text-slate-400 rounded-lg"><X className="size-3.5" /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  return (
+                    <tr key={group.id} className="hover:bg-slate-50/50">
+                      <td className="px-4 py-3 font-bold text-slate-900">{group.name}</td>
+                      <td className="px-4 py-3 font-black text-primary">{group.discountPercentage}%</td>
+                      <td className="px-4 py-3 text-slate-500 font-medium">{group.description || '-'}</td>
+                      <td className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button onClick={() => startEditGroup(group)} className="p-1.5 text-primary hover:bg-[#FAF9F5] rounded-lg transition-all"><Edit3 className="size-3.5" /></button>
+                          <button onClick={() => handleDeleteGroup(group.id)} className="p-1.5 text-danger hover:bg-danger/5 rounded-lg transition-all"><Trash2 className="size-3.5" /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Add New Group Section */}
+          <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
+            <h4 className="text-xs font-black text-slate-950 uppercase tracking-widest pb-1 border-b border-slate-200">Add New Group</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+              <div className="space-y-1">
+                <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Group Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. ABC Motors"
+                  value={newGroupForm.name}
+                  onChange={e => setNewGroupForm(f => ({ ...f, name: e.target.value }))}
+                  className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Discount Rate (%)</label>
+                <input
+                  type="number"
+                  placeholder="e.g. 10"
+                  value={newGroupForm.discountPercentage || ''}
+                  onChange={e => setNewGroupForm(f => ({ ...f, discountPercentage: Number(e.target.value) }))}
+                  className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                />
+              </div>
+
+              <div className="space-y-1 md:col-span-1">
+                <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Description</label>
+                <input
+                  type="text"
+                  placeholder="Staff discount group"
+                  value={newGroupForm.description}
+                  onChange={e => setNewGroupForm(f => ({ ...f, description: e.target.value }))}
+                  className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={handleAddNewGroup}
+                disabled={!newGroupForm.name.trim()}
+                className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white hover:bg-primary/95 disabled:opacity-40 rounded-xl text-xs font-black uppercase tracking-widest transition-colors cursor-pointer"
+              >
+                <Plus className="size-4" /> Add Group
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderSettingsTab = () => {
     return (
       <div className="space-y-8 animate-fade-in pb-24">
         <div className="flex items-center gap-1 bg-slate-100 rounded-full p-1 w-fit">
-          {(['general', 'icons'] as const).map(t => (
+          {(['general', 'icons', 'loyalty'] as const).map(t => (
             <button
               key={t}
               onClick={() => setSettingsSubTab(t)}
               className={`px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${settingsSubTab === t ? 'bg-primary text-white shadow-sm' : 'text-slate-500'}`}
             >
-              {t === 'general' ? 'General' : 'Icons'}
+              {t === 'general' ? 'General' : t === 'icons' ? 'Icons' : 'Loyalty & Groups'}
             </button>
           ))}
         </div>
 
-        {settingsSubTab === 'icons' ? (
+        {settingsSubTab === 'icons' && (
           <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
             {opsActionError && (
               <div className="bg-danger/10 text-danger text-xs font-bold rounded-xl px-4 py-3 flex items-center gap-2">
@@ -2355,8 +2675,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </button>
             </div>
           </div>
-        ) : (
-      <div className="space-y-8">
+        )}
+
+        {settingsSubTab === 'loyalty' && renderLoyaltySubTab()}
+
+        {settingsSubTab === 'general' && (
+          <div className="space-y-8">
         {/* Card 1: Brand Identity & Support */}
         <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
           <div>
@@ -2638,7 +2962,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           </div>
         </div>
       </div>
-        )}
+      )}
       </div>
     );
   };
@@ -3204,54 +3528,94 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               {filteredCustomers.length === 0 ? (
                 <EmptyState icon={<Users className="size-10" />} label="No matching customers" />
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {filteredCustomers.map(c => {
-                    const orderCount = orders.filter(o => o.customerName === c.name).length;
-                    return (
-                      <div key={c.id} className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6 flex flex-col justify-between hover:shadow-md transition-all">
-                        <div>
-                          <div className="flex items-center gap-3 mb-4">
-                            <img src={c.avatar} alt={c.name} className="size-12 rounded-full border-2 border-slate-100 animate-fade-in" />
-                            <div className="min-w-0">
-                              <p className="text-sm font-black text-slate-900 truncate">{c.name}</p>
-                              {c.tier && (
-                                <p className="flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-primary">
-                                  <Star className="size-3" /> {c.tier}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                          <div className="space-y-1.5 text-xs text-slate-500 font-medium">
-                            <p className="flex items-center gap-2"><Phone className="size-3.5 text-slate-300 shrink-0" /> {c.phone}</p>
-                            <p className="flex items-center gap-2"><Mail className="size-3.5 text-slate-300 shrink-0 truncate" /> {c.email}</p>
-                          </div>
-                          <div className="mt-4 grid grid-cols-2 gap-2 text-center">
-                            <div className="bg-[#FAF9F5] rounded-xl p-2 border border-[#E7E0D0]">
-                              <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Points</p>
-                              <p className="text-sm font-black text-slate-900 mt-0.5">{c.points}</p>
-                            </div>
-                            <div className="bg-[#FAF9F5] rounded-xl p-2 border border-[#E7E0D0]">
-                              <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Credit</p>
-                              <p className="text-sm font-black text-success mt-0.5">{formatCurrency(c.storeCredit || 0)}</p>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[10px] font-black uppercase tracking-widest animate-fade-in">
-                          <span className="text-slate-400">{orderCount} order{orderCount === 1 ? '' : 's'}</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-slate-900">{formatCurrency(c.ltv)}</span>
-                            <button
-                              onClick={() => openEditCustomer(c)}
-                              className="p-1 text-primary hover:bg-[#FAF9F5] hover:text-slate-900 rounded-lg transition-all cursor-pointer"
-                              title="Edit Customer"
-                            >
-                              <Edit3 className="size-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm overflow-hidden animate-fade-in">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-[#E7E0D0] bg-[#FAF9F5] text-[10px] font-black uppercase tracking-widest text-slate-400">
+                          <th className="px-6 py-4">Customer</th>
+                          <th className="px-6 py-4">Contact</th>
+                          <th className="px-6 py-4">Tier</th>
+                          <th className="px-6 py-4">Birthday</th>
+                          <th className="px-6 py-4 text-center">Orders</th>
+                          <th className="px-6 py-4 text-right">Points</th>
+                          <th className="px-6 py-4 text-right">Credit</th>
+                          <th className="px-6 py-4 text-right">LTV</th>
+                          <th className="px-6 py-4 text-center">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#E7E0D0] text-xs">
+                        {filteredCustomers.map(c => {
+                          const orderCount = orders.filter(o => o.customerName === c.name).length;
+                          let formattedBirthday = 'Not set';
+                          if (c.birthday) {
+                            const [yr, mo, dy] = c.birthday.split('-');
+                            if (mo && dy) {
+                              const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                              const monthName = months[parseInt(mo, 10) - 1] || mo;
+                              formattedBirthday = `${parseInt(dy, 10)} ${monthName}`;
+                            }
+                          }
+                          return (
+                            <tr key={c.id} className="hover:bg-slate-50/50 transition-colors">
+                              <td className="px-6 py-4">
+                                <div className="flex items-center gap-3">
+                                  <img src={c.avatar || `https://picsum.photos/seed/${c.id}/100/100`} alt={c.name} className="size-10 rounded-full border border-slate-100 object-cover shrink-0" />
+                                  <div className="min-w-0">
+                                    <p className="font-bold text-slate-900 truncate leading-snug">{c.name}</p>
+                                    <p className="text-[10px] text-slate-400 font-medium">@{c.referenceCode ? c.referenceCode.toLowerCase() : 'no_username'}</p>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="space-y-0.5">
+                                  <p className="font-semibold text-slate-700">{c.phone || 'No phone'}</p>
+                                  <p className="text-[10px] text-slate-400 font-medium truncate max-w-[150px]">{c.email}</p>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4">
+                                {c.tier ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-primary/10 text-primary rounded-full text-[9px] font-black uppercase tracking-wider">
+                                    <Star className="size-2.5 fill-primary text-primary" /> {c.tier}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-300">-</span>
+                                )}
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className={`font-semibold ${c.birthday ? 'text-slate-700' : 'text-slate-300 font-normal'}`}>
+                                  {formattedBirthday}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 text-center font-bold text-slate-700">
+                                {orderCount}
+                              </td>
+                              <td className="px-6 py-4 text-right font-bold text-slate-900">
+                                {c.points || 0}
+                              </td>
+                              <td className="px-6 py-4 text-right font-bold text-success">
+                                {formatCurrency(c.storeCredit || 0)}
+                              </td>
+                              <td className="px-6 py-4 text-right font-bold text-slate-900">
+                                {formatCurrency(c.ltv || 0)}
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="flex items-center justify-center">
+                                  <button
+                                    onClick={() => openEditCustomer(c)}
+                                    className="p-1.5 text-primary hover:bg-primary/5 rounded-lg transition-all cursor-pointer"
+                                    title="Edit Customer"
+                                  >
+                                    <Edit3 className="size-4" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </div>
@@ -3375,6 +3739,56 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">First Name</label>
+                    <input
+                      type="text"
+                      value={editCustFirstName}
+                      onChange={e => setEditCustFirstName(e.target.value)}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Last Name</label>
+                    <input
+                      type="text"
+                      value={editCustLastName}
+                      onChange={e => setEditCustLastName(e.target.value)}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Email Address</label>
+                    <input
+                      type="email"
+                      value={editCustEmail}
+                      onChange={e => setEditCustEmail(e.target.value)}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Username (Read-only)</label>
+                    <input
+                      type="text"
+                      disabled
+                      value={editCustomer.referenceCode ? editCustomer.referenceCode.toLowerCase() : ''}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none bg-slate-100 text-slate-400 cursor-not-allowed"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Birthday</label>
+                    <input
+                      type="date"
+                      value={editCustBirthday}
+                      onChange={e => setEditCustBirthday(e.target.value)}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Phone Number</label>
                     <input
                       type="text"
@@ -3384,14 +3798,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     />
                   </div>
 
-                  <div className="space-y-1.5">
+                  <div className="space-y-1.5 md:col-span-2">
                     <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Loyalty Tier</label>
                     <select
                       value={editCustTier}
                       onChange={e => setEditCustTier(e.target.value)}
                       className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
                     >
-                      {LOYALTY_TIERS.map(t => (
+                      {loyaltyTiers.map(t => (
                         <option key={t.id} value={t.name}>{t.name}</option>
                       ))}
                     </select>

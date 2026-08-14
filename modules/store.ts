@@ -2011,15 +2011,23 @@ export const subscribeToLoyaltyTiers = (listener: (tiers: LoyaltyTier[]) => void
   return () => { loyaltyListeners.delete(listener); };
 };
 
-export const updateLoyaltyTiers = (tiers: LoyaltyTier[]) => {
+export const updateLoyaltyTiers = async (tiers: LoyaltyTier[]) => {
   LOYALTY_TIERS = [...tiers];
   loyaltyListeners.forEach(l => l([...LOYALTY_TIERS]));
+  await setDoc(doc(db, 'loyaltyTiers', 'current'), { items: dropUndefined(LOYALTY_TIERS), updatedAt: serverTimestamp() });
 };
 
-export const deleteLoyaltyTier = (id: string) => {
+export const deleteLoyaltyTier = async (id: string) => {
   LOYALTY_TIERS = LOYALTY_TIERS.filter(t => t.id !== id);
   loyaltyListeners.forEach(l => l([...LOYALTY_TIERS]));
+  await setDoc(doc(db, 'loyaltyTiers', 'current'), { items: dropUndefined(LOYALTY_TIERS), updatedAt: serverTimestamp() });
 };
+
+onSnapshot(doc(db, 'loyaltyTiers', 'current'), snap => {
+  if (!snap.exists()) return;
+  LOYALTY_TIERS = (snap.data().items || []) as LoyaltyTier[];
+  loyaltyListeners.forEach(l => l([...LOYALTY_TIERS]));
+});
 
 // --- CUSTOMER GROUPS SYSTEM ---
 export let CUSTOMER_GROUPS: CustomerGroup[] = [
@@ -2036,15 +2044,23 @@ export const subscribeToCustomerGroups = (listener: (groups: CustomerGroup[]) =>
   return () => { groupListeners.delete(listener); };
 };
 
-export const updateCustomerGroups = (groups: CustomerGroup[]) => {
+export const updateCustomerGroups = async (groups: CustomerGroup[]) => {
   CUSTOMER_GROUPS = [...groups];
   groupListeners.forEach(l => l([...CUSTOMER_GROUPS]));
+  await setDoc(doc(db, 'customerGroups', 'current'), { items: dropUndefined(CUSTOMER_GROUPS), updatedAt: serverTimestamp() });
 };
 
-export const deleteCustomerGroup = (id: string) => {
+export const deleteCustomerGroup = async (id: string) => {
   CUSTOMER_GROUPS = CUSTOMER_GROUPS.filter(g => g.id !== id);
   groupListeners.forEach(l => l([...CUSTOMER_GROUPS]));
+  await setDoc(doc(db, 'customerGroups', 'current'), { items: dropUndefined(CUSTOMER_GROUPS), updatedAt: serverTimestamp() });
 };
+
+onSnapshot(doc(db, 'customerGroups', 'current'), snap => {
+  if (!snap.exists()) return;
+  CUSTOMER_GROUPS = (snap.data().items || []) as CustomerGroup[];
+  groupListeners.forEach(l => l([...CUSTOMER_GROUPS]));
+});
 
 // --- PERSISTENCE (localStorage) ---
 // Everything above this point is an in-memory mock that forgets everything
