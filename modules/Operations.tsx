@@ -3153,13 +3153,26 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 <div className="space-y-3">
                   {paidDrops.map(drop => (
                     <div key={drop.key} className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
                           {drop.date && <span className="text-[10px] font-bold text-slate-400">{formatDay(drop.date)}{drop.slot ? ` · ${drop.slot}` : ''}</span>}
                         </div>
                         <p className="text-xs text-slate-500 font-medium">{drop.items.map(i => `${i.qty}x ${i.name}`).join(', ')}</p>
                         <p className="text-sm font-black text-primary mt-1">{formatCurrency(drop.total)}</p>
+                        {drop.items.some(i => i.rating) && (
+                          <div className="mt-3 bg-warning/[0.03] border border-warning/10 rounded-2xl p-3 space-y-2 text-[11px] text-slate-600 font-medium">
+                            {drop.items.filter(i => i.rating).map((i, idx) => (
+                              <div key={idx} className="flex flex-col gap-0.5">
+                                <div className="flex items-center gap-1.5 font-bold text-slate-700">
+                                  <span className="flex items-center gap-0.5 text-warning font-black"><Star className="size-3.5 fill-warning text-warning" /> {i.rating}★</span>
+                                  <span>on {i.name}</span>
+                                </div>
+                                {i.ratingComment && <p className="text-slate-500 font-medium italic pl-5">"{i.ratingComment}"</p>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <span className="shrink-0 px-4 py-2 bg-success/10 text-success rounded-xl text-[10px] font-black uppercase tracking-widest font-black">Paid</span>
                     </div>

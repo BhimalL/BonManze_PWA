@@ -37,7 +37,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc, collection, collectionGroup, query, where, onSnapshot, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, collection, collectionGroup, query, where, onSnapshot, writeBatch, updateDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from '../firebaseClient';
 import { Customer, Order, OrderItem, PaymentMethod } from '../types';
@@ -494,8 +494,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
   const [ratings, setRatings] = useState<Record<string, { stars: number; comment: string }>>({});
-  const [rateTarget, setRateTarget] = useState<{ orderId: string; itemId: string; label: string } | null>(null);
+  const [rateTarget, setRateTarget] = useState<{ orderId: string; fsItemId?: string; itemId: string; label: string } | null>(null);
   const [rateStars, setRateStars] = useState(0);
+  const [rateComment, setRateComment] = useState('');
+  const [ratingSubmitting, setRatingSubmitting] = useState(false);
 
   // Receipt sheet — either one paid meal (item-level Pay) or every line in an
   // Order once every item in it has been confirmed paid (order-level Paid).
@@ -1438,8 +1440,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   };
 
   const openRating = (line: Line) => {
-    setRateTarget({ orderId: line.order.id, itemId: `${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`, label: `${line.item.deliveryDay} · ${line.item.name}` });
+    setRateTarget({
+      orderId: line.order.id,
+      fsItemId: line.item._fsItemId,
+      itemId: `${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`,
+      label: `${line.item.deliveryDay} · ${line.item.name}`
+    });
     setRateStars(0);
+    setRateComment('');
   };
 
   // A receipt always represents one payment — resolve to every line that
@@ -1450,11 +1458,32 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const key = line.item.paymentReference || `solo-${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`;
     setReceiptTarget({ order: line.order, lines: paymentGroups.get(key) || [line] });
   };
-  const submitRating = () => {
+  const submitRating = async () => {
     if (!rateTarget || !rateStars) return;
-    setRatings(prev => ({ ...prev, [rateTarget.itemId]: { stars: rateStars, comment: '' } }));
-    toast(`Thanks! ${rateStars}★ sent to the kitchen`);
-    setRateTarget(null);
+    setRatingSubmitting(true);
+    try {
+      if (rateTarget.fsItemId) {
+        // Real Firestore document: save rating and comment directly!
+        const itemRef = doc(db, 'orders', rateTarget.orderId, 'items', rateTarget.fsItemId);
+        await updateDoc(itemRef, {
+          rating: rateStars,
+          ratingComment: rateComment.trim()
+        });
+      } else {
+        // Mock fallback for local pre-seeded orders
+        setRatings(prev => ({
+          ...prev,
+          [rateTarget.itemId]: { stars: rateStars, comment: rateComment.trim() }
+        }));
+      }
+      toast(`Thanks! ${rateStars}★ review sent to the kitchen`);
+      setRateTarget(null);
+    } catch (err) {
+      console.error('Failed to submit rating', err);
+      toast('Failed to save rating. Please try again.');
+    } finally {
+      setRatingSubmitting(false);
+    }
   };
 
   // --- HOME: one status card that always tells you the single most useful
@@ -1464,7 +1493,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // state — Mark Delivered in the Operator Console goes straight to
   // Completed, so there's nothing to confirm receipt of here).
   const needsRating = useMemo(
-    () => thisWeekLinesWithSeq.find(l => l.item.status === 'Completed' && l.item.paymentStatus === 'Paid' && !ratings[`${l.order.id}-${l.item.itemId}-${l.item.deliveryDate}`]),
+    () => thisWeekLinesWithSeq.find(l => {
+      const alreadyRated = l.item.rating || ratings[`${l.order.id}-${l.item.itemId}-${l.item.deliveryDate}`];
+      return l.item.status === 'Completed' && l.item.paymentStatus === 'Paid' && !alreadyRated;
+    }),
     [thisWeekLinesWithSeq, ratings]
   );
 
@@ -2194,7 +2226,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                       </div>
                                       <div className="space-y-3">
                                         {group.items.map((line, idx) => {
-                                          const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
+                                          const rating = line.item.rating || ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`]?.stars;
                                           const isCompleted = line.item.status === 'Completed';
                                           const isActive = line.item.status === 'Active';
                                           const isCancelled = line.item.status === 'Cancelled';
@@ -2220,7 +2252,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                                 {isActive && !locked && <button onClick={() => handleCancel(line)} disabled={cancellingItemId === line.item._fsItemId} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">{cancellingItemId === line.item._fsItemId ? 'Cancelling...' : 'Cancel'}</button>}
                                                 {isActive && locked && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-slate-400" title="The cutoff has passed — contact us for changes.">Contact us to change</span>}
                                                 {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
-                                                {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
+                                                {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating}★ sent</span>}
                                               </div>
                                             </div>
                                           );
@@ -2285,7 +2317,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                       </div>
                                       <div className="space-y-3">
                                         {group.items.map((line, idx) => {
-                                          const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
+                                          const rating = line.item.rating || ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`]?.stars;
                                           const isCompleted = line.item.status === 'Completed';
                                           const isActive = line.item.status === 'Active';
                                           const isCancelled = line.item.status === 'Cancelled';
@@ -2311,7 +2343,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                                 {isActive && !locked && <button onClick={() => handleCancel(line)} disabled={cancellingItemId === line.item._fsItemId} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">{cancellingItemId === line.item._fsItemId ? 'Cancelling...' : 'Cancel'}</button>}
                                                 {isActive && locked && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-slate-400" title="The cutoff has passed — contact us for changes.">Contact us to change</span>}
                                                 {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
-                                                {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
+                                                {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating}★ sent</span>}
                                               </div>
                                             </div>
                                           );
@@ -2811,19 +2843,38 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       {/* --- RATING SHEET --- */}
       {rateTarget && (
         <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-white rounded-[32px] w-full max-w-sm shadow-2xl overflow-hidden p-8 text-center">
-            <button onClick={() => setRateTarget(null)} className="absolute top-6 right-6 p-2 text-slate-400 hover:text-danger"><X className="size-5" /></button>
+          <div className="bg-white rounded-[32px] w-full max-w-sm shadow-2xl overflow-hidden p-8 text-center relative animate-in zoom-in-95 duration-200">
+            <button disabled={ratingSubmitting} onClick={() => setRateTarget(null)} className="absolute top-6 right-6 p-2 text-slate-400 hover:text-danger disabled:opacity-40"><X className="size-5" /></button>
             <p className="text-sm font-black text-slate-900 mb-1">Rate your meal</p>
             <p className="text-xs text-slate-400 font-bold mb-6">{rateTarget.label}</p>
-            <div className="flex items-center justify-center gap-2 mb-4">
+            <div className="flex items-center justify-center gap-2 mb-6">
               {[1, 2, 3, 4, 5].map(n => (
-                <button key={n} onClick={() => setRateStars(n)}>
-                  <Star className={`size-8 ${n <= rateStars ? 'fill-warning text-warning' : 'text-slate-200'}`} />
+                <button key={n} disabled={ratingSubmitting} onClick={() => setRateStars(n)}>
+                  <Star className={`size-8 transition-colors ${n <= rateStars ? 'fill-warning text-warning' : 'text-slate-200'}`} />
                 </button>
               ))}
             </div>
-            <button disabled={!rateStars} onClick={submitRating} className="w-full py-3 bg-primary text-white rounded-xl font-black text-xs uppercase tracking-widest disabled:opacity-40">
-              Submit rating
+            <div className="mb-6 text-left">
+              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1.5">
+                Share your feedback (optional)
+              </label>
+              <textarea
+                value={rateComment}
+                onChange={e => setRateComment(e.target.value)}
+                disabled={ratingSubmitting}
+                maxLength={300}
+                rows={3}
+                placeholder="How was the curry? What did you think of the sides?"
+                className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-xs font-medium outline-none focus:ring-2 focus:ring-primary/20 resize-none bg-slate-50 focus:bg-white transition-all disabled:opacity-60"
+              />
+            </div>
+            <button
+              disabled={!rateStars || ratingSubmitting}
+              onClick={submitRating}
+              className="w-full py-4 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest disabled:opacity-40 flex items-center justify-center gap-2 shadow-lg shadow-primary/20 transition-all hover:bg-primary/95 active:scale-98"
+            >
+              {ratingSubmitting && <Loader2 className="size-4 animate-spin" />}
+              {ratingSubmitting ? 'Submitting...' : 'Submit rating'}
             </button>
           </div>
         </div>

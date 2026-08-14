@@ -150,6 +150,8 @@ export interface OrderItem {
   // 'Paid' once Operations confirms, so a claimed-but-unconfirmed payment is
   // paymentStatus 'Pending' + paymentMethodName/paymentReference set.
   paymentReference?: string;
+  rating?: number;
+  ratingComment?: string;
 }
 
 export interface Order {

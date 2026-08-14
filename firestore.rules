@@ -211,7 +211,6 @@ service cloud.firestore {
           && request.resource.data.name == resource.data.name
           && request.resource.data.customerId == resource.data.customerId)
         || (isCustomer(resource.data.customerId)
-          && resource.data.paymentStatus != 'Paid'
           && request.resource.data.paymentStatus == resource.data.paymentStatus
           && request.resource.data.price == resource.data.price
           && request.resource.data.qty == resource.data.qty
@@ -219,7 +218,10 @@ service cloud.firestore {
           && request.resource.data.status == resource.data.status
           && request.resource.data.customerId == resource.data.customerId
           && request.resource.data.deliveryDate == resource.data.deliveryDate
-          && request.resource.data.serviceSlot == resource.data.serviceSlot);
+          && request.resource.data.serviceSlot == resource.data.serviceSlot
+          && (resource.data.paymentStatus != 'Paid'
+              || (request.resource.data.paymentMethodName == resource.data.paymentMethodName
+                  && request.resource.data.paymentReference == resource.data.paymentReference)));
       allow delete: if false;
     }
 
