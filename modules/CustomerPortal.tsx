@@ -697,6 +697,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         paymentReference: it.paymentReference,
         isReconciled: it.isReconciled,
         _fsItemId: it._fsItemId,
+        rating: it.rating,
+        ratingComment: it.ratingComment,
       }));
       const allPaid = items.length > 0 && items.every(i => i.paymentStatus === 'Paid');
       const createdAtIso = o.createdAt && typeof o.createdAt.toDate === 'function'
