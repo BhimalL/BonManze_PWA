@@ -430,5 +430,5 @@ This session implemented Option 1: Persisted Meal Ratings with customer comment 
 ### Key Architecture Notes
 * **Rating Storage**: Ratings are stored directly in the `OrderItem` subcollection. Since the client listens to orders/items live via snapshot collection group queries, rating changes update the UI seamlessly.
 * **Security Constraints**: Customers are permitted to update `rating` and `ratingComment` on any item they own, but payment details are locked down once `paymentStatus == 'Paid'`.
-* **Commits**: `053200e` (ratings persistence + rules + Operations view) — pushed to `origin/main`.
+* **Commits**: `053200e` (ratings persistence + rules + Operations view), `0aa8f8e` (rules evaluation get() fix) — pushed to `origin/main`.
 
