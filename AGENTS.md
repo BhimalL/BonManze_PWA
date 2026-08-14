@@ -306,3 +306,62 @@ Implemented styling updates and restructured the customer navigation flow:
 
 Verified type compilation checks (`npx tsc --noEmit`) and Vite production bundling (`npm run build`) passed with zero errors.
 
+
+## 2026-08-14: Antigravity — Firestore Backend, Service-Specific Cutoffs & Cancelled Order Display
+
+This session continued the Firestore/Cloud Functions integration and added two new user-facing features.
+
+### What was done
+
+**1. Firestore Transaction Fix (`functions/index.js`)**
+* The `cancelOrderItem` and `editOrderItemSelection` Cloud Functions had a Firestore transaction violation: writes (`tx.update`, `tx.set`) were being called before reads (`tx.get`). Strict Firestore requires all reads inside a transaction to precede any writes. Moved all `tx.get()` calls to the top of each transaction block before any write calls.
+
+**2. Emulator Clock Override (`functions/index.js`)**
+* Added `getOverrideDate(request)` helper that extracts `systemDate` from request payload only when `FUNCTIONS_EMULATOR === 'true'`, preserving real wall-clock time for hour/minute accuracy.
+* Updated `getMauritiusDateTime` and `checkCutoffPassed` to accept a `systemDateOverride` parameter — used during emulator testing so the Operator Console's testing date picker is respected by backend functions.
+* The customer app passes its `systemDate` state in every Cloud Function call payload (`confirmCheckout`, `cancelOrderItem`, `editOrderItemSelection`).
+
+**3. Service-Specific Cutoffs (Lunch vs. Dinner)**
+
+Previously, one shared pair of fields (`orderCutoffTime`/`cancelCutoffTime`) governed all services. Now Lunch and Dinner have fully independent cutoffs:
+
+* **`modules/store.ts`**: Added 8 new fields to `SYSTEM_CONFIG`:
+  * `lunchOrderCutoffTime` / `lunchOrderCutoffDayOffset` (default: `12:00`, day offset `-1` = day before)
+  * `lunchCancelCutoffTime` / `lunchCancelCutoffDayOffset` (default: `09:00`, same day)
+  * `dinnerOrderCutoffTime` / `dinnerOrderCutoffDayOffset` (default: `12:00`, same day)
+  * `dinnerCancelCutoffTime` / `dinnerCancelCutoffDayOffset` (default: `14:00`, same day)
+  * The `onSnapshot` config listener maps these from Firestore with cascading fallbacks to legacy keys.
+  * `updateSystemConfig` was updated to copy all 8 fields into the in-memory `SYSTEM_CONFIG` object (without this the form would reset on every save — this was a bug that was found and fixed).
+
+* **`modules/Operations.tsx`**: The *Delivery Rules & Order Cutoffs* settings card now shows two sub-sections: **☀️ Lunch Service Cut-offs** and **🌙 Dinner Service Cut-offs** (Dinner section is only visible when `dinnerEnabled` is true). All 8 new fields have their own inputs, dirty-check, save, and discard handlers.
+
+* **`functions/index.js`**: `confirmCheckout`, `cancelOrderItem`, and `editOrderItemSelection` each now:
+  1. Detect the item's service slot (`Dinner` vs. anything else = `Lunch`)
+  2. Resolve the correct config key (`dinnerOrderCutoffTime` or `lunchOrderCutoffTime` etc.)
+  3. Enforce the service-appropriate cutoff, with cascading fallbacks to legacy unified keys.
+
+* **`modules/CustomerPortal.tsx`**: `isPastOrderCutoff` and `isPastCancelCutoff` now accept a `service: 'Lunch' | 'Dinner' | Service` parameter and look up the correct Lunch or Dinner thresholds. All call sites pass the appropriate service. Cutoff day-phrase helpers (`orderCutoffDayPhrase`, `cancelCutoffDayPhrase`) also take service as a parameter.
+
+**4. Cancelled Items Remain Visible in Customer App (`modules/CustomerPortal.tsx`)**
+
+Previously, cancelled `OrderItem`s were filtered out of every derived list (`thisWeekLines`, `pastLines`) and simply disappeared. Now:
+* Both `thisWeekLines` and `pastLines` include cancelled items.
+* `thisWeekLinesWithSeq` assigns `seq: -1` to cancelled items so they don't increment the "Extra 2 / Extra 3" sequence counter for active meals.
+* `outstandingTotal` and `awaitingConfirmationLines` explicitly filter out `status === 'Cancelled'` items so balances stay correct.
+* Cancelled meals render with: ~~line-through~~ muted text, a red `Cancelled` StatusBadge, a `Refunded` or `No payment due` payment badge, and no Pay/Edit/Cancel action buttons.
+* `paymentStatusInfo()` was extended to handle cancelled items (returns `slate` tone instead of `danger`).
+
+**5. Staff CRM Permission Fix (`firestore.rules`)**
+* `/customers/{uid}` update rule now allows staff with `manageCustomers` permission to modify the `tier` field. Customers can still update their own document but cannot change `tier`, `points`, `storeCredit`, or `ltv`.
+
+**6. Integration Test (`scripts/testOrderEditCancel.js`)**
+* Script verifies checkout → edit selection → mark paid → cancel, checking: order total update, item status `Cancelled`, payment status `Refunded`, and store credit refund — all pass.
+
+### Key Architecture Notes for Next Agent
+
+* **`SYSTEM_CONFIG` is the single source of truth for all runtime config**. It's an in-memory plain object that starts with static defaults and is overwritten by the live Firestore `onSnapshot` listener at `config/system`. If you add a new config key, you must add it to (a) the `SYSTEM_CONFIG` initialiser, (b) the `onSnapshot` `Object.assign` block with fallbacks, AND (c) the `updateSystemConfig` function's per-field `if` assignments — missing (c) causes settings to appear to save but reset on the next snapshot event.
+* **Cutoff enforcement is dual-layer**: The Cloud Functions enforce it server-side (cannot be bypassed), and the Customer Portal also enforces it client-side for UX (greying/disabling the UI before the backend rejects). Keep both in sync when changing cutoff logic.
+* **`OrderItem.serviceSlot`** is the field used to determine Lunch vs. Dinner service in both the backend functions and the client helpers. It's a string like `'Lunch'` or `'Dinner'`. The check is `serviceSlot.startsWith('Dinner')`.
+* **Payment lifecycle**: Customer → selects method → `submitPaymentClaim` (sets `paymentMethodName`/`paymentReference`, status stays `'Pending'`) → Operations confirms → `updateOrderItemsPayment` (sets `paymentStatus: 'Paid'`). Only Operations can set `Paid`. A cancelled prepaid item becomes `paymentStatus: 'Refunded'` and `storeCredit` is incremented on the customer document (transactionally, in the Cloud Function).
+* **Testing date override**: The Operator Console has a date picker in the header that writes `MOCK_TODAY` to `localStorage`. Cloud Functions respect this during emulator runs only (`FUNCTIONS_EMULATOR === 'true'`) via the `systemDate` payload field. In production, the functions always use real Mauritius wall-clock time (`Indian/Mauritius` timezone via `Intl.DateTimeFormat`).
+* **Commits**: `aafab71` (service cutoffs + cancelled items), `b25fc2c` (settings save fix) — both pushed to `origin/main`.
