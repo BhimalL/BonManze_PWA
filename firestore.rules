@@ -220,8 +220,8 @@ service cloud.firestore {
           && request.resource.data.deliveryDate == resource.data.deliveryDate
           && request.resource.data.serviceSlot == resource.data.serviceSlot
           && (resource.data.paymentStatus != 'Paid'
-              || (request.resource.data.paymentMethodName == resource.data.paymentMethodName
-                  && request.resource.data.paymentReference == resource.data.paymentReference)));
+              || (request.resource.data.get('paymentMethodName', null) == resource.data.get('paymentMethodName', null)
+                  && request.resource.data.get('paymentReference', null) == resource.data.get('paymentReference', null))));
       allow delete: if false;
     }
 
