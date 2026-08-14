@@ -432,3 +432,28 @@ This session implemented Option 1: Persisted Meal Ratings with customer comment 
 * **Security Constraints**: Customers are permitted to update `rating` and `ratingComment` on any item they own, but payment details are locked down once `paymentStatus == 'Paid'`.
 * **Commits**: `053200e` (ratings persistence + rules + Operations view), `0aa8f8e` (rules evaluation get() fix), `8406f95` (UI items mapping fix) — pushed to `origin/main`.
 
+## 2026-08-14: Antigravity — Loyalty Configuration Settings, Tabular CRM layout, and Full Customer editing
+
+This session implemented the loyalty/discount settings panel, expanded customer edits, and updated the CRM list style to a scalable HTML data table.
+
+### What was done
+
+**1. Settings: Loyalty & Groups Configuration Sub-tab (`modules/store.ts`, `modules/Operations.tsx`)**
+* Refactored `LOYALTY_TIERS` and `CUSTOMER_GROUPS` in `store.ts` to sync with Firestore live using `onSnapshot` listeners and async `setDoc` updaters.
+* Added a third sub-tab **Loyalty & Groups** (`loyalty`) under the settings panel in the Operator Console.
+* Built the **Loyalty Tiers Form** allowing editing of each tier's points threshold, points multiplier, standard discount %, and birthday discount %, immediately saving to `/loyaltyTiers/current`.
+* Built the **Discount & Customer Groups CRM** allowing adding, editing, and deleting discount percentage groups (e.g. Corporate, VIP, ABC Motors), immediately saving to `/customerGroups/current`.
+
+**2. CRM: Tabular Customer Directory Layout (`modules/Operations.tsx`)**
+* Replaced the card grid layout in the CRM tab with a clean, spacious HTML table displaying columns for Customer details, Contact info, Tier badge, Birthday, Orders count, Points, Store credit, LTV, and action buttons.
+
+**3. CRM: Full Customer Editing Modal (`modules/Operations.tsx`)**
+* Extended the **Edit Customer** form to support updating a customer's **First Name**, **Last Name**, **Email**, and **Birthday** (using date picker input), alongside existing Phone, Tier, and Address fields.
+* Kept the Customer's **Username (Referral Code)** read-only since it forms the unique document ID.
+* Recalculates display `name` as `${firstName} ${lastName}` and writes to `/customers/{uid}` on save.
+
+### Key Architecture Notes
+* **Type Safety & Compilation**: Verified code compiles successfully with `npx tsc --noEmit` and has zero errors.
+* **Commits**: `fcbf1d6` (settings loyalty & groups + tabular CRM + customer edit fields) — pushed to `origin/main`.
+
+
