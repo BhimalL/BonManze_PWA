@@ -436,6 +436,10 @@ export const confirmCheckout = onCall(async (request) => {
       tenderType: typeof tenderType === 'string' ? tenderType : '',
       paymentMethodName: typeof paymentMethodName === 'string' ? paymentMethodName : '',
       total,
+      subtotal,
+      discount: totalDiscount,
+      discountReason: `Standard: ${effectiveStandardRate}%, Birthday: ${birthdayTierRate}%, Bulk: ${bulkDiscount > 0 ? config.bulkDiscountRate : 0}%`,
+      vat,
       createdAt: now,
     });
     priced.forEach((p) => {

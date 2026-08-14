@@ -128,10 +128,17 @@ const isPastCancelCutoff = (deliveryDate: string, service: 'Lunch' | 'Dinner' | 
 // "09:00" -> "9:00 AM" — used anywhere the cutoff needs to read as a time a
 // human would say out loud, rather than the raw 24h config value.
 const formatTimeLabel = (time: string): string => {
-  const [h, m] = time.split(':').map(n => parseInt(n, 10) || 0);
-  const period = h >= 12 ? 'PM' : 'AM';
-  const h12 = h % 12 === 0 ? 12 : h % 12;
-  return `${h12}:${String(m).padStart(2, '0')} ${period}`;
+  const [h, m] = time.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const displayH = h % 12 === 0 ? 12 : h % 12;
+  return `${displayH}:${String(m).padStart(2, '0')} ${ampm}`;
+};
+
+const isBirthdayToday = (birthday?: string, systemDateStr?: string): boolean => {
+  if (!birthday || !systemDateStr) return false;
+  const [, bMonth, bDay] = birthday.split('-').map(Number);
+  const [, sMonth, sDay] = systemDateStr.split('-').map(Number);
+  return bMonth === sMonth && bDay === sDay;
 };
 
 const orderCutoffDayPhrase = (service: 'Lunch' | 'Dinner' | Service): string => {
@@ -826,6 +833,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   ]), [weekDays, nextWeekDays]);
 
   const culturePhrase = useMemo(() => CREOLE_PHRASES[new Date().getDate() % CREOLE_PHRASES.length], []);
+  const isBirthday = useMemo(() => isBirthdayToday(currentUser?.birthday, systemDate), [currentUser, systemDate]);
 
   // --- CART / BUILDER ---
   const openBuilder = (day: WeekDay, service: Service, weekStart: string, presetCurryId?: string, editIndex: number | null = null) => {
@@ -1130,7 +1138,18 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const vat = netTotal * vatRate;
     const total = netTotal + vat;
 
-    return { subtotal, discount: totalDiscount, standardDiscount, birthdayDiscount, standardLabel, bulkDiscount, vat, total };
+    return {
+      subtotal,
+      discount: totalDiscount,
+      standardDiscount,
+      birthdayDiscount,
+      standardLabel,
+      standardRate: effectiveStandardRate,
+      birthdayRate: birthdayTierRate,
+      bulkDiscount,
+      vat,
+      total
+    };
   }, [cart, dinnerCart, currentUser, loyaltyTiers, customerGroups, orderableWeeks, menuTick, configTick]);
 
   // Real checkout (2026-08-13) — calls the confirmCheckout Cloud Function
@@ -1781,15 +1800,22 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 background, soft blurred color blobs for depth, and frosted
                 (backdrop-blur + translucent white) panels for every element
                 sitting on top of it, rather than flat white-on-solid-color. */}
-            <div className="relative rounded-[28px] p-6 text-white shadow-xl shadow-primary/30 overflow-hidden bg-gradient-to-br from-primary via-primary to-secondary">
+            <div className={`relative rounded-[28px] p-6 text-white shadow-xl shadow-primary/30 overflow-hidden bg-gradient-to-br ${isBirthday ? 'from-[#E1A02E] via-[#D38B1C] to-[#C17610]' : 'from-primary via-primary to-secondary'}`}>
               <div className="absolute -top-12 -right-10 size-40 rounded-full bg-white/10 blur-2xl pointer-events-none" />
               <div className="absolute -bottom-16 -left-10 size-44 rounded-full bg-secondary/40 blur-2xl pointer-events-none" />
               <button onClick={() => setProfileOpen(true)} className="absolute top-5 right-5 z-10 text-[10px] font-black uppercase tracking-widest text-white/80 hover:text-white bg-white/10 backdrop-blur-md border border-white/20 px-2.5 py-1 rounded-full">Profile →</button>
+              
+              {isBirthday && (
+                <div className="relative z-10 mb-3 px-2.5 py-0.5 rounded bg-white/20 backdrop-blur-md border border-white/30 text-[9px] font-black uppercase tracking-wider w-fit animate-pulse">
+                  🎂 Birthday Today!
+                </div>
+              )}
+
               <div className="relative z-10 flex items-center gap-4">
                 <img src={currentUser.avatar} className="size-16 rounded-full border-2 border-white/40 shadow-lg shrink-0" alt={currentUser.name} />
                 <div className="min-w-0">
                   <p className="text-[10px] font-bold uppercase tracking-widest opacity-70">Welcome back</p>
-                  <p className="text-xl font-black leading-tight truncate">{currentUser.firstName}!</p>
+                  <p className="text-xl font-black leading-tight truncate">{currentUser.firstName}{isBirthday ? ' 🎂' : '!'}</p>
                   <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                     {currentUser.tier && (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/15 backdrop-blur-md border border-white/20 text-[10px] font-black uppercase shrink-0">
@@ -1802,8 +1828,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   </div>
                 </div>
               </div>
-              <p className="relative z-10 text-sm font-black italic leading-snug mt-4">"{culturePhrase.cr}"</p>
-              <p className="relative z-10 text-xs opacity-80 mt-1">{culturePhrase.en}</p>
+              <p className="relative z-10 text-sm font-black italic leading-snug mt-4">"{isBirthday ? 'Zwaye Laniverser! 🎂🎉' : culturePhrase.cr}"</p>
+              <p className="relative z-10 text-xs opacity-80 mt-1">{isBirthday ? 'Wishing you a wonderful day filled with delicious curries! 🎂🎈' : culturePhrase.en}</p>
               {todaysArrivingLines.length > 0 && (
                 <div className="relative z-10 mt-4 flex items-center gap-3 bg-white/10 backdrop-blur-md border border-white/15 rounded-2xl p-3">
                   <img src={dishPhotoFor(todaysArrivingLines[0].item.itemId)} className="size-11 rounded-xl object-cover shrink-0 border-2 border-white/25" alt={todaysArrivingLines[0].item.name} />
@@ -2024,14 +2050,33 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 )}
               </div>
             </div>
+            {isBirthday && (() => {
+              const tierObj = loyaltyTiers.find(t => t.name.toLowerCase() === currentUser?.tier?.toLowerCase());
+              const birthdayDiscountRate = tierObj?.birthdayDiscount || 0;
+              return (
+                <div className="bg-gradient-to-r from-accent/20 via-accent/10 to-[#F4BA41]/20 border border-accent/20 rounded-3xl p-5 shadow-sm space-y-2 text-slate-800 animate-fade-in">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">🎂</span>
+                    <h3 className="text-sm font-black text-slate-900">Happy Birthday, {currentUser?.firstName}! 🎉</h3>
+                  </div>
+                  <p className="text-xs text-slate-600 font-medium">
+                    To celebrate, a special <span className="font-black text-accent">{birthdayDiscountRate}% Birthday Discount</span> is automatically active on any meals scheduled for delivery today! Enjoy your special day! 🎈
+                  </p>
+                </div>
+              );
+            })()}
             {activeDays.map(d => {
               const meals = cartFor(activeService)[d.date] || [];
               const pastCutoff = isPastOrderCutoff(d.date, activeService, systemDate);
+              const isUserBirthdayOnDay = isBirthdayToday(currentUser?.birthday, d.date);
               return (
                 <div key={d.key} className={`bg-white rounded-3xl border border-[#E7E0D0] p-5 transition-all ${pastCutoff ? 'opacity-65 bg-slate-50/50' : ''}`}>
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                       <p className="text-sm font-black text-slate-900">{d.label}</p>
+                      {isUserBirthdayOnDay && (
+                        <span className="text-sm shrink-0" title="Your Birthday!">🎂</span>
+                      )}
                       {pastCutoff && (
                         <span className="px-2 py-0.5 rounded-full bg-danger/10 text-danger text-[9px] font-black uppercase tracking-widest animate-fade-in">
                           Past Cut-off
@@ -2140,9 +2185,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 <div className="bg-white rounded-3xl border border-[#E7E0D0] p-5">
                   <div className="space-y-1.5 text-xs">
                     <div className="flex justify-between font-bold text-slate-500"><span>Subtotal</span><span>{formatCurrency(cartTotals.subtotal)}</span></div>
-                    {cartTotals.standardDiscount > 0 && <div className="flex justify-between font-bold text-primary"><span>{cartTotals.standardLabel} Discount</span><span>-{formatCurrency(cartTotals.standardDiscount)}</span></div>}
-                    {cartTotals.birthdayDiscount > 0 && <div className="flex justify-between font-bold text-accent"><span>🎂 Birthday Discount</span><span>-{formatCurrency(cartTotals.birthdayDiscount)}</span></div>}
-                    {cartTotals.bulkDiscount > 0 && <div className="flex justify-between font-bold text-success"><span>Full-Week Discount</span><span>-{formatCurrency(cartTotals.bulkDiscount)}</span></div>}
+                    {cartTotals.standardDiscount > 0 && <div className="flex justify-between font-bold text-primary"><span>{cartTotals.standardLabel} Discount ({cartTotals.standardRate}%)</span><span>-{formatCurrency(cartTotals.standardDiscount)}</span></div>}
+                    {cartTotals.birthdayDiscount > 0 && <div className="flex justify-between font-bold text-accent"><span>🎂 Birthday Discount ({cartTotals.birthdayRate}%)</span><span>-{formatCurrency(cartTotals.birthdayDiscount)}</span></div>}
+                    {cartTotals.bulkDiscount > 0 && <div className="flex justify-between font-bold text-success"><span>Full-Week Discount ({SYSTEM_CONFIG.bulkDiscountRate}%)</span><span>-{formatCurrency(cartTotals.bulkDiscount)}</span></div>}
                     <div className="flex justify-between font-bold text-slate-500"><span>VAT ({SYSTEM_CONFIG.vatRate}%)</span><span>{formatCurrency(cartTotals.vat)}</span></div>
                     <div className="pt-2 border-t border-[#E7E0D0] flex justify-between text-base font-black text-slate-900"><span>Total</span><span>{formatCurrency(cartTotals.total)}</span></div>
                   </div>
@@ -2267,6 +2312,28 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             </div>
                           ))}
                         </div>
+                        {/* Order-level totals — from confirmCheckout */}
+                        {(() => {
+                          const actv = lines.filter(l => l.item.status !== 'Cancelled');
+                          const itemSum = actv.reduce((s, l) => s + l.item.price, 0);
+                          const has = typeof order.subtotal === 'number';
+                          const sub = has ? order.subtotal : itemSum;
+                          const disc = has ? (order.discount || 0) : 0;
+                          const vatAmt = has ? (order.vat || 0) : 0;
+                          const tot = has ? order.total : itemSum;
+                          const reason = has ? (order.discountReason || '') : '';
+                          if (sub === 0) return null;
+                          return (
+                            <div className="mx-4 mb-4 pt-3 border-t border-[#E7E0D0]">
+                              <div className="space-y-1 text-[11px]">
+                                <div className="flex justify-between text-slate-500 font-bold"><span>Subtotal</span><span>{formatCurrency(sub)}</span></div>
+                                {disc > 0 && <div className="flex justify-between text-primary font-bold"><span>Discount{reason ? ` (${reason})` : ''}</span><span>-{formatCurrency(disc)}</span></div>}
+                                {vatAmt > 0 && <div className="flex justify-between text-slate-500 font-bold"><span>VAT ({SYSTEM_CONFIG.vatRate}%)</span><span>{formatCurrency(vatAmt)}</span></div>}
+                                <div className="flex justify-between text-slate-900 font-black pt-1.5 border-t border-[#E7E0D0] text-xs"><span>Total</span><span>{formatCurrency(tot)}</span></div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}
@@ -2358,6 +2425,28 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             </div>
                           ))}
                         </div>
+                        {/* Order-level totals — from confirmCheckout */}
+                        {(() => {
+                          const actv = lines.filter(l => l.item.status !== 'Cancelled');
+                          const itemSum = actv.reduce((s, l) => s + l.item.price, 0);
+                          const has = typeof order.subtotal === 'number';
+                          const sub = has ? order.subtotal : itemSum;
+                          const disc = has ? (order.discount || 0) : 0;
+                          const vatAmt = has ? (order.vat || 0) : 0;
+                          const tot = has ? order.total : itemSum;
+                          const reason = has ? (order.discountReason || '') : '';
+                          if (sub === 0) return null;
+                          return (
+                            <div className="mx-4 mb-4 pt-3 border-t border-[#E7E0D0]">
+                              <div className="space-y-1 text-[11px]">
+                                <div className="flex justify-between text-slate-500 font-bold"><span>Subtotal</span><span>{formatCurrency(sub)}</span></div>
+                                {disc > 0 && <div className="flex justify-between text-primary font-bold"><span>Discount{reason ? ` (${reason})` : ''}</span><span>-{formatCurrency(disc)}</span></div>}
+                                {vatAmt > 0 && <div className="flex justify-between text-slate-500 font-bold"><span>VAT ({SYSTEM_CONFIG.vatRate}%)</span><span>{formatCurrency(vatAmt)}</span></div>}
+                                <div className="flex justify-between text-slate-900 font-black pt-1.5 border-t border-[#E7E0D0] text-xs"><span>Total</span><span>{formatCurrency(tot)}</span></div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}
@@ -2467,10 +2556,21 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           </header>
 
           <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6 pb-24">
-            <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 text-center">
+            <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 text-center relative overflow-hidden">
+              {isBirthday && (
+                <div className="absolute top-3 right-3 px-2 py-0.5 rounded bg-accent/15 text-accent text-[9px] font-black uppercase tracking-wider animate-pulse flex items-center gap-1">
+                  🎂 Birthday Today!
+                </div>
+              )}
               <img src={currentUser.avatar} className="size-16 rounded-full border-4 border-primary/10 mx-auto mb-3" alt={currentUser.name} />
               <p className="text-lg font-black text-slate-900">{currentUser.name}</p>
               <p className="text-xs text-slate-400 font-medium">{currentUser.email}</p>
+              {currentUser.birthday && (
+                <p className="text-[10px] text-slate-500 font-bold mt-1.5 flex items-center justify-center gap-1">
+                  📅 Birthdate: {new Date(currentUser.birthday).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                  {isBirthday && <span className="text-xs">🎉</span>}
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -2900,14 +3000,41 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         // effect at checkout time isn't stored per order/item.
         const vatOn = SYSTEM_CONFIG.vatEnabled;
         const vatRate = SYSTEM_CONFIG.vatRate;
-        const netTotal = vatOn ? receiptTotal / (1 + vatRate / 100) : receiptTotal;
-        const vatAmount = receiptTotal - netTotal;
+        // Legacy fallback back-calculation from raw item sum
+        const legacyNetTotal = vatOn ? receiptTotal / (1 + vatRate / 100) : receiptTotal;
+        const legacyVatAmount = receiptTotal - legacyNetTotal;
         const billToAddress = currentUser?.addresses?.[0];
         // Same Order -> Offering -> Day nesting as My Order — a receipt can
         // span more than one order (a "Pay balance" claim settles everything
         // outstanding at once) and more than one offering, so the item table
         // below groups accordingly instead of listing everything flat.
         const receiptGroups = groupByOrderServiceDay(receiptTarget.lines);
+        // Use saved order-level fields when present (written by confirmCheckout).
+        // Must come after receiptGroups is declared.
+        const firstOrder = receiptGroups[0]?.order;
+        const hasSavedTotals = typeof firstOrder?.subtotal === 'number';
+        // When a receipt covers multiple orders ("Pay balance" spanning several
+        // orders at once), sum the saved fields across all covered orders.
+        const savedSubtotal = hasSavedTotals
+          ? receiptGroups.reduce((s, og) => s + (og.order.subtotal || 0), 0)
+          : receiptTotal;
+        const savedDiscount = hasSavedTotals
+          ? receiptGroups.reduce((s, og) => s + (og.order.discount || 0), 0)
+          : 0;
+        const savedDiscountReason = hasSavedTotals
+          ? Array.from(new Set(receiptGroups.map(og => og.order.discountReason).filter(Boolean))).join(', ')
+          : '';
+        const savedVat = hasSavedTotals
+          ? receiptGroups.reduce((s, og) => s + (og.order.vat || 0), 0)
+          : 0;
+        const savedTotal = hasSavedTotals
+          ? receiptGroups.reduce((s, og) => s + (og.order.total || 0), 0)
+          : receiptTotal;
+        const displaySubtotal = hasSavedTotals ? savedSubtotal : receiptTotal;
+        const displayDiscount = hasSavedTotals ? savedDiscount : 0;
+        const displayDiscountReason = hasSavedTotals ? savedDiscountReason : '';
+        const displayVat = hasSavedTotals ? savedVat : (vatOn ? legacyVatAmount : 0);
+        const displayTotal = hasSavedTotals ? savedTotal : receiptTotal;
         return (
           <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md overflow-y-auto p-4">
             <style>{`
@@ -3016,15 +3143,19 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 </div>
 
                 <div className="border-t border-dashed border-slate-300 mt-3 pt-3 space-y-1.5">
-                  {vatOn && (
-                    <>
-                      <div className="flex justify-between text-xs text-slate-500 font-bold"><span>Subtotal (excl. VAT)</span><span>Rs {netTotal.toFixed(2)}</span></div>
-                      <div className="flex justify-between text-xs text-slate-500 font-bold"><span>VAT ({vatRate}%)</span><span>Rs {vatAmount.toFixed(2)}</span></div>
-                    </>
+                  <div className="flex justify-between text-xs text-slate-500 font-bold"><span>Subtotal</span><span>Rs {displaySubtotal.toFixed(2)}</span></div>
+                  {displayDiscount > 0 && (
+                    <div className="flex justify-between text-xs text-primary font-bold">
+                      <span>Discount{displayDiscountReason ? ` (${displayDiscountReason})` : ''}</span>
+                      <span>-Rs {displayDiscount.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {(vatOn || displayVat > 0) && (
+                    <div className="flex justify-between text-xs text-slate-500 font-bold"><span>VAT ({vatRate}%)</span><span>Rs {displayVat.toFixed(2)}</span></div>
                   )}
                   <div className="flex justify-between items-baseline pt-1.5 border-t border-[#E7E0D0]">
                     <span className="text-xs font-black uppercase text-slate-400 tracking-widest">Total paid</span>
-                    <span className="text-lg font-black text-success">Rs {receiptTotal.toFixed(0)}</span>
+                    <span className="text-lg font-black text-success">Rs {displayTotal.toFixed(0)}</span>
                   </div>
                 </div>
 

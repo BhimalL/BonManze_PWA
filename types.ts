@@ -171,4 +171,6 @@ export interface Order {
   isTerminalClosed?: boolean;
   discount?: number;
   discountReason?: string;
+  subtotal?: number;   // written by confirmCheckout Cloud Function
+  vat?: number;        // written by confirmCheckout Cloud Function
 }

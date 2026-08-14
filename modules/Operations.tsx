@@ -440,6 +440,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [vatEnabled, setVatEnabledLocal] = useState(SYSTEM_CONFIG.vatEnabled);
   const [vatRateInput, setVatRateInput] = useState(String(SYSTEM_CONFIG.vatRate));
   const [vatNumberInput, setVatNumberInput] = useState(SYSTEM_CONFIG.vatNumber);
+  const [bulkDiscountEnabled, setBulkDiscountEnabled] = useState(SYSTEM_CONFIG.bulkDiscountEnabled);
+  const [bulkDiscountRateInput, setBulkDiscountRateInput] = useState(String(SYSTEM_CONFIG.bulkDiscountRate));
 
   // Business identity — name/tagline/logo shown on the Customer App header,
   // login screen, and the receipt/invoice. Edited as a draft, pushed to the
@@ -693,6 +695,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setVatEnabledLocal(SYSTEM_CONFIG.vatEnabled);
       setVatRateInput(String(SYSTEM_CONFIG.vatRate));
       setVatNumberInput(SYSTEM_CONFIG.vatNumber);
+      setBulkDiscountEnabled(SYSTEM_CONFIG.bulkDiscountEnabled);
+      setBulkDiscountRateInput(String(SYSTEM_CONFIG.bulkDiscountRate));
       setBrandForm({
         name: SYSTEM_CONFIG.businessName,
         tagline: SYSTEM_CONFIG.businessTagline,
@@ -750,12 +754,15 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       vatEnabled !== SYSTEM_CONFIG.vatEnabled ||
       vatRateInput !== String(SYSTEM_CONFIG.vatRate) ||
       vatNumberInput !== SYSTEM_CONFIG.vatNumber ||
-      dinnerEnabled !== SYSTEM_CONFIG.dinnerEnabled
+      dinnerEnabled !== SYSTEM_CONFIG.dinnerEnabled ||
+      bulkDiscountEnabled !== SYSTEM_CONFIG.bulkDiscountEnabled ||
+      bulkDiscountRateInput !== String(SYSTEM_CONFIG.bulkDiscountRate)
     );
-  }, [brandForm, deliveryForm, vatEnabled, vatRateInput, vatNumberInput, dinnerEnabled]);
+  }, [brandForm, deliveryForm, vatEnabled, vatRateInput, vatNumberInput, dinnerEnabled, bulkDiscountEnabled, bulkDiscountRateInput]);
 
   const saveAllSettings = () => {
     const parsedRate = parseFloat(vatRateInput);
+    const parsedBulkRate = parseFloat(bulkDiscountRateInput);
     const parsedLunchOrderOffset = parseInt(deliveryForm.lunchOrderCutoffDayOffset, 10);
     const parsedLunchCancelOffset = parseInt(deliveryForm.lunchCancelCutoffDayOffset, 10);
     const parsedDinnerOrderOffset = parseInt(deliveryForm.dinnerOrderCutoffDayOffset, 10);
@@ -792,7 +799,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       vatEnabled: vatEnabled,
       vatRate: isNaN(parsedRate) ? SYSTEM_CONFIG.vatRate : parsedRate,
       vatNumber: vatNumberInput.trim(),
-      dinnerEnabled: dinnerEnabled
+      dinnerEnabled: dinnerEnabled,
+      bulkDiscountEnabled: bulkDiscountEnabled,
+      bulkDiscountRate: isNaN(parsedBulkRate) ? SYSTEM_CONFIG.bulkDiscountRate : parsedBulkRate
     }));
   };
 
@@ -820,6 +829,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setVatRateInput(String(SYSTEM_CONFIG.vatRate));
     setVatNumberInput(SYSTEM_CONFIG.vatNumber);
     setDinnerEnabledLocal(SYSTEM_CONFIG.dinnerEnabled);
+    setBulkDiscountEnabled(SYSTEM_CONFIG.bulkDiscountEnabled);
+    setBulkDiscountRateInput(String(SYSTEM_CONFIG.bulkDiscountRate));
   };
   const openEditCustomer = (c: Customer) => {
     setEditCustomer(c);
@@ -3030,11 +3041,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         )}
 
         {settingsSubTab === 'tax' && (
-          <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6">
+          <div className="bg-white rounded-3xl border border-[#E7E0D0] p-8 shadow-sm space-y-6 animate-fade-in">
             <div>
-              <h3 className="text-base font-black text-slate-900">Offerings & Tax Registry</h3>
+              <h3 className="text-base font-black text-slate-900">Offerings, Tax & Discounts</h3>
               <p className="text-xs text-slate-400 font-medium mt-1">
-                Activate offerings such as dinner menus or configure tax details for receipts/invoices.
+                Configure menu offerings, taxes, and system-wide discounts.
               </p>
             </div>
             <div className="space-y-6">
@@ -3052,6 +3063,35 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <span className={`absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform ${dinnerEnabled ? 'translate-x-5' : ''}`} />
                 </button>
               </div>
+
+              {/* Bulk Week Discount */}
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <div>
+                  <h4 className="text-xs font-black text-slate-900">Bulk Week Discount</h4>
+                  <p className="text-[11px] text-slate-400 font-medium mt-0.5">Enables a weekly discount when a customer purchases a lunch meal for all 5 weekdays.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBulkDiscountEnabled(!bulkDiscountEnabled)}
+                  className={`relative w-12 h-7 rounded-full transition-colors ${bulkDiscountEnabled ? 'bg-primary' : 'bg-slate-200'}`}
+                >
+                  <span className={`absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform ${bulkDiscountEnabled ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
+
+              {bulkDiscountEnabled && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2 pb-4 border-b border-slate-100 animate-in slide-in-from-top-2 duration-200">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Bulk Discount Rate (%)</label>
+                    <input
+                      type="text"
+                      value={bulkDiscountRateInput}
+                      onChange={e => setBulkDiscountRateInput(e.target.value)}
+                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* VAT enabled */}
               <div className="flex items-center justify-between border-b border-slate-100 pb-4">
