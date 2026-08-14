@@ -1246,14 +1246,22 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // second, separate order — so the screen should show that as two visibly
   // distinct groups, not one flat list of meal cards. Grouped chronologically
   // by when each order was placed.
-  const weekOrders = useMemo(() => {
+  // Date sets for each week used to split confirmed orders into two labelled
+  // sections in My Order — "This week" and "Next week".
+  const thisWeekDateSet = useMemo(() => new Set(weekDays.map(d => d.date)), [weekDays]);
+  const nextWeekDateSet = useMemo(() => new Set(nextWeekDays.map(d => d.date)), [nextWeekDays]);
+
+  const buildWeekOrders = (dateSet: Set<string>) => {
     const map = new Map<string, { order: Order; lines: typeof thisWeekLinesWithSeq }>();
-    thisWeekLinesWithSeq.forEach(l => {
+    thisWeekLinesWithSeq.filter(l => dateSet.has(l.item.deliveryDate || '')).forEach(l => {
       if (!map.has(l.order.id)) map.set(l.order.id, { order: l.order, lines: [] });
       map.get(l.order.id)!.lines.push(l);
     });
     return Array.from(map.values()).sort((a, b) => a.order.timestamp.localeCompare(b.order.timestamp));
-  }, [thisWeekLinesWithSeq]);
+  };
+
+  const weekOrders = useMemo(() => buildWeekOrders(thisWeekDateSet), [thisWeekLinesWithSeq, thisWeekDateSet]);
+  const nextWeekOrders = useMemo(() => buildWeekOrders(nextWeekDateSet), [thisWeekLinesWithSeq, nextWeekDateSet]);
 
   // A receipt corresponds to one payment, not to one order or one meal —
   // "Pay order"/"Pay balance" claim several lines under a single generated
@@ -2118,10 +2126,13 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               </div>
             )}
 
-            {weekOrders.length > 0 && (
+            {(weekOrders.length > 0 || nextWeekOrders.length > 0) && (
+              <div className="space-y-6">
+
+              {weekOrders.length > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Confirmed this week</p>
+                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">✅ This week</p>
                   {outstandingTotal > 0 && (
                     <button onClick={openPayBalance} className="text-[10px] font-black uppercase tracking-widest text-primary">Pay balance · {formatCurrency(outstandingTotal)}</button>
                   )}
@@ -2171,9 +2182,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                         <div className="p-4 space-y-4 bg-[#FDFAF4]">
                           {serviceGroups.map(sg => (
                             <div key={sg.service}>
-                              {serviceGroups.length > 1 && (
-                                <p className="text-[10px] font-black uppercase text-accent tracking-widest mb-2">{sg.service === 'Dinner' ? '🌙 Dinner' : '☀️ Lunch'}</p>
-                              )}
+                              <p className="text-[10px] font-black uppercase text-accent tracking-widest mb-2">{sg.service === 'Dinner' ? '🌙 Dinner' : '☀️ Lunch'}</p>
                               <div className="space-y-3">
                                 {sg.days.map(group => {
                                   const locked = isPastCancelCutoff(group.date, sg.service, systemDate);
@@ -2228,6 +2237,100 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     );
                   })}
                 </div>
+              </div>
+              )}
+
+              {nextWeekOrders.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">📅 Next week</p>
+                </div>
+                <div className="space-y-4">
+                  {nextWeekOrders.map(({ order, lines }, gi) => {
+                    const orderPaid = lines.every(l => l.item.paymentStatus === 'Paid');
+                    const orderUnclaimed = lines.filter(l => isUnclaimed(l.item));
+                    const orderUnclaimedTotal = orderUnclaimed.reduce((t, l) => t + l.item.price, 0);
+                    const orderPaymentRefs = new Set(lines.map(l => l.item.paymentReference || `solo-${l.order.id}-${l.item.itemId}-${l.item.deliveryDate}`));
+                    const orderIsOnePayment = orderPaid && orderPaymentRefs.size === 1;
+                    const serviceGroups = groupByOrderServiceDay(lines)[0]?.services || [];
+                    return (
+                      <div key={order.id} className="bg-white rounded-2xl border border-[#E7E0D0] overflow-hidden">
+                        <div className="px-4 py-3 bg-[#F4EFE4] flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">{gi === 0 ? 'Your order' : `Additional order ${gi + 1}`} · {lines.length} meal{lines.length !== 1 ? 's' : ''}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5">Placed {new Date(order.timestamp).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</p>
+                          </div>
+                          {orderIsOnePayment ? (
+                            <button onClick={() => openReceipt(lines[0])} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success flex items-center gap-1"><Receipt className="size-3" /> Paid · Receipt</button>
+                          ) : orderPaid ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success">Paid</span>
+                          ) : orderUnclaimed.length > 0 ? (
+                            <button onClick={() => openPayOrder(lines)} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger">Pay order · {formatCurrency(orderUnclaimedTotal)}</button>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-warning/10 text-warning">Awaiting confirmation</span>
+                          )}
+                        </div>
+                        <div className="p-4 space-y-4 bg-[#FDFAF4]">
+                          {serviceGroups.map(sg => (
+                            <div key={sg.service}>
+                              <p className="text-[10px] font-black uppercase text-accent tracking-widest mb-2">{sg.service === 'Dinner' ? '🌙 Dinner' : '☀️ Lunch'}</p>
+                              <div className="space-y-3">
+                                {sg.days.map(group => {
+                                  const locked = isPastCancelCutoff(group.date, sg.service, systemDate);
+                                  return (
+                                    <div key={group.date} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
+                                      <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                                        <p className="text-[10px] font-black uppercase text-primary tracking-widest">{group.label}</p>
+                                        {locked && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase">🔒 Locked</span>}
+                                      </div>
+                                      <div className="space-y-3">
+                                        {group.items.map((line, idx) => {
+                                          const rating = ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`];
+                                          const isCompleted = line.item.status === 'Completed';
+                                          const isActive = line.item.status === 'Active';
+                                          const isCancelled = line.item.status === 'Cancelled';
+                                          const payInfo = paymentStatusInfo(line.item);
+                                          const { detail, person } = splitNotesTag(line.item.notes);
+                                          return (
+                                            <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
+                                              <div className="flex items-start justify-between gap-3 mb-1">
+                                                <p className={`text-sm font-bold min-w-0 ${isCancelled ? 'text-slate-400 line-through' : 'text-slate-900'}`}>{line.item.name}</p>
+                                                <span className={`text-sm font-black shrink-0 ${isCancelled ? 'text-slate-400 line-through' : 'text-slate-900'}`}>Rs {line.item.price}</span>
+                                              </div>
+                                              {detail && <p className={`text-[11px] mb-1.5 ${isCancelled ? 'text-slate-300 line-through' : 'text-slate-400'}`}>{detail}</p>}
+                                              <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                                                {line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {line.seq + 1}</span>}
+                                                <StatusBadge label={payInfo.label} tone={payInfo.tone} />
+                                                <StatusBadge label={line.item.status || ''} tone={isCancelled ? 'danger' : 'slate'} />
+                                                {person && <PersonTag name={person} />}
+                                              </div>
+                                              <div className="flex gap-2">
+                                                {line.item.paymentStatus === 'Paid' && <button onClick={() => openReceipt(line)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Receipt className="size-3" /> Receipt</button>}
+                                                {isUnclaimed(line.item) && !isCancelled && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
+                                                {isActive && !locked && <button onClick={() => openEditConfirmed(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest">Edit</button>}
+                                                {isActive && !locked && <button onClick={() => handleCancel(line)} disabled={cancellingItemId === line.item._fsItemId} className="flex-1 py-2 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">{cancellingItemId === line.item._fsItemId ? 'Cancelling...' : 'Cancel'}</button>}
+                                                {isActive && locked && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-slate-400" title="The cutoff has passed — contact us for changes.">Contact us to change</span>}
+                                                {isCompleted && !rating && <button onClick={() => openRating(line)} className="flex-1 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Star className="size-3" /> Rate</button>}
+                                                {rating && <span className="flex-1 py-2 text-center text-[10px] font-black uppercase text-primary">{rating.stars}★ sent</span>}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              )}
+
               </div>
             )}
 

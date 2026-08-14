@@ -406,6 +406,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // another day's chip to peek ahead. null = "follow today".
   const [deliveryDayOverride, setDeliveryDayOverride] = useState<WeekdayKey | null>(null);
   const [showPaidHistory, setShowPaidHistory] = useState(false);
+  // Orders by Dish filter state
+  const [ordersWeekFilter, setOrdersWeekFilter] = useState<'this' | 'next'>('this');
+  const [ordersDayFilter, setOrdersDayFilter] = useState<string | 'all'>('all');
+  const [ordersServiceFilter, setOrdersServiceFilter] = useState<'all' | 'Lunch' | 'Dinner'>('all');
 
   // VAT can only legally be charged once BonManzE is actually VAT-registered
   // with the MRA (Mauritius's registration threshold is MUR 3M/yr turnover,
@@ -909,11 +913,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Keyed by service + name (not just name) — Lunch and Dinner can each have
   // a dish that happens to share a name, and they're cooked/delivered as
   // separate batches, so they must never be summed together here.
+  const allOrdersDays = useMemo(() => [...weekDays, ...nextWeekDays], [weekDays, nextWeekDays]);
+  const allOrdersDateKeys = useMemo(() => new Set(allOrdersDays.map(d => d.date)), [allOrdersDays]);
+
   const dishesByDay = useMemo(() => {
     const days: Record<string, Record<string, { qty: number; revenue: number; itemId: string; name: string; service: Service }>> = {};
     lines.forEach(({ item }) => {
       const day = item.deliveryDate || '';
-      if (!weekDateKeys.has(day)) return;
+      if (!allOrdersDateKeys.has(day)) return;
       const service: Service = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
       const key = `${service}::${item.name}`;
       if (!days[day]) days[day] = {};
@@ -922,7 +929,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       days[day][key].revenue += item.qty * item.price;
     });
     return days;
-  }, [lines, weekDateKeys]);
+  }, [lines, allOrdersDateKeys]);
+
+  // Active days for the orders tab, based on the week filter
+  const ordersDaysForWeek = useMemo(() => ordersWeekFilter === 'next' ? nextWeekDays : weekDays, [ordersWeekFilter, weekDays, nextWeekDays]);
+
+  // Day cards to render in orders tab: filtered by day if a specific day is chosen
+  const ordersVisibleDays = useMemo(() => {
+    const source = ordersWeekFilter === 'next' ? nextWeekDays : weekDays;
+    const ordered = ordersWeekFilter === 'this'
+      ? [source.find(d => d.key === todayKey), ...source.filter(d => d.key !== todayKey)].filter(Boolean) as typeof weekDays
+      : source;
+    if (ordersDayFilter === 'all') return ordered;
+    return ordered.filter(d => d.date === ordersDayFilter);
+  }, [ordersWeekFilter, weekDays, nextWeekDays, todayKey, ordersDayFilter]);
 
   // Today's card leads the list — the most operationally urgent day belongs
   // first, not buried in Monday-to-Friday order.
@@ -2804,9 +2824,65 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
           {tab === 'orders' && (
             <div className="space-y-4">
-              {orderedWeekDays.map(d => {
-                const dishes = dishesByDay[d.date];
+              {/* Filter bar */}
+              <div className="bg-white border border-[#E7E0D0] rounded-2xl p-4 shadow-sm space-y-3">
+                {/* Week toggle */}
+                <div className="flex gap-1 bg-slate-100 rounded-xl p-1">
+                  {(['this', 'next'] as const).map(w => (
+                    <button
+                      key={w}
+                      onClick={() => { setOrdersWeekFilter(w); setOrdersDayFilter('all'); }}
+                      className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        ordersWeekFilter === w ? 'bg-primary text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      {w === 'this' ? 'This week' : 'Next week'}
+                    </button>
+                  ))}
+                </div>
+                {/* Day filter */}
+                <div className="flex gap-1 overflow-x-auto">
+                  <button
+                    onClick={() => setOrdersDayFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${
+                      ordersDayFilter === 'all' ? 'bg-slate-700 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                    }`}
+                  >All days</button>
+                  {ordersDaysForWeek.map(d => (
+                    <button
+                      key={d.key}
+                      onClick={() => setOrdersDayFilter(d.date)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${
+                        ordersDayFilter === d.date ? 'bg-slate-700 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                      }`}
+                    >{d.short}{d.key === todayKey ? ' · Today' : ''}</button>
+                  ))}
+                </div>
+                {/* Service filter — only shown when Dinner is enabled */}
+                {dinnerEnabled && (
+                  <div className="flex gap-1 bg-slate-100 rounded-xl p-1">
+                    {(['all', 'Lunch', 'Dinner'] as const).map(s => (
+                      <button
+                        key={s}
+                        onClick={() => setOrdersServiceFilter(s)}
+                        className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                          ordersServiceFilter === s ? 'bg-accent text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'
+                        }`}
+                      >
+                        {s === 'all' ? 'All services' : s === 'Lunch' ? '☀️ Lunch' : '🌙 Dinner'}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {ordersVisibleDays.map(d => {
+                const allDishes = dishesByDay[d.date];
                 const isToday = d.key === todayKey;
+                // Apply service filter
+                const dishes = allDishes && ordersServiceFilter !== 'all'
+                  ? Object.fromEntries(Object.entries(allDishes).filter(([, v]) => (v as { service: string }).service === ordersServiceFilter))
+                  : allDishes;
                 return (
                   <div key={d.key} className={`bg-white rounded-3xl shadow-sm p-6 ${isToday ? 'border-2 border-primary/40 shadow-[0_8px_30px_rgba(62,125,34,0.06)]' : 'border border-[#E7E0D0]'}`}>
                     <div className="flex items-center gap-2 mb-3">
@@ -2814,7 +2890,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       {isToday && <span className="px-2 py-0.5 rounded bg-primary text-white text-[9px] font-black uppercase tracking-widest animate-pulse">Cook today</span>}
                     </div>
                     {!dishes || Object.keys(dishes).length === 0 ? (
-                      <p className="text-xs text-slate-400 font-bold">No orders yet for this day.</p>
+                      <p className="text-xs text-slate-400 font-bold">No orders yet for this day{ordersServiceFilter !== 'all' ? ` (${ordersServiceFilter})` : ''}.</p>
                     ) : (
                       <div className="divide-y divide-slate-100">
                         {Object.entries(dishes).map(([key, agg]) => {
@@ -2823,7 +2899,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             <div key={key} className="flex items-center gap-3 py-2.5">
                               <img src={dishPhotoFor(itemId)} alt={name} className="size-9 rounded-lg object-cover shrink-0" />
                               <span className="text-sm font-bold text-slate-700 flex-1 min-w-0 truncate">{name}</span>
-                              {service === 'Dinner' && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Dinner</span>}
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase shrink-0 ${service === 'Dinner' ? 'bg-accent/10 text-accent' : 'bg-primary/10 text-primary'}`}>{service === 'Dinner' ? '🌙 Dinner' : '☀️ Lunch'}</span>
                               <span className="text-xs font-black text-slate-900 shrink-0">{qty}x</span>
                               <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
                             </div>
