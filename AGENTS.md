@@ -365,3 +365,40 @@ Previously, cancelled `OrderItem`s were filtered out of every derived list (`thi
 * **Payment lifecycle**: Customer → selects method → `submitPaymentClaim` (sets `paymentMethodName`/`paymentReference`, status stays `'Pending'`) → Operations confirms → `updateOrderItemsPayment` (sets `paymentStatus: 'Paid'`). Only Operations can set `Paid`. A cancelled prepaid item becomes `paymentStatus: 'Refunded'` and `storeCredit` is incremented on the customer document (transactionally, in the Cloud Function).
 * **Testing date override**: The Operator Console has a date picker in the header that writes `MOCK_TODAY` to `localStorage`. Cloud Functions respect this during emulator runs only (`FUNCTIONS_EMULATOR === 'true'`) via the `systemDate` payload field. In production, the functions always use real Mauritius wall-clock time (`Indian/Mauritius` timezone via `Intl.DateTimeFormat`).
 * **Commits**: `aafab71` (service cutoffs + cancelled items), `b25fc2c` (settings save fix) — both pushed to `origin/main`.
+
+## 2026-08-14: Antigravity — Week-based Customer Order segregation, Always-on service tags, Operations Filters and service grouping
+
+This session implemented customer app UX feedback and added week/day/service filtering to the Operations Console.
+
+### What was done
+
+**1. Customer App: My Order Week-Based Segregation (`modules/CustomerPortal.tsx`)**
+* Split confirmed customer orders into distinct **This week** and **📅 Next week** visual blocks.
+* If a customer has no orders scheduled for next week, the next week section remains hidden.
+
+**2. Customer App: Always-On Service Tags (`modules/CustomerPortal.tsx`)**
+* Removed the conditional check that only showed the `Lunch` or `Dinner` tags when multiple services existed in the same order. Confirmed orders now always display their respective service slots (`Lunch` or `Dinner`) clearly.
+
+**3. Operations: Orders by Dish Service Grouping (`modules/Operations.tsx`)**
+* Rebuilt the *Orders by Dish* card layout to group items by service slot per day. Dishes for a selected day are now grouped under a `☀️ Lunch` or `🌙 Dinner` sub-card within the main day card rather than listed flat.
+
+**4. Operations: Orders by Dish filters (`modules/Operations.tsx`)**
+* Added filter states: `ordersWeekFilter` ('this'/'next'), `ordersDayFilter` (specific date or 'all'), and `ordersServiceFilter` ('all'/'Lunch'/'Dinner').
+* Implemented a filter bar above the dishes grid.
+* Extended the aggregation logic of `dishesByDay` to support both this week and next week dates (mapping `allOrdersDays`).
+
+**5. Operations: Delivery List Filters & Service Grouping (`modules/Operations.tsx`)**
+* Extended the `drops` calculation to cover the next week (`allOrdersDateKeys`).
+* Added filter states: `deliveryWeekFilter` ('this'/'next') and `deliveryServiceFilter` ('all'/'Lunch'/'Dinner').
+* Built a new filter card at the top of the Delivery tab matching the Orders tab styling, featuring:
+  * A week toggle ("This week" / "Next week").
+  * Active day picker pills (which shift automatically to Monday-Friday dates of the selected week).
+  * A service filter row (when Dinner is enabled in the configuration).
+* Rebuilt the list to group the day's drops into a `☀️ Lunch` section and a `🌙 Dinner` section (each displaying drop counts), grouping orders dynamically under their service slots.
+* Fixed address retrieval logic: resolved customer's primary address `cust?.addresses[0]` directly, replacing the legacy invalid typescript reference to the non-existent `deliveryAddressId`.
+
+### Key Architecture Notes
+* **Operations Filter States**: Orders tab uses `ordersWeekFilter`/`ordersDayFilter`/`ordersServiceFilter`. Delivery tab uses `deliveryWeekFilter`/`deliveryDayOverride` (which determines `activeDeliveryDayDate` inside `deliveryDaysForWeek` dynamically)/`deliveryServiceFilter`.
+* **TypeScript Compilation**: All code verified with `npx tsc --noEmit` and resolves successfully with zero errors.
+* **Commits**: `3465d86` (orders filters + week split), `864f8a3` (delivery list filters, grouping by service inside days, address fix) — both pushed to `origin/main`.
+
