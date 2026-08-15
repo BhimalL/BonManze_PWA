@@ -248,11 +248,12 @@ interface MealSelection {
   saladId: string;
   beverageId: string;
   dessertId: string;
-  note: string;
+  note: string;        // Who's this meal for
+  instructions?: string; // Custom instructions
 }
 
 const emptySelection = (curryId: string): MealSelection => ({
-  curryId, baseId: '', dhalId: '', saladId: '', beverageId: 'none', dessertId: 'none', note: ''
+  curryId, baseId: '', dhalId: '', saladId: '', beverageId: 'none', dessertId: 'none', note: '', instructions: ''
 });
 
 interface WeekDay { key: WeekdayKey; date: string; label: string; short: string; }
@@ -310,6 +311,7 @@ const mealNotesLine = (m: MealSelection): string => {
   if (bv) parts.push(bv.name);
   const ds = m.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === m.dessertId) : null;
   if (ds) parts.push(ds.name);
+  if (m.instructions?.trim()) parts.push(`req: ${m.instructions.trim()}`);
   if (m.note.trim()) parts.push(`for ${m.note.trim()}`);
   return parts.join(' · ');
 };
@@ -336,14 +338,25 @@ const mealExtrasLabel = (m: MealSelection): string => mealExtrasList(m).join(' �
 // as the trailing segment of the flattened `notes` string (mealNotesLine
 // above) — OrderItem has no separate field for it. This pulls that segment
 // back out so it can render as its own tag instead of buried in prose.
-const splitNotesTag = (notes?: string): { detail: string; person: string | null } => {
-  if (!notes) return { detail: '', person: null };
+const splitNotesTag = (notes?: string): { detail: string; person: string | null; instructions: string | null } => {
+  if (!notes) return { detail: '', person: null, instructions: null };
   const segments = notes.split(' · ');
-  const last = segments[segments.length - 1];
-  if (last && last.startsWith('for ')) {
-    return { detail: segments.slice(0, -1).join(' · '), person: last.slice(4) };
-  }
-  return { detail: notes, person: null };
+  let person: string | null = null;
+  let instructions: string | null = null;
+  const details: string[] = [];
+
+  segments.forEach(seg => {
+    const s = seg.trim();
+    if (s.startsWith('for ')) {
+      person = s.slice(4);
+    } else if (s.startsWith('req: ')) {
+      instructions = s.slice(5);
+    } else {
+      details.push(s);
+    }
+  });
+
+  return { detail: details.join(' · '), person, instructions };
 };
 
 // A confirmed OrderItem only stores its curry id (itemId) plus a flattened
@@ -353,7 +366,7 @@ const splitNotesTag = (notes?: string): { detail: string; person: string | null 
 // each name in the notes back against the known option lists — reliable as
 // long as those names stay unique across categories, which they are today.
 const reconstructSelection = (item: OrderItem): MealSelection => {
-  const { detail, person } = splitNotesTag(item.notes);
+  const { detail, person, instructions } = splitNotesTag(item.notes);
   const segments = detail.split(' · ').map(s => s.trim()).filter(Boolean);
   const baseMatch = MEAL_BASES.find(b => segments.includes(b.name));
   const dhalMatch = MEAL_DHALS.find(x => segments.includes(x.name));
@@ -367,7 +380,8 @@ const reconstructSelection = (item: OrderItem): MealSelection => {
     saladId: saladMatch?.id || 'none',
     beverageId: bevMatch?.id || 'none',
     dessertId: desMatch?.id || 'none',
-    note: person || ''
+    note: person || '',
+    instructions: instructions || ''
   };
 };
 
@@ -2195,7 +2209,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                           <div className="min-w-0">
                             <span className="font-bold text-slate-700 block">{mealSummaryLabel(m, d.key, activeService, activeWeekStart)}</span>
                             {mealExtrasLabel(m) && <span className="text-[11px] text-slate-400 block">{mealExtrasLabel(m)}</span>}
-                            {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
+                            <div className="flex flex-wrap gap-1.5 mt-1">
+                              {m.note.trim() && <PersonTag name={m.note.trim()} />}
+                              {m.instructions?.trim() && <InstructionsTag text={m.instructions.trim()} />}
+                            </div>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="font-black text-primary">Rs {mealPrice(m, d.key, activeService, activeWeekStart)}</span>
@@ -2238,7 +2255,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                 <div className="min-w-0">
                                   <p className="text-xs font-bold text-slate-700">{mealSummaryLabel(m, d.key, service, week.start)}</p>
                                   {mealExtrasLabel(m) && <p className="text-[11px] text-slate-400 mt-0.5">{mealExtrasLabel(m)}</p>}
-                                  {m.note.trim() && <div className="mt-1"><PersonTag name={m.note.trim()} /></div>}
+                                  <div className="flex flex-wrap gap-1.5 mt-1">
+                                    {m.note.trim() && <PersonTag name={m.note.trim()} />}
+                                    {m.instructions?.trim() && <InstructionsTag text={m.instructions.trim()} />}
+                                  </div>
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0">
                                   <span className="font-black text-slate-900 text-xs">Rs {mealPrice(m, d.key, service, week.start)}</span>
@@ -2350,7 +2370,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                           const isActive = line.item.status === 'Active';
                                           const isCancelled = line.item.status === 'Cancelled';
                                           const payInfo = paymentStatusInfo(line.item);
-                                          const { detail, person } = splitNotesTag(line.item.notes);
+                                          const { detail, person, instructions } = splitNotesTag(line.item.notes);
                                           return (
                                             <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
                                               <div className="flex items-start justify-between gap-3 mb-1">
@@ -2363,6 +2383,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                                 <StatusBadge label={payInfo.label} tone={payInfo.tone} />
                                                 <StatusBadge label={line.item.status || ''} tone={isCancelled ? 'danger' : 'slate'} />
                                                 {person && <PersonTag name={person} />}
+                                                {instructions && <InstructionsTag text={instructions} />}
                                               </div>
                                               <div className="flex gap-2">
                                                 {line.item.paymentStatus === 'Paid' && <button onClick={() => openReceipt(line)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Receipt className="size-3" /> Receipt</button>}
@@ -2463,7 +2484,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                           const isActive = line.item.status === 'Active';
                                           const isCancelled = line.item.status === 'Cancelled';
                                           const payInfo = paymentStatusInfo(line.item);
-                                          const { detail, person } = splitNotesTag(line.item.notes);
+                                          const { detail, person, instructions } = splitNotesTag(line.item.notes);
                                           return (
                                             <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
                                               <div className="flex items-start justify-between gap-3 mb-1">
@@ -2476,6 +2497,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                                 <StatusBadge label={payInfo.label} tone={payInfo.tone} />
                                                 <StatusBadge label={line.item.status || ''} tone={isCancelled ? 'danger' : 'slate'} />
                                                 {person && <PersonTag name={person} />}
+                                                {instructions && <InstructionsTag text={instructions} />}
                                               </div>
                                               <div className="flex gap-2">
                                                 {line.item.paymentStatus === 'Paid' && <button onClick={() => openReceipt(line)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Receipt className="size-3" /> Receipt</button>}
@@ -2884,15 +2906,27 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   {(!selectedCurry || dishDessertApplicable(selectedCurry)) && (
                     <ChipRow label="🍮 Dessert" options={filterAddOnOptions(MEAL_DESSERTS, selectedCurry?.dessertOptionIds)} selected={builder.sel.dessertId} onSelect={id => setBuilderSel({ dessertId: id })} noneLabel="None" showPrice />
                   )}
-                  <div className="rounded-2xl border border-[#E7E0D0] bg-[#FBF8F1] p-4">
-                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">🧑 Who's this meal for? (optional)</p>
-                    <input
-                      value={builder.sel.note}
-                      onChange={e => setBuilderSel({ note: e.target.value })}
-                      maxLength={40}
-                      placeholder="e.g. Priya"
-                      className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-white"
-                    />
+                  <div className="grid grid-cols-1 gap-3 rounded-2xl border border-[#E7E0D0] bg-[#FBF8F1] p-4">
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">🧑 Who's this meal for? (optional)</p>
+                      <input
+                        value={builder.sel.note}
+                        onChange={e => setBuilderSel({ note: e.target.value })}
+                        maxLength={40}
+                        placeholder="e.g. Priya"
+                        className="w-full px-4 py-2.5 rounded-xl border border-[#E7E0D0] text-xs font-semibold outline-none focus:ring-2 focus:ring-primary/20 bg-white placeholder-slate-400"
+                      />
+                    </div>
+                    <div className="space-y-1 pt-3 border-t border-[#E7E0D0]/50">
+                      <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">🍳 Custom instructions / Prep requests? (optional)</p>
+                      <input
+                        value={builder.sel.instructions || ''}
+                        onChange={e => setBuilderSel({ instructions: e.target.value })}
+                        maxLength={80}
+                        placeholder="e.g. Less spicy, no dhal, allergy info"
+                        className="w-full px-4 py-2.5 rounded-xl border border-[#E7E0D0] text-xs font-semibold outline-none focus:ring-2 focus:ring-primary/20 bg-white placeholder-slate-400"
+                      />
+                    </div>
                   </div>
                 </div>
               </SectionCard>
@@ -3261,6 +3295,12 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 const PersonTag: React.FC<{ name: string }> = ({ name }) => (
   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent/10 text-accent text-[10px] font-bold shrink-0">
     <UserIcon className="size-2.5" /> {name}
+  </span>
+);
+
+const InstructionsTag: React.FC<{ text: string }> = ({ text }) => (
+  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-warning/10 text-[#B4703A] border border-warning/10 text-[10px] font-black uppercase tracking-wide shrink-0">
+    🍳 {text}
   </span>
 );
 

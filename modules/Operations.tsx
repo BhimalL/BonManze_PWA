@@ -128,15 +128,38 @@ import {
   removeIconEntry
 } from './store';
 
-const splitNotesTag = (notes?: string): { detail: string; person: string | null } => {
-  if (!notes) return { detail: '', person: null };
+const splitNotesTag = (notes?: string): { detail: string; person: string | null; instructions: string | null } => {
+  if (!notes) return { detail: '', person: null, instructions: null };
   const segments = notes.split(' · ');
-  const last = segments[segments.length - 1];
-  if (last && last.startsWith('for ')) {
-    return { detail: segments.slice(0, -1).join(' · '), person: last.slice(4) };
-  }
-  return { detail: notes, person: null };
+  let person: string | null = null;
+  let instructions: string | null = null;
+  const details: string[] = [];
+
+  segments.forEach(seg => {
+    const s = seg.trim();
+    if (s.startsWith('for ')) {
+      person = s.slice(4);
+    } else if (s.startsWith('req: ')) {
+      instructions = s.slice(5);
+    } else {
+      details.push(s);
+    }
+  });
+
+  return { detail: details.join(' · '), person, instructions };
 };
+
+const InstructionsTag = ({ text }: { text: string }) => (
+  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-warning/10 text-[#B4703A] border border-warning/15 text-[9px] font-black uppercase shrink-0">
+    🍳 {text}
+  </span>
+);
+
+const PersonTag = ({ name }: { name: string }) => (
+  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-bold shrink-0">
+    👤 {name}
+  </span>
+);
 
 const formatWeekStartForDropdown = (dateStr: string): string => {
   if (!dateStr) return '';
@@ -1030,16 +1053,34 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const allOrdersDateKeys = useMemo(() => new Set(allOrdersDays.map(d => d.date)), [allOrdersDays]);
 
   const dishesByDay = useMemo(() => {
-    const days: Record<string, Record<string, { qty: number; revenue: number; itemId: string; name: string; service: Service }>> = {};
+    const days: Record<string, Record<string, {
+      qty: number;
+      revenue: number;
+      itemId: string;
+      name: string;
+      service: Service;
+      requests: { qty: number; person: string | null; instructions: string | null }[];
+    }>> = {};
     lines.forEach(({ item }) => {
       const day = item.deliveryDate || '';
       if (!allOrdersDateKeys.has(day)) return;
       const service: Service = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
       const key = `${service}::${item.name}`;
       if (!days[day]) days[day] = {};
-      if (!days[day][key]) days[day][key] = { qty: 0, revenue: 0, itemId: item.itemId, name: item.name, service };
+      if (!days[day][key]) {
+        days[day][key] = { qty: 0, revenue: 0, itemId: item.itemId, name: item.name, service, requests: [] };
+      }
       days[day][key].qty += item.qty;
       days[day][key].revenue += item.qty * item.price;
+
+      const { person, instructions } = splitNotesTag(item.notes);
+      if (person || instructions) {
+        days[day][key].requests.push({
+          qty: item.qty,
+          person,
+          instructions
+        });
+      }
     });
     return days;
   }, [lines, allOrdersDateKeys]);
@@ -3308,7 +3349,22 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       </td>
                       <td className="px-5 py-3">
                         <p className="text-slate-900">{r.qty}x {r.itemName}</p>
-                        {r.notes && <p className="text-[9px] text-slate-400 font-normal mt-0.5 leading-snug">↳ {r.notes}</p>}
+                        {r.notes && (
+                          <div className="space-y-1 mt-0.5">
+                            {(() => {
+                              const { detail, person, instructions } = splitNotesTag(r.notes);
+                              return (
+                                <>
+                                  {detail && <p className="text-[9px] text-slate-400 font-normal leading-snug">↳ {detail}</p>}
+                                  <div className="flex flex-wrap gap-1 mt-0.5">
+                                    {person && <PersonTag name={person} />}
+                                    {instructions && <InstructionsTag text={instructions} />}
+                                  </div>
+                                </>
+                              );
+                            })()}
+                          </div>
+                        )}
                       </td>
                       <td className="px-5 py-3 text-right">
                         Rs {r.price}
@@ -4085,13 +4141,26 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">☀️ Lunch</p>
                             <div className="divide-y divide-primary/10">
                               {lunchDishes.map(([key, agg]) => {
-                                const { qty, revenue, itemId, name } = agg as { qty: number; revenue: number; itemId: string; name: string; service: string };
+                                const { qty, revenue, itemId, name, requests } = agg as { qty: number; revenue: number; itemId: string; name: string; service: string; requests: any[] };
                                 return (
-                                  <div key={key} className="flex items-center gap-3 py-2.5">
-                                    <img src={dishPhotoFor(itemId)} alt={name} className="size-9 rounded-lg object-cover shrink-0" />
-                                    <span className="text-sm font-bold text-slate-700 flex-1 min-w-0 truncate">{name}</span>
-                                    <span className="text-xs font-black text-slate-900 shrink-0">{qty}x</span>
-                                    <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
+                                  <div key={key} className="py-2.5 space-y-1">
+                                    <div className="flex items-center gap-3">
+                                      <img src={dishPhotoFor(itemId)} alt={name} className="size-9 rounded-lg object-cover shrink-0" />
+                                      <span className="text-sm font-bold text-slate-700 flex-1 min-w-0 truncate">{name}</span>
+                                      <span className="text-xs font-black text-slate-900 shrink-0">{qty}x</span>
+                                      <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
+                                    </div>
+                                    {requests.length > 0 && (
+                                      <div className="pl-12 flex flex-col gap-1">
+                                        {requests.map((r, rIdx) => (
+                                          <div key={rIdx} className="flex items-center gap-1.5 flex-wrap text-[10px]">
+                                            <span className="text-slate-400 font-bold">{r.qty}x:</span>
+                                            {r.instructions && <InstructionsTag text={r.instructions} />}
+                                            {r.person && <PersonTag name={r.person} />}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -4103,13 +4172,26 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             <p className="text-[10px] font-black uppercase text-accent tracking-widest mb-3">🌙 Dinner</p>
                             <div className="divide-y divide-accent/10">
                               {dinnerDishes.map(([key, agg]) => {
-                                const { qty, revenue, itemId, name } = agg as { qty: number; revenue: number; itemId: string; name: string; service: string };
+                                const { qty, revenue, itemId, name, requests } = agg as { qty: number; revenue: number; itemId: string; name: string; service: string; requests: any[] };
                                 return (
-                                  <div key={key} className="flex items-center gap-3 py-2.5">
-                                    <img src={dishPhotoFor(itemId)} alt={name} className="size-9 rounded-lg object-cover shrink-0" />
-                                    <span className="text-sm font-bold text-slate-700 flex-1 min-w-0 truncate">{name}</span>
-                                    <span className="text-xs font-black text-slate-900 shrink-0">{qty}x</span>
-                                    <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
+                                  <div key={key} className="py-2.5 space-y-1">
+                                    <div className="flex items-center gap-3">
+                                      <img src={dishPhotoFor(itemId)} alt={name} className="size-9 rounded-lg object-cover shrink-0" />
+                                      <span className="text-sm font-bold text-slate-700 flex-1 min-w-0 truncate">{name}</span>
+                                      <span className="text-xs font-black text-slate-900 shrink-0">{qty}x</span>
+                                      <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
+                                    </div>
+                                    {requests.length > 0 && (
+                                      <div className="pl-12 flex flex-col gap-1">
+                                        {requests.map((r, rIdx) => (
+                                          <div key={rIdx} className="flex items-center gap-1.5 flex-wrap text-[10px]">
+                                            <span className="text-slate-400 font-bold">{r.qty}x:</span>
+                                            {r.instructions && <InstructionsTag text={r.instructions} />}
+                                            {r.person && <PersonTag name={r.person} />}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -4204,9 +4286,21 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             {drop.paymentStatus === 'Paid' ? 'Paid' : 'Unpaid'}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-500 font-medium">
-                          {drop.items.map(i => `${i.qty}x ${i.name}`).join(', ')}
-                        </p>
+                        <div className="space-y-1.5 pt-1">
+                          {drop.items.map((item, idx) => {
+                            const { detail, person, instructions } = splitNotesTag(item.notes);
+                            return (
+                              <div key={idx} className="text-xs text-slate-700 font-medium">
+                                <span className="font-bold text-slate-900">{item.qty}x {item.name}</span>
+                                {detail && <span className="text-slate-400 text-[11px] block pl-2">↳ {detail}</span>}
+                                <div className="flex flex-wrap gap-1.5 mt-1 pl-2">
+                                  {person && <PersonTag name={person} />}
+                                  {instructions && <InstructionsTag text={instructions} />}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                         {addr ? (
                           <p className="text-[11px] text-slate-400 font-bold flex items-center gap-1.5 leading-tight">
                             <MapPin className="size-3.5 shrink-0 text-slate-300" />
@@ -4296,7 +4390,21 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
                                 {drop.slot && <span className="text-[10px] font-bold text-slate-400">{drop.slot}</span>}
                               </div>
-                              <p className="text-xs text-slate-500 font-medium">{drop.items.map(i => `${i.qty}x ${i.name}`).join(', ')}</p>
+                              <div className="space-y-1.5 pt-1">
+                                {drop.items.map((item, idx) => {
+                                  const { detail, person, instructions } = splitNotesTag(item.notes);
+                                  return (
+                                    <div key={idx} className="text-xs text-slate-700 font-medium">
+                                      <span className="font-bold text-slate-900">{item.qty}x {item.name}</span>
+                                      {detail && <span className="text-slate-400 text-[11px] block pl-2">↳ {detail}</span>}
+                                      <div className="flex flex-wrap gap-1.5 mt-1 pl-2">
+                                        {person && <PersonTag name={person} />}
+                                        {instructions && <InstructionsTag text={instructions} />}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                               <p className="text-sm font-black text-primary mt-1">{formatCurrency(drop.total)}</p>
                               {drop.claimedMethod && (
                                 <p className="text-[11px] text-[#B4703A] font-bold mt-1 bg-[#B4703A]/5 px-2.5 py-1 rounded-lg border border-[#B4703A]/10 inline-block">
@@ -4771,7 +4879,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider mb-2">Items</p>
                 <div className="space-y-2.5">
                   {activePrintDrop.items.map((item, idx) => {
-                    const { detail, person } = splitNotesTag(item.notes);
+                    const { detail, person, instructions } = splitNotesTag(item.notes);
                     return (
                       <div key={idx} className="space-y-0.5">
                         <div className="flex justify-between font-bold text-slate-950">
@@ -4780,6 +4888,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         </div>
                         {detail && <p className="text-[10px] text-slate-500 leading-tight pl-2">↳ {detail}</p>}
                         {person && <p className="text-[10px] font-bold text-accent pl-2">👤 For {person}</p>}
+                        {instructions && <p className="text-[10px] font-bold text-[#B4703A] pl-2">🍳 Req: {instructions}</p>}
                       </div>
                     );
                   })}
