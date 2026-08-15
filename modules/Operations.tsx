@@ -3979,13 +3979,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               )}
             </div>
           )}
-          <button
-            onClick={() => setSidebarCollapsed(c => !c)}
-            className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors shrink-0"
-            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {sidebarCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {!sidebarCollapsed && (
+              <button onClick={handleStaffSignOut} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-900 transition-colors" title="Sign Out">
+                <LogOut className="size-4" />
+              </button>
+            )}
+            <button
+              onClick={() => setSidebarCollapsed(c => !c)}
+              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {sidebarCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+            </button>
+          </div>
         </div>
 
         {/* Navigation Section */}
@@ -4737,14 +4744,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       {editCustomer && (
         <Portal>
           <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-300">
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between shrink-0">
                 <h2 className="text-lg font-black text-slate-900">Edit Customer CRM</h2>
                 <button onClick={() => setEditCustomer(null)} className="p-2 text-slate-400 hover:text-danger">
                   <X className="size-5" />
                 </button>
               </div>
-              <div className="p-6 space-y-6">
+              <div className="p-6 space-y-6 overflow-y-auto flex-1">
                 <div>
                   <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-2">Customer Profile</p>
                   <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100 animate-fade-in">
@@ -4869,7 +4876,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   </div>
                 </div>
               </div>
-              <div className="p-6 border-t border-slate-100 flex items-center justify-end gap-3 bg-slate-50">
+              <div className="p-6 border-t border-slate-100 flex items-center justify-end gap-3 bg-slate-50 shrink-0">
                 <button
                   onClick={() => setEditCustomer(null)}
                   className="px-4 py-2 text-slate-500 hover:text-slate-800 text-xs font-bold transition-all cursor-pointer"
