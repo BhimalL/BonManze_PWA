@@ -316,6 +316,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // button needs a disabled/loading state and a failure needs to surface
   // somewhere rather than silently doing nothing.
   const [pendingDeliveryKey, setPendingDeliveryKey] = useState<string | null>(null);
+  const [pendingDispatchKey, setPendingDispatchKey] = useState<string | null>(null);
+  const [pendingCookingKey, setPendingCookingKey] = useState<string | null>(null);
   const [pendingPaymentKey, setPendingPaymentKey] = useState<string | null>(null);
   const [opsActionError, setOpsActionError] = useState<string | null>(null);
   const [activePrintDrop, setActivePrintDrop] = useState<DropTask | null>(null);
@@ -1253,6 +1255,58 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setOpsActionError('Mark Delivered failed — please try again.');
     } finally {
       setPendingDeliveryKey(null);
+    }
+  };
+
+  const handleStartCooking = async (dateStr: string, serviceSlot: 'Lunch' | 'Dinner') => {
+    const targets: { orderId: string; itemId: string }[] = [];
+    lines.forEach(({ order, item }) => {
+      if (item.deliveryDate === dateStr) {
+        const itemService = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
+        if (itemService === serviceSlot && (item.status === 'Active' || !item.status) && item._fsItemId) {
+          targets.push({ orderId: order.id, itemId: item._fsItemId });
+        }
+      }
+    });
+
+    if (targets.length === 0) return;
+
+    const key = `${dateStr}::${serviceSlot}`;
+    setOpsActionError(null);
+    setPendingCookingKey(key);
+    try {
+      const batch = writeBatch(db);
+      targets.forEach(t => {
+        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), { status: 'Preparing' });
+      });
+      await batch.commit();
+    } catch (e) {
+      console.error('Start Cooking failed', e);
+      setOpsActionError('Start Cooking failed — please try again.');
+    } finally {
+      setPendingCookingKey(null);
+    }
+  };
+
+  const handleDispatchDrop = async (drop: DropTask) => {
+    const targets = drop.items.filter(i => !!i._fsItemId && (i.status === 'Active' || i.status === 'Preparing' || !i.status));
+    if (targets.length === 0) {
+      setOpsActionError('Could not dispatch — no eligible items found to dispatch. Try refreshing.');
+      return;
+    }
+    setOpsActionError(null);
+    setPendingDispatchKey(drop.key);
+    try {
+      const batch = writeBatch(db);
+      targets.forEach(i => {
+        batch.update(doc(db, 'orders', drop.orderId, 'items', i._fsItemId as string), { status: 'En route' });
+      });
+      await batch.commit();
+    } catch (e) {
+      console.error('Dispatch failed', e);
+      setOpsActionError('Dispatch failed — please try again.');
+    } finally {
+      setPendingDispatchKey(null);
     }
   };
 
@@ -4180,6 +4234,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 const showLunch = ordersServiceFilter !== 'Dinner' && lunchDishes.length > 0;
                 const showDinner = ordersServiceFilter !== 'Lunch' && dinnerDishes.length > 0;
                 const hasAny = showLunch || showDinner;
+                const dayLines = lines.filter(l => l.item.deliveryDate === d.date);
+                const lunchLines = dayLines.filter(l => !(l.item.serviceSlot || '').startsWith('Dinner'));
+                const dinnerLines = dayLines.filter(l => (l.item.serviceSlot || '').startsWith('Dinner'));
+
+                const activeLunchCount = lunchLines.filter(l => l.item.status === 'Active' || !l.item.status).length;
+                const activeDinnerCount = dinnerLines.filter(l => l.item.status === 'Active' || !l.item.status).length;
+
+                const lunchCookingKey = `${d.date}::Lunch`;
+                const dinnerCookingKey = `${d.date}::Dinner`;
+
+                const isLunchCookingPending = pendingCookingKey === lunchCookingKey;
+                const isDinnerCookingPending = pendingCookingKey === dinnerCookingKey;
+
                 return (
                   <div key={d.key} className={`bg-white rounded-3xl shadow-sm p-6 ${isToday ? 'border-2 border-primary/40 shadow-[0_8px_30px_rgba(62,125,34,0.06)]' : 'border border-[#E7E0D0]'}`}>
                     <div className="flex items-center gap-2 mb-4">
@@ -4192,7 +4259,24 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <div className="space-y-3">
                         {showLunch && (
                           <div className="bg-primary/5 rounded-2xl p-4">
-                            <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-3">☀️ Lunch</p>
+                            <div className="flex items-center justify-between gap-4 mb-3 border-b border-primary/10 pb-2">
+                              <p className="text-[10px] font-black uppercase text-primary tracking-widest">☀️ Lunch</p>
+                              {activeLunchCount > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartCooking(d.date, 'Lunch')}
+                                  disabled={isLunchCookingPending}
+                                  className="px-3 py-1 bg-primary text-white rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1 hover:bg-primary/95 active:scale-95 transition-all disabled:opacity-60 cursor-pointer"
+                                >
+                                  {isLunchCookingPending ? <Loader2 className="size-3 animate-spin" /> : <ChefHat className="size-3" />}
+                                  Start Cooking
+                                </button>
+                              ) : (
+                                <span className="px-2 py-0.5 bg-primary/10 text-primary rounded-md text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
+                                  <Check className="size-2.5" /> Cooking Started
+                                </span>
+                              )}
+                            </div>
                             <div className="divide-y divide-primary/10">
                               {lunchDishes.map(([key, agg]) => {
                                 const { qty, revenue, itemId, name, requests } = agg as { qty: number; revenue: number; itemId: string; name: string; service: string; requests: any[] };
@@ -4223,7 +4307,24 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         )}
                         {showDinner && (
                           <div className="bg-accent/5 rounded-2xl p-4">
-                            <p className="text-[10px] font-black uppercase text-accent tracking-widest mb-3">🌙 Dinner</p>
+                            <div className="flex items-center justify-between gap-4 mb-3 border-b border-accent/10 pb-2">
+                              <p className="text-[10px] font-black uppercase text-accent tracking-widest">🌙 Dinner</p>
+                              {activeDinnerCount > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartCooking(d.date, 'Dinner')}
+                                  disabled={isDinnerCookingPending}
+                                  className="px-3 py-1 bg-accent text-white rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1 hover:bg-accent/95 active:scale-95 transition-all disabled:opacity-60 cursor-pointer"
+                                >
+                                  {isDinnerCookingPending ? <Loader2 className="size-3 animate-spin" /> : <ChefHat className="size-3" />}
+                                  Start Cooking
+                                </button>
+                              ) : (
+                                <span className="px-2 py-0.5 bg-accent/10 text-accent rounded-md text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
+                                  <Check className="size-2.5" /> Cooking Started
+                                </span>
+                              )}
+                            </div>
                             <div className="divide-y divide-accent/10">
                               {dinnerDishes.map(([key, agg]) => {
                                 const { qty, revenue, itemId, name, requests } = agg as { qty: number; revenue: number; itemId: string; name: string; service: string; requests: any[] };
@@ -4329,6 +4430,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 const renderDropCard = (drop: DropTask) => {
                   const cust = getCustomer(drop.customerName);
                   const addr = cust?.addresses[0];
+                  const allCompleted = drop.items.every(i => i.status === 'Completed');
+                  const allEnRoute = drop.items.every(i => i.status === 'En route');
+                  const canDispatch = drop.items.some(i => i.status === 'Active' || i.status === 'Preparing' || !i.status);
+
                   return (
                     <div key={drop.key} className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-6 hover:shadow-md transition-all">
                       <div className="min-w-0 flex-1 space-y-2">
@@ -4346,6 +4451,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             return (
                               <div key={idx} className="text-xs text-slate-700 font-medium">
                                 <span className="font-bold text-slate-900">{item.qty}x {item.name}</span>
+                                {item.status && item.status !== 'Active' && (
+                                  <span className={`ml-1.5 px-1 py-0.5 rounded text-[8px] font-black uppercase tracking-wide ${
+                                    item.status === 'Completed' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
+                                  }`}>
+                                    {item.status}
+                                  </span>
+                                )}
                                 {detail && <span className="text-slate-400 text-[11px] block pl-2">↳ {detail}</span>}
                                 <div className="flex flex-wrap gap-1.5 mt-1 pl-2">
                                   {person && <PersonTag name={person} />}
@@ -4368,23 +4480,47 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         )}
                       </div>
                       <div className="flex items-center gap-2.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setActivePrintDrop(drop)}
-                          className="px-4 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-pointer"
-                          title="Print delivery ticket"
-                        >
-                          <Printer className="size-4" /> Print
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleMarkDelivered(drop)}
-                          disabled={pendingDeliveryKey === drop.key}
-                          className="px-6 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
-                        >
-                          {pendingDeliveryKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                          {pendingDeliveryKey === drop.key ? 'Marking...' : 'Mark Delivered'}
-                        </button>
+                        {allCompleted ? (
+                          <div className="px-4 py-2 bg-success/10 text-success rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5">
+                            <CheckCircle2 className="size-4" /> Delivered
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setActivePrintDrop(drop)}
+                              className="px-4 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-pointer"
+                              title="Print delivery ticket"
+                            >
+                              <Printer className="size-4" /> Print
+                            </button>
+                            {canDispatch && (
+                              <button
+                                type="button"
+                                onClick={() => handleDispatchDrop(drop)}
+                                disabled={pendingDispatchKey === drop.key}
+                                className="px-4 py-3 bg-warning/10 text-warning hover:bg-warning/20 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                              >
+                                {pendingDispatchKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <Truck className="size-4" />}
+                                {pendingDispatchKey === drop.key ? 'Dispatching...' : 'Dispatch'}
+                              </button>
+                            )}
+                            {allEnRoute && (
+                              <span className="px-4 py-3 bg-warning/10 text-warning rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5">
+                                <Truck className="size-4 animate-bounce" /> En Route
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleMarkDelivered(drop)}
+                              disabled={pendingDeliveryKey === drop.key}
+                              className="px-6 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                            >
+                              {pendingDeliveryKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                              {pendingDeliveryKey === drop.key ? 'Marking...' : 'Mark Delivered'}
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   );

@@ -414,6 +414,13 @@ const paymentStatusInfo = (item: OrderItem): { label: string; tone: 'success' | 
   return { label: 'Unpaid', tone: 'danger' };
 };
 
+const statusTone = (status?: string): 'success' | 'warning' | 'danger' | 'slate' => {
+  if (status === 'Cancelled') return 'danger';
+  if (status === 'Completed' || status === 'Delivered') return 'success';
+  if (status === 'Preparing' || status === 'En route' || status === 'Ready') return 'warning';
+  return 'slate';
+};
+
 interface CustomerPortalProps { onLogout?: () => void; }
 
 const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
@@ -1609,7 +1616,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // drives Home's hero: if lunch is actually en route today, that's more
   // useful up top than a generic greeting.
   const todaysArrivingLines = useMemo(
-    () => thisWeekLinesWithSeq.filter(l => l.item.deliveryDate === systemDate && l.item.status === 'Active'),
+    () => thisWeekLinesWithSeq.filter(l => l.item.deliveryDate === systemDate && l.item.status !== 'Completed' && l.item.status !== 'Cancelled'),
     [thisWeekLinesWithSeq, systemDate]
   );
 
@@ -1908,8 +1915,13 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                 <div className="relative z-10 mt-4 flex items-center gap-3 bg-white/10 backdrop-blur-md border border-white/15 rounded-2xl p-3">
                   <img src={dishPhotoFor(todaysArrivingLines[0].item.itemId)} className="size-11 rounded-xl object-cover shrink-0 border-2 border-white/25" alt={todaysArrivingLines[0].item.name} />
                   <div className="min-w-0">
-                    <p className="text-[9px] font-black uppercase tracking-widest opacity-70">
-                      Arriving today · {serviceOf(todaysArrivingLines[0].item) === 'Dinner' ? SYSTEM_CONFIG.dinnerDeliveryWindow : SYSTEM_CONFIG.lunchDeliveryWindow}
+                    <p className="text-[9px] font-black uppercase tracking-widest opacity-70 flex items-center gap-1.5 flex-wrap">
+                      <span>Arriving today · {serviceOf(todaysArrivingLines[0].item) === 'Dinner' ? SYSTEM_CONFIG.dinnerDeliveryWindow : SYSTEM_CONFIG.lunchDeliveryWindow}</span>
+                      {todaysArrivingLines[0].item.status && todaysArrivingLines[0].item.status !== 'Active' && (
+                        <span className="px-1 py-0.5 rounded bg-white/20 text-white font-extrabold normal-case leading-none">
+                          {todaysArrivingLines[0].item.status}
+                        </span>
+                      )}
                     </p>
                     <p className="text-xs font-bold truncate">
                       {todaysArrivingLines[0].item.name}
@@ -2383,7 +2395,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                               <div className="flex items-center gap-1.5 flex-wrap mb-2">
                                                 {line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {line.seq + 1}</span>}
                                                 <StatusBadge label={payInfo.label} tone={payInfo.tone} />
-                                                <StatusBadge label={line.item.status || ''} tone={isCancelled ? 'danger' : 'slate'} />
+                                                <StatusBadge label={line.item.status || 'Active'} tone={statusTone(line.item.status)} />
                                                 {person && <PersonTag name={person} />}
                                                 {instructions && <InstructionsTag text={instructions} />}
                                               </div>
@@ -2497,7 +2509,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                               <div className="flex items-center gap-1.5 flex-wrap mb-2">
                                                 {line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase shrink-0">Extra {line.seq + 1}</span>}
                                                 <StatusBadge label={payInfo.label} tone={payInfo.tone} />
-                                                <StatusBadge label={line.item.status || ''} tone={isCancelled ? 'danger' : 'slate'} />
+                                                <StatusBadge label={line.item.status || 'Active'} tone={statusTone(line.item.status)} />
                                                 {person && <PersonTag name={person} />}
                                                 {instructions && <InstructionsTag text={instructions} />}
                                               </div>

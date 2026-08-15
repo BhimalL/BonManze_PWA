@@ -140,7 +140,7 @@ export interface OrderItem {
   deliveryDay?: string;
   serviceSlot?: string;
   paymentStatus?: 'Paid' | 'Pending' | 'Refunded'; 
-  status?: 'Active' | 'Preparing' | 'Cancelled' | 'Ready' | 'Delivered' | 'Completed';
+  status?: 'Active' | 'Preparing' | 'Cancelled' | 'Ready' | 'En route' | 'Delivered' | 'Completed';
   isReconciled?: boolean;
   paymentMethodName?: string;
   // Reference the customer was given (and/or entered themselves) when they
