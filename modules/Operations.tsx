@@ -36,7 +36,11 @@ import {
   Loader2,
   AlertCircle,
   Printer,
-  FileSpreadsheet
+  FileSpreadsheet,
+  ChevronLeft,
+  ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, getDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc } from 'firebase/firestore';
@@ -264,6 +268,7 @@ const addDays = (dateStr: string, days: number): string => {
 
 const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [tab, setTab] = useState<Tab>('dashboard');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
 
@@ -3561,17 +3566,36 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 />
               </div>
               <div className="space-y-1.5 md:col-span-2">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Logo Image URL</label>
-                <div className="flex gap-4 items-center">
-                  <input
-                    type="text"
-                    value={brandForm.logoUrl}
-                    onChange={e => setBrandForm(f => ({ ...f, logoUrl: e.target.value }))}
-                    className="flex-1 text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                  />
-                  {brandForm.logoUrl && (
-                    <img src={brandForm.logoUrl} alt="Logo Preview" className="size-10 rounded-lg object-cover border border-[#E7E0D0] bg-slate-50" />
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Business Logo</label>
+                <div className="flex items-center gap-4">
+                  {brandForm.logoUrl ? (
+                    <img src={brandForm.logoUrl} alt="Logo Preview" className="size-14 rounded-xl object-cover border border-[#E7E0D0] bg-slate-50 shrink-0" />
+                  ) : (
+                    <div className="size-14 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 flex items-center justify-center text-slate-400 shrink-0">
+                      <ImagePlus className="size-5" />
+                    </div>
                   )}
+                  <div className="flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => logoFileInputRef.current?.click()}
+                      className="px-4 py-2 text-xs font-bold rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition-colors"
+                    >
+                      {brandForm.logoUrl ? 'Change Logo' : 'Upload Logo'}
+                    </button>
+                    {brandForm.logoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setBrandForm(f => ({ ...f, logoUrl: '' }))}
+                        className="px-4 py-2 text-xs font-bold rounded-xl border border-red-100 bg-red-50 hover:bg-red-100 text-red-500 transition-colors"
+                      >
+                        Remove
+                      </button>
+                    )}
+                    <p className="text-[10px] text-slate-400 font-medium">PNG, JPG or WebP · max 1.5 MB</p>
+                    {logoError && <p className="text-[10px] text-red-500 font-bold">{logoError}</p>}
+                  </div>
+                  <input ref={logoFileInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoFileChange} />
                 </div>
               </div>
               <div className="space-y-1.5">
@@ -3926,83 +3950,120 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   return (
     <div className="h-full w-full flex bg-[#FAF6EE] text-slate-800 font-sans overflow-hidden">
       {/* PERSISTENT LEFT SIDEBAR */}
-      <aside className="w-64 bg-white border-r border-[#E7E0D0] flex flex-col shrink-0">
+      <aside className={`${sidebarCollapsed ? 'w-16' : 'w-64'} bg-white border-r border-[#E7E0D0] flex flex-col shrink-0 transition-all duration-200`}>
         {/* Sidebar Header */}
-        <div className="h-[72px] shrink-0 px-5 border-b border-[#E7E0D0] flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {SYSTEM_CONFIG.businessLogoUrl ? (
-              <img src={SYSTEM_CONFIG.businessLogoUrl} alt="Logo" className="size-8 rounded-lg object-cover shadow-sm animate-fade-in" />
-            ) : (
-              <div className="size-8 bg-primary rounded-lg flex items-center justify-center text-white font-black text-sm">
-                {(brandForm.name || 'B').charAt(0).toUpperCase()}
+        <div className="h-[72px] shrink-0 px-3 border-b border-[#E7E0D0] flex items-center justify-between">
+          {!sidebarCollapsed && (
+            <div className="flex items-center gap-3 min-w-0">
+              {SYSTEM_CONFIG.businessLogoUrl ? (
+                <img src={SYSTEM_CONFIG.businessLogoUrl} alt="Logo" className="size-8 rounded-lg object-cover shadow-sm animate-fade-in shrink-0" />
+              ) : (
+                <div className="size-8 bg-primary rounded-lg flex items-center justify-center text-white font-black text-sm shrink-0">
+                  {(brandForm.name || 'B').charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0">
+                <h2 className="text-xs font-black text-slate-900 leading-none truncate">{brandForm.name || SYSTEM_CONFIG.businessName}</h2>
+                <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">Operations</p>
               </div>
-            )}
-            <div>
-              <h2 className="text-xs font-black text-slate-900 leading-none truncate max-w-[120px]">{brandForm.name || SYSTEM_CONFIG.businessName}</h2>
-              <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">Operations</p>
             </div>
-          </div>
-          <button onClick={handleStaffSignOut} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-900 transition-colors" title="Sign Out">
-            <LogOut className="size-4" />
+          )}
+          {sidebarCollapsed && (
+            <div className="flex-1 flex justify-center">
+              {SYSTEM_CONFIG.businessLogoUrl ? (
+                <img src={SYSTEM_CONFIG.businessLogoUrl} alt="Logo" className="size-8 rounded-lg object-cover shadow-sm" />
+              ) : (
+                <div className="size-8 bg-primary rounded-lg flex items-center justify-center text-white font-black text-sm">
+                  {(brandForm.name || 'B').charAt(0).toUpperCase()}
+                </div>
+              )}
+            </div>
+          )}
+          <button
+            onClick={() => setSidebarCollapsed(c => !c)}
+            className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors shrink-0"
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
           </button>
         </div>
 
         {/* Navigation Section */}
-        <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto">
-          <p className="px-3 text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Operations</p>
+        <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
+          {!sidebarCollapsed && <p className="px-3 text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 mt-2">Operations</p>}
+          {sidebarCollapsed && <div className="h-4" />}
           {TABS.map(t => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                tab === t.id ? 'text-primary bg-primary/[0.04] border-l-4 border-primary shadow-[0_4px_12px_rgba(62,125,34,0.04)]' : 'text-slate-500 hover:bg-slate-50'
+              title={sidebarCollapsed ? t.label : undefined}
+              className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                tab === t.id
+                  ? `text-primary bg-primary/[0.04] ${sidebarCollapsed ? '' : 'border-l-4 border-primary'} shadow-[0_4px_12px_rgba(62,125,34,0.04)]`
+                  : 'text-slate-500 hover:bg-slate-50'
               }`}
             >
               <t.icon className="size-4 shrink-0" />
-              <span>{t.label}</span>
+              {!sidebarCollapsed && <span>{t.label}</span>}
             </button>
           ))}
 
-          <div className="pt-6">
-            <p className="px-3 text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Configuration</p>
+          <div className="pt-4">
+            {!sidebarCollapsed && <p className="px-3 text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Configuration</p>}
             <button
               onClick={() => setTab('settings')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                tab === 'settings' ? 'text-primary bg-primary/[0.04] border-l-4 border-primary shadow-[0_4px_12px_rgba(62,125,34,0.04)]' : 'text-slate-500 hover:bg-slate-50'
+              title={sidebarCollapsed ? 'Settings' : undefined}
+              className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                tab === 'settings'
+                  ? `text-primary bg-primary/[0.04] ${sidebarCollapsed ? '' : 'border-l-4 border-primary'} shadow-[0_4px_12px_rgba(62,125,34,0.04)]`
+                  : 'text-slate-500 hover:bg-slate-50'
               }`}
             >
               <SettingsIcon className="size-4 shrink-0" />
-              <span>Settings</span>
+              {!sidebarCollapsed && <span>Settings</span>}
             </button>
           </div>
         </nav>
 
-        {/* Labeled Testing Controls */}
-        <div className="p-4 border-t border-[#E7E0D0] bg-[#FAF8F1]">
-          <p className="text-[9px] font-black text-[#B4703A] uppercase tracking-widest mb-1.5">⚡ Testing Controls</p>
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2 bg-white border border-[#E7E0D0] rounded-lg px-2.5 py-1.5 text-xs text-slate-600">
-              <Calendar className="size-3.5 shrink-0 text-slate-400" />
-              <input
-                type="date"
-                value={systemDate}
-                onChange={(e) => updateSystemDate(e.target.value)}
-                className="bg-transparent outline-none font-mono text-[11px] w-full"
-                title="Sets what counts as 'today' across BonManzE"
-              />
+        {/* Testing Controls — hidden when collapsed */}
+        {!sidebarCollapsed && (
+          <div className="p-4 border-t border-[#E7E0D0] bg-[#FAF8F1]">
+            <p className="text-[9px] font-black text-[#B4703A] uppercase tracking-widest mb-1.5">⚡ Testing Controls</p>
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 bg-white border border-[#E7E0D0] rounded-lg px-2.5 py-1.5 text-xs text-slate-600">
+                <Calendar className="size-3.5 shrink-0 text-slate-400" />
+                <input
+                  type="date"
+                  value={systemDate}
+                  onChange={(e) => updateSystemDate(e.target.value)}
+                  className="bg-transparent outline-none font-mono text-[11px] w-full"
+                  title="Sets what counts as 'today' across BonManzE"
+                />
+              </div>
+              <button
+                onClick={() => {
+                  const now = new Date();
+                  const realISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                  updateSystemDate(realISO);
+                }}
+                className="w-full py-1 bg-white border border-[#E7E0D0] hover:bg-slate-50 text-[10px] font-bold text-slate-500 rounded transition-colors"
+              >
+                Reset to Real Today
+              </button>
             </div>
+          </div>
+        )}
+        {sidebarCollapsed && (
+          <div className="p-2 border-t border-[#E7E0D0]">
             <button
-              onClick={() => {
-                const now = new Date();
-                const realISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-                updateSystemDate(realISO);
-              }}
-              className="w-full py-1 bg-white border border-[#E7E0D0] hover:bg-slate-50 text-[10px] font-bold text-slate-500 rounded transition-colors"
+              onClick={handleStaffSignOut}
+              className="w-full p-2 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-900 transition-colors flex justify-center"
+              title="Sign Out"
             >
-              Reset to Real Today
+              <LogOut className="size-4" />
             </button>
           </div>
-        </div>
+        )}
       </aside>
 
       {/* MAIN VIEW AREA */}
