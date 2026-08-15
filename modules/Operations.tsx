@@ -4744,7 +4744,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       {editCustomer && (
         <Portal>
           <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-white rounded-[32px] w-full max-w-5xl shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-300">
+            <div className="bg-white rounded-[32px] w-full max-w-5xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in zoom-in-95 duration-300">
               <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-3">
                   <img src={editCustomer.avatar} alt={editCustomer.name} className="size-9 rounded-full border border-slate-200 shrink-0" />
