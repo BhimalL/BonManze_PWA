@@ -81,8 +81,7 @@ import {
   WeekdayKey,
   CurryOption,
   AddOnOption,
-  DEFAULT_BASE_GROUP,
-  dishBaseGroup,
+
   dishBaseApplicable,
   dishBaseOptionIds,
   dishDhalApplicable,
@@ -1371,12 +1370,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       price: isNaN(parsedPrice) ? 0 : parsedPrice,
       cost: mainForm.cost.trim() === '' || isNaN(parsedCost) ? undefined : parsedCost,
       photoUrl: mainForm.photoUrl.trim() || undefined,
-      // baseGroup is explicitly cleared going forward — baseOptionIds (set
-      // via checkboxes below) is now the only source of truth for which
-      // bases a Main offers, so a stale group tag can never resurface and
-      // silently re-narrow things once baseOptionIds itself is cleared
-      // back to "no restriction" (see dishBaseOptionIds in store.ts).
-      baseGroup: undefined,
       baseApplicable: mainForm.baseApplicable,
       baseOptionIds: mainForm.baseOptionIds ?? undefined,
       dhalApplicable: mainForm.dhalApplicable,
@@ -1474,7 +1467,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const startEditAddOn = (catalog: CatalogKey, item: AddOnOption) => {
     setEditingAddOn({ catalog, id: item.id });
-    setAddOnForm({ emoji: item.emoji, name: item.name, price: String(item.price ?? item.up ?? 0), group: item.group || '' });
+    setAddOnForm({ emoji: item.emoji, name: item.name, price: String(item.price ?? item.up ?? 0), group: '' });
   };
 
   const saveAddOnEdit = () => {
@@ -1486,7 +1479,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       emoji: addOnForm.emoji.trim() || '•',
       name: addOnForm.name.trim() || 'Untitled',
       [priceField]: isNaN(parsedPrice) ? 0 : parsedPrice,
-      group: editingAddOn.catalog === 'base' ? (addOnForm.group.trim() || DEFAULT_BASE_GROUP) : undefined
     } as Partial<AddOnOption>));
     setEditingAddOn(null);
   };
@@ -1503,7 +1495,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     };
     if (catalog === 'base') {
       item.up = isNaN(parsedPrice) ? 0 : parsedPrice;
-      item.group = DEFAULT_BASE_GROUP;
     } else {
       item.price = isNaN(parsedPrice) ? 0 : parsedPrice;
     }
@@ -1559,11 +1550,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   // --- CSV import / export ---
   // Format: one header row, then one row per dish —
-  // day,id,emoji,name,desc,price,baseGroup,dhalApplicable,saladApplicable
+  // day,id,emoji,name,desc,price,dhalApplicable,saladApplicable
   // day is MON/TUE/WED/THU/FRI. id is optional (blank = auto-generated on
   // import, so an exported-then-reimported file round-trips its ids too).
-  // baseGroup/dhalApplicable/saladApplicable are optional — blank means
-  // "use the default" (rice / true / true), same fallback the data model
+  // dhalApplicable/saladApplicable are optional — blank means
+  // "use the default" (true / true), same fallback the data model
   // itself uses for any dish that doesn't set them.
 
   const csvEscape = (value: string): string => {
@@ -1575,7 +1566,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const exportMenuCSV = (service: Service, weekStart: string) => {
     const menu = service === 'Dinner' ? dinnerMenuForWeek(weekStart) : lunchMenuForWeek(weekStart);
-    const rows = ['day,id,emoji,name,desc,price,baseGroup,dhalApplicable,saladApplicable'];
+    const rows = ['day,id,emoji,name,desc,price,dhalApplicable,saladApplicable'];
     WEEKDAY_KEYS.forEach(day => {
       menu[day].forEach(dish => {
         rows.push([
@@ -1585,7 +1576,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           csvEscape(dish.name),
           csvEscape(dish.desc),
           String(dish.price),
-          dishBaseGroup(dish),
           String(dishDhalApplicable(dish)),
           String(dishSaladApplicable(dish))
         ].join(','));
@@ -1751,7 +1741,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     if (lines.length < 2) return { menu: {} as Record<WeekdayKey, CurryOption[]>, error: 'CSV has no data rows.' };
     const header = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase());
     const col = (name: string) => header.indexOf(name);
-    const dayCol = col('day'), idCol = col('id'), emojiCol = col('emoji'), nameCol = col('name'), descCol = col('desc'), priceCol = col('price'), baseGroupCol = col('basegroup'), dhalCol = col('dhalapplicable'), saladCol = col('saladapplicable');
+    const dayCol = col('day'), idCol = col('id'), emojiCol = col('emoji'), nameCol = col('name'), descCol = col('desc'), priceCol = col('price'), dhalCol = col('dhalapplicable'), saladCol = col('saladapplicable');
     if (dayCol === -1 || nameCol === -1 || priceCol === -1) {
       return { menu: {} as Record<WeekdayKey, CurryOption[]>, error: 'CSV must have at least day, name, and price columns.' };
     }
@@ -1774,7 +1764,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         name,
         desc: (descCol !== -1 && fields[descCol]) || '',
         price: isNaN(parsedPrice) ? 0 : parsedPrice,
-        baseGroup: (baseGroupCol !== -1 && fields[baseGroupCol]?.trim()) || DEFAULT_BASE_GROUP,
         dhalApplicable: dhalRaw === '' || dhalRaw === undefined ? true : dhalRaw === 'true',
         saladApplicable: saladRaw === '' || saladRaw === undefined ? true : saladRaw === 'true'
       });
@@ -2403,13 +2392,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
                                 <td className="px-6 py-4 text-base">{item.emoji}</td>
                                 <td className="px-6 py-4 text-xs font-bold text-slate-900">{item.name}</td>
-                                {meta.hasGroup && (
-                                  <td className="px-6 py-4">
-                                    <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
-                                      {item.group || DEFAULT_BASE_GROUP}
-                                    </span>
-                                  </td>
-                                )}
+
                                 {meta.hasPrice && (
                                   <td className="px-6 py-4 text-right font-black text-slate-600">
                                     {formatCurrency(item.price ?? item.up ?? 0)}

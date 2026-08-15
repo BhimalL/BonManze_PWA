@@ -359,12 +359,7 @@ export interface CurryOption {
   name: string;
   desc: string;
   price: number;
-  // Which base-catalog group (see AddOnOption.group below) this dish's Base
-  // step offers — optional, defaults to 'rice' when unset so every existing
-  // curry keeps offering the same 5 rice-family bases it always has. A
-  // non-curry main (e.g. a grilled sausage served with bread) sets this to
-  // e.g. 'bread' so the Base step filters to bread-group options only.
-  baseGroup?: string;
+
   // Whether the Dhal / Salad steps apply to this dish at all — optional,
   // default true (existing behavior) when unset. Set to false for a dish
   // that doesn't pair with a free dhal/salad; the meal builder skips that
@@ -389,13 +384,8 @@ export interface CurryOption {
   beverageApplicable?: boolean;
   dessertApplicable?: boolean;
   // Whether a Base step applies at all, and which specific Base catalog
-  // entries this dish offers — replaces the old single baseGroup filter
-  // with the same applicable+narrow pattern as Dhal/Salad, so a dish can
-  // offer an exact hand-picked set of bases instead of "every base tagged
-  // with this one group". baseGroup (above) is kept only for dishes
-  // configured before this existed — dishBaseOptionIds() below falls back
-  // to resolving it into an id list when baseOptionIds itself is unset, so
-  // nothing already configured silently loses its narrowing.
+  // entries this dish offers — the same applicable+narrow pattern as Dhal/
+  // Salad/Beverage/Dessert.
   baseApplicable?: boolean;
   baseOptionIds?: string[];
   // A custom uploaded photo for this dish (data URL or path) — takes
@@ -422,29 +412,15 @@ export interface CurryOption {
 
 // Read-with-defaults helpers — every consumer (meal builder, Menu Planner
 // forms) should read through these rather than the raw optional fields, so
-// "unset" reliably means "behaves like an existing curry" everywhere,
-// without having to backfill baseGroup/dhalApplicable/saladApplicable onto
-// every literal curry entry already defined below.
-export const DEFAULT_BASE_GROUP = 'rice';
-export const dishBaseGroup = (dish: CurryOption): string => dish.baseGroup ?? DEFAULT_BASE_GROUP;
+// "unset" reliably means "behaves like an existing curry" everywhere.
 export const dishDhalApplicable = (dish: CurryOption): boolean => dish.dhalApplicable ?? true;
 export const dishSaladApplicable = (dish: CurryOption): boolean => dish.saladApplicable ?? true;
 export const dishBeverageApplicable = (dish: CurryOption): boolean => dish.beverageApplicable ?? true;
 export const dishDessertApplicable = (dish: CurryOption): boolean => dish.dessertApplicable ?? true;
 export const dishBaseApplicable = (dish: CurryOption): boolean => dish.baseApplicable ?? true;
-// Effective allowed Base ids for a dish — prefers the explicit narrow list
-// set via the new Base checkboxes; for a dish configured before that
-// existed (baseOptionIds unset) falls back to resolving the legacy
-// baseGroup into whichever current Base catalog entries share that group,
-// so nothing already narrowed by group silently widens back to "every
-// base". A dish with neither set (baseOptionIds and baseGroup both unset)
-// returns undefined — "no restriction", today's default for every curry
-// that predates both mechanisms.
-export const dishBaseOptionIds = (dish: CurryOption, allBases: AddOnOption[]): string[] | undefined => {
-  if (dish.baseOptionIds !== undefined) return dish.baseOptionIds;
-  if (dish.baseGroup !== undefined) return allBases.filter(b => (b.group || DEFAULT_BASE_GROUP) === dish.baseGroup).map(b => b.id);
-  return undefined;
-};
+// Effective allowed Base ids for a dish — undefined means no restriction
+// (show all bases), otherwise the explicit narrow list from the Library.
+export const dishBaseOptionIds = (dish: CurryOption, _allBases: AddOnOption[]): string[] | undefined => dish.baseOptionIds;
 
 // --- MEAL LIBRARY (Mains) ---
 // The master catalog of dishes Bhimal actually sells — every field a day-menu
@@ -505,25 +481,18 @@ export const specialPriceInfo = (dish: CurryOption): { regularPrice: number } | 
 
 // Resolves a day-slot dish's Meal-Library-governed configuration through
 // its linked Main (mainId), live — every Base/Dhal/Salad/Beverage/Dessert
-// applicable+narrowing field, plus baseGroup, reflects the Main's *current*
-// definition rather than whatever was copied onto the day when it was
-// first picked. Editing a Main in the Library (unticking a category,
-// narrowing its options) now immediately applies everywhere that Main is
-// used, in both Operations and the Customer App meal builder. `price`,
-// `id`, `mainId`, `name`, `desc`, and `emoji` deliberately stay the
-// day-slot's own value — those are either intentionally per-day (price)
-// or already locked-but-frozen elsewhere (name/desc, Menu Planner's
-// editor). A dish with no mainId, or whose linked Main was since deleted,
-// is returned unchanged. Every consumer that checks applicability or
-// option-narrowing (meal builder sections, sectionComplete, the free-item
-// forfeiture check) should look up the dish through this first.
+// applicable+narrowing field reflects the Main's *current* definition rather
+// than whatever was copied onto the day when it was first picked. Editing a
+// Main in the Library immediately applies everywhere that Main is used.
+// `price`, `id`, `mainId`, `name`, `desc`, and `emoji` deliberately stay
+// the day-slot's own value. A dish with no mainId, or whose linked Main was
+// since deleted, is returned unchanged.
 export const resolveDish = (dish: CurryOption): CurryOption => {
   if (!dish.mainId) return dish;
   const main = MAIN_DISHES.find(m => m.id === dish.mainId);
   if (!main) return dish;
   return {
     ...dish,
-    baseGroup: main.baseGroup,
     baseApplicable: main.baseApplicable,
     baseOptionIds: main.baseOptionIds,
     dhalApplicable: main.dhalApplicable,
@@ -784,10 +753,6 @@ export interface AddOnOption {
   name: string;
   price?: number;
   up?: number;
-  // Which base-catalog "family" this option belongs to — Base entries only
-  // (e.g. 'rice' for the original 5, 'bread' for a White/Brown Bread pair
-  // added for a non-rice main dish). Unused by Dhal/Salad/Beverage/Dessert.
-  group?: string;
 }
 
 // Base/Dhal/Salad/Beverage/Dessert used to be plain immutable constants with
@@ -804,11 +769,11 @@ export interface AddOnOption {
 // onto data that's real in Firestore right now. The literal arrays below
 // are only the fallback shown until the first onSnapshot batch arrives.
 export let MEAL_BASES: AddOnOption[] = [
-  { id: 'wrice', emoji: '🍚', name: 'White Rice', up: 0, group: 'rice' },
-  { id: 'brice', emoji: '🌾', name: 'Brown Rice', up: 15, group: 'rice' },
-  { id: 'quin', emoji: '🌿', name: 'Quinoa', up: 25, group: 'rice' },
-  { id: 'cous', emoji: '🫓', name: 'Couscous', up: 20, group: 'rice' },
-  { id: 'caul', emoji: '🥦', name: 'Cauliflower Rice', up: 20, group: 'rice' },
+  { id: 'wrice', emoji: '🍚', name: 'White Rice', up: 0 },
+  { id: 'brice', emoji: '🌾', name: 'Brown Rice', up: 15 },
+  { id: 'quin', emoji: '🌿', name: 'Quinoa', up: 25 },
+  { id: 'cous', emoji: '🫓', name: 'Couscous', up: 20 },
+  { id: 'caul', emoji: '🥦', name: 'Cauliflower Rice', up: 20 },
 ];
 const baseListeners = new Set<(items: AddOnOption[]) => void>();
 export const subscribeToBases = (listener: (items: AddOnOption[]) => void) => {
