@@ -164,6 +164,18 @@ const isNoteForCustomer = (personName: string | null, customerName: string, cust
   return false;
 };
 
+const isBirthdayToday = (birthday?: string, dateStr?: string): boolean => {
+  if (!birthday || !dateStr) return false;
+  const bParts = birthday.split('-');
+  const sParts = dateStr.split('-');
+  if (bParts.length < 2 || sParts.length < 2) return false;
+  const bMonth = Number(bParts[bParts.length - 2]);
+  const bDay = Number(bParts[bParts.length - 1]);
+  const sMonth = Number(sParts[sParts.length - 2]);
+  const sDay = Number(sParts[sParts.length - 1]);
+  return bMonth === sMonth && bDay === sDay;
+};
+
 const InstructionsTag = ({ text }: { text: string }) => (
   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-warning/10 text-[#B4703A] border border-warning/15 text-[9px] font-black uppercase shrink-0">
     🍳 {text}
@@ -5128,6 +5140,17 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 <p className="text-[10px] uppercase font-bold text-slate-400 mt-0.5">Delivery Ticket</p>
               </div>
               
+              {(() => {
+                const cust = getCustomer(activePrintDrop.customerName);
+                const isBirthday = cust ? isBirthdayToday(cust.birthday, activePrintDrop.date) : false;
+                return isBirthday ? (
+                  <div className="text-center border border-dashed border-rose-300 bg-rose-50 text-rose-700 font-extrabold rounded-lg py-2 px-1 mb-3">
+                    🎂 ZWAYE LANIVERSER! 🎂
+                    <p className="text-[8px] font-bold uppercase tracking-wide text-rose-500 mt-0.5">Happy Birthday!</p>
+                  </div>
+                ) : null;
+              })()}
+
               <div className="space-y-1.5 mb-3">
                 <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Customer:</span><span className="font-black text-slate-950 text-right">{activePrintDrop.customerName}</span></div>
                 {(() => {
@@ -5282,6 +5305,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <p className="text-[10px] uppercase font-bold text-slate-400 mt-0.5">Delivery Ticket</p>
                     </div>
                     
+                    {(() => {
+                      const isBirthday = cust ? isBirthdayToday(cust.birthday, drop.date) : false;
+                      return isBirthday ? (
+                        <div className="text-center border border-dashed border-rose-300 bg-rose-50 text-rose-700 font-extrabold rounded-lg py-2 px-1 mb-3">
+                          🎂 ZWAYE LANIVERSER! 🎂
+                          <p className="text-[8px] font-bold uppercase tracking-wide text-rose-500 mt-0.5">Happy Birthday!</p>
+                        </div>
+                      ) : null;
+                    })()}
+
                     <div className="space-y-1.5 mb-3">
                       <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Customer:</span><span className="font-black text-slate-950 text-right">{drop.customerName}</span></div>
                       {cust?.phone && (
