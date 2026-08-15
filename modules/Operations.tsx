@@ -3928,7 +3928,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       {/* PERSISTENT LEFT SIDEBAR */}
       <aside className="w-64 bg-white border-r border-[#E7E0D0] flex flex-col shrink-0">
         {/* Sidebar Header */}
-        <div className="p-6 border-b border-[#E7E0D0] flex items-center justify-between">
+        <div className="h-[72px] shrink-0 px-5 border-b border-[#E7E0D0] flex items-center justify-between">
           <div className="flex items-center gap-3">
             {SYSTEM_CONFIG.businessLogoUrl ? (
               <img src={SYSTEM_CONFIG.businessLogoUrl} alt="Logo" className="size-8 rounded-lg object-cover shadow-sm animate-fade-in" />
@@ -4008,7 +4008,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       {/* MAIN VIEW AREA */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         {/* Header */}
-        <header className="shrink-0 bg-white border-b border-[#E7E0D0] px-8 py-4 flex items-center justify-between z-10 shadow-sm">
+        <header className="h-[72px] shrink-0 bg-white border-b border-[#E7E0D0] px-8 flex items-center justify-between z-10 shadow-sm">
           <div>
             <h1 className="text-base font-black text-slate-900 tracking-tight leading-none">
               {tab === 'settings' ? 'System Settings' : TABS.find(t => t.id === tab)?.label || tab}
