@@ -1559,6 +1559,21 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const exportTransactionsCSV = (rowsToExport: any[]) => {
+    // Regular expression to strip emojis, icons, and non-standard pictographs
+    const removeEmojis = (str: string): string => {
+      if (!str) return '';
+      return str
+        .replace(/[\u1F600-\u1F64F]/g, '') // Emoticons
+        .replace(/[\u1F300-\u1F5FF]/g, '') // Symbols & Pictographs
+        .replace(/[\u1F680-\u1F6FF]/g, '') // Transport & Map Symbols
+        .replace(/[\u1F1E0-\u1F1FF]/g, '') // Flags
+        .replace(/[\u2600-\u27BF]/g, '')   // Misc Symbols & Dingbats
+        .replace(/[\uE000-\uF8FF]/g, '')   // Private Use Area
+        .replace(/[\uD83C-\uDBFF\uDC00-\uDFFF]/g, '') // Modern Emojis
+        .replace(/\s+/g, ' ')             // Clean duplicate spaces
+        .trim();
+    };
+
     const headers = [
       'Order ID',
       'Order Placed Date',
@@ -1567,10 +1582,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       'Customer Name',
       'Customer Phone',
       'Dish Name',
+      'Base Selection',
+      'Dhal Selection',
+      'Salad Selection',
+      'Beverage Selection',
+      'Dessert Selection',
+      'For Customer (Tag)',
+      'Custom Instructions',
       'Qty',
       'Price (Rs)',
       'Item Total (Rs)',
       'Discount Share (Rs)',
+      'Discount Reason',
       'VAT Share (Rs)',
       'Net Total (Rs)',
       'Payment Status',
@@ -1584,18 +1607,55 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     const csvRows = [headers.join(',')];
 
     rowsToExport.forEach(r => {
+      // Parse detailed selection parts from notes (joined by ' · ')
+      const parts = (r.notes || '').split(' · ');
+      let baseStr = '';
+      let dhalStr = '';
+      let saladStr = '';
+      let beverageStr = '';
+      let dessertStr = '';
+      let personStr = '';
+      let customNoteStr = '';
+
+      parts.forEach(part => {
+        const p = part.trim();
+        if (p.startsWith('for ')) {
+          personStr = p.slice(4);
+        } else if (bases.some(b => b.name === p || removeEmojis(b.name) === removeEmojis(p))) {
+          baseStr = p;
+        } else if (dhals.some(d => d.name === p || removeEmojis(d.name) === removeEmojis(p))) {
+          dhalStr = p;
+        } else if (salads.some(s => s.name === p || removeEmojis(s.name) === removeEmojis(p))) {
+          saladStr = p;
+        } else if (beverages.some(b => b.name === p || removeEmojis(b.name) === removeEmojis(p))) {
+          beverageStr = p;
+        } else if (desserts.some(d => d.name === p || removeEmojis(d.name) === removeEmojis(p))) {
+          dessertStr = p;
+        } else if (p) {
+          customNoteStr = customNoteStr ? `${customNoteStr} · ${p}` : p;
+        }
+      });
+
       const row = [
         csvEscape(r.orderId),
         csvEscape(r.timestamp),
         csvEscape(r.deliveryDate),
         csvEscape(r.serviceSlot),
-        csvEscape(r.customerName),
+        csvEscape(removeEmojis(r.customerName)),
         csvEscape(r.customerPhone),
-        csvEscape(r.itemName),
+        csvEscape(removeEmojis(r.itemName)),
+        csvEscape(removeEmojis(baseStr)),
+        csvEscape(removeEmojis(dhalStr)),
+        csvEscape(removeEmojis(saladStr)),
+        csvEscape(removeEmojis(beverageStr)),
+        csvEscape(removeEmojis(dessertStr)),
+        csvEscape(removeEmojis(personStr)),
+        csvEscape(removeEmojis(customNoteStr)),
         r.qty.toString(),
         r.price.toString(),
         r.itemTotal.toFixed(2),
         r.discount.toFixed(2),
+        csvEscape(removeEmojis(r.discountReason)),
         r.vat.toFixed(2),
         r.totalWithTax.toFixed(2),
         csvEscape(r.paymentStatus),
@@ -1603,7 +1663,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         csvEscape(r.paymentRef),
         csvEscape(r.deliveryStatus),
         r.rating !== undefined ? r.rating.toString() : '',
-        csvEscape(r.ratingComment || '')
+        csvEscape(removeEmojis(r.ratingComment || ''))
       ];
       csvRows.push(row.join(','));
     });
@@ -2940,6 +3000,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       price: number;
       itemTotal: number;
       discount: number;
+      discountReason: string;
       vat: number;
       totalWithTax: number;
       paymentStatus: string;
@@ -2974,6 +3035,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           price: item.price,
           itemTotal: itemTotal,
           discount: itemDiscount,
+          discountReason: o.discountReason || '',
           vat: itemVat,
           totalWithTax: itemNetTotal,
           paymentStatus: item.paymentStatus || o.paymentStatus || 'Pending',
