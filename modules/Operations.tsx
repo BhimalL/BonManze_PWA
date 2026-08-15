@@ -34,7 +34,8 @@ import {
   ChefHat,
   ImagePlus,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  Printer
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, getDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc } from 'firebase/firestore';
@@ -126,6 +127,16 @@ import {
   removeIconEntry
 } from './store';
 
+const splitNotesTag = (notes?: string): { detail: string; person: string | null } => {
+  if (!notes) return { detail: '', person: null };
+  const segments = notes.split(' · ');
+  const last = segments[segments.length - 1];
+  if (last && last.startsWith('for ')) {
+    return { detail: segments.slice(0, -1).join(' · '), person: last.slice(4) };
+  }
+  return { detail: notes, person: null };
+};
+
 interface OperationsProps {
   onExit: () => void;
 }
@@ -138,12 +149,12 @@ type Service = 'Lunch' | 'Dinner';
 
 // Which week the Menu tab is currently planning — 'This' and 'Next' match
 // the Customer App's own This/Next switcher exactly (those two are what a
-// customer can actually order). 'Week+2' is admin-only planning headroom —
-// it lets Bhimal stay one week ahead of the calendar rollover instead of
+// customer can actually order). 'Week+2' and 'Week+3' are admin-only planning headroom —
+// it lets Bhimal stay two weeks ahead of the calendar rollover instead of
 // "Next Week" being empty the moment it becomes "This Week" — and has zero
 // effect on what the Customer App shows or lets anyone order; nothing
 // customer-facing (orderableWeeks, etc.) reads this type or this value.
-type WeekChoice = 'This' | 'Next' | 'Week+2';
+type WeekChoice = 'This' | 'Next' | 'Week+2' | 'Week+3';
 
 // A day's lineup can now grow/shrink (add/remove dish), so the fixed
 // "curry" vocabulary is generalized to "main dish" wherever new UI is added
@@ -270,6 +281,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [pendingDeliveryKey, setPendingDeliveryKey] = useState<string | null>(null);
   const [pendingPaymentKey, setPendingPaymentKey] = useState<string | null>(null);
   const [opsActionError, setOpsActionError] = useState<string | null>(null);
+  const [activePrintDrop, setActivePrintDrop] = useState<DropTask | null>(null);
+
+  // Automatically trigger window.print() when activePrintDrop is selected,
+  // then clear the state to close the print rendering container.
+  useEffect(() => {
+    if (activePrintDrop) {
+      const timer = setTimeout(() => {
+        window.print();
+        setActivePrintDrop(null);
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [activePrintDrop]);
 
   // Meal Library / Menu Planner / add-on catalogs / Icon Library mutators
   // (addMainDish, updateBaseOption, lunchMenuStore's update/addDish/etc.,
@@ -946,11 +970,17 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Admin-only planning headroom, one week beyond "Next" — see the WeekChoice
   // comment above for why this never touches the Customer App.
   const week2Days = useMemo(() => getThisWeekDays(addDays(systemDate, 14)), [systemDate]);
+  // Second week of admin planning headroom (Week+3) — total 4 weeks of menus visible in console.
+  const week3Days = useMemo(() => getThisWeekDays(addDays(systemDate, 21)), [systemDate]);
   // Which week the Menu tab is currently showing, resolved from
   // activeMenuWeek — hoisted to component scope (not just inside
   // renderMenuTab) so the CSV import handler can target the same week the
   // admin is currently looking at.
-  const activeMenuDays = activeMenuWeek === 'Next' ? nextWeekDays : activeMenuWeek === 'Week+2' ? week2Days : weekDays;
+  const activeMenuDays = 
+    activeMenuWeek === 'Next' ? nextWeekDays :
+    activeMenuWeek === 'Week+2' ? week2Days :
+    activeMenuWeek === 'Week+3' ? week3Days :
+    weekDays;
   const activeMenuWeekStart = activeMenuDays[0].date;
   const weekDateKeys = useMemo(() => new Set(weekDays.map(d => d.date)), [weekDays]);
   const todayKey = useMemo(() => weekDays.find(d => d.date === systemDate)?.key ?? null, [weekDays, systemDate]);
@@ -1769,7 +1799,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
     const [y, m, d] = activeMenuWeekStart.split('-').map(Number);
     const weekDateStr = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
-    const weekLabel = activeMenuWeek === 'Next' ? "Next Week" : activeMenuWeek === 'Week+2' ? "Week After Next" : "This Week";
+    const weekLabel =
+      activeMenuWeek === 'Next' ? "Next Week" :
+      activeMenuWeek === 'Week+2' ? "Week+2" :
+      activeMenuWeek === 'Week+3' ? "Week+3" :
+      "This Week";
 
     const renderServiceMenu = (service: Service, activeMenu: Record<WeekdayKey, CurryOption[]>) => {
       const savedWeeks = savedWeeksFor(service).filter(w => w !== activeMenuWeekStart);
@@ -1946,17 +1980,17 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </span>
             </h3>
             <p className="text-xs text-slate-400 font-medium mt-1 max-w-sm">
-              Customers can order This week and Next week. Week+2 is planning headroom only, so Bhimal always has a week's lead time — it's never shown or orderable in the Customer App.
+              Customers can order This week and Next week. Week+2 and Week+3 are planning headroom only, so Bhimal always has a week's lead time — they are never shown or orderable in the Customer App.
             </p>
           </div>
           <div className="flex items-center gap-1 bg-slate-100 rounded-full p-1 shrink-0">
-            {(['This', 'Next', 'Week+2'] as WeekChoice[]).map(w => (
+            {(['This', 'Next', 'Week+2', 'Week+3'] as WeekChoice[]).map(w => (
               <button
                 key={w}
                 onClick={() => setActiveMenuWeek(w)}
-                className={`px-3.5 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${activeMenuWeek === w ? 'bg-primary text-white shadow-sm' : 'text-slate-500'}`}
+                className={`px-3.5 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${activeMenuWeek === w ? 'bg-primary text-white shadow-sm' : 'text-slate-500'} cursor-pointer`}
               >
-                {w === 'This' ? 'This week' : w === 'Next' ? 'Next week' : 'Week+2'}
+                {w === 'This' ? 'This week' : w === 'Next' ? 'Next week' : w === 'Week+2' ? 'Week+2' : 'Week+3'}
               </button>
             ))}
           </div>
@@ -3581,14 +3615,25 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           </p>
                         )}
                       </div>
-                      <button
-                        onClick={() => handleMarkDelivered(drop)}
-                        disabled={pendingDeliveryKey === drop.key}
-                        className="shrink-0 px-6 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait"
-                      >
-                        {pendingDeliveryKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                        {pendingDeliveryKey === drop.key ? 'Marking...' : 'Mark Delivered'}
-                      </button>
+                      <div className="flex items-center gap-2.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setActivePrintDrop(drop)}
+                          className="px-4 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-pointer"
+                          title="Print delivery ticket"
+                        >
+                          <Printer className="size-4" /> Print
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMarkDelivered(drop)}
+                          disabled={pendingDeliveryKey === drop.key}
+                          className="px-6 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                        >
+                          {pendingDeliveryKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                          {pendingDeliveryKey === drop.key ? 'Marking...' : 'Mark Delivered'}
+                        </button>
+                      </div>
                     </div>
                   );
                 };
@@ -3655,14 +3700,25 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 </p>
                               )}
                             </div>
-                            <button
-                              onClick={() => setPaymentDrop(drop)}
-                              disabled={pendingPaymentKey === drop.key}
-                              className="shrink-0 px-6 py-3 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-warning/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait"
-                            >
-                              {pendingPaymentKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <Banknote className="size-4" />}
-                              {pendingPaymentKey === drop.key ? 'Marking...' : 'Mark Paid'}
-                            </button>
+                            <div className="flex items-center gap-2.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setActivePrintDrop(drop)}
+                                className="px-4 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-pointer"
+                                title="Print order ticket"
+                              >
+                                <Printer className="size-4" /> Print
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPaymentDrop(drop)}
+                                disabled={pendingPaymentKey === drop.key}
+                                className="px-6 py-3 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-warning/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                              >
+                                {pendingPaymentKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <Banknote className="size-4" />}
+                                {pendingPaymentKey === drop.key ? 'Marking...' : 'Mark Paid'}
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -4065,6 +4121,99 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   className="px-5 py-2 bg-primary text-white hover:bg-primary/95 rounded-xl text-xs font-bold shadow-md transition-all cursor-pointer"
                 >
                   Save Customer
+                </button>
+              </div>
+            </div>
+          </div>
+        </Portal>
+      )}
+
+      {/* 80mm Print Ticket Portal */}
+      {activePrintDrop && (
+        <Portal>
+          <div className="fixed inset-0 z-[10000] bg-white flex flex-col justify-start items-center p-4 overflow-y-auto bmz-print-ticket-overlay">
+            <style>{`
+              /* Hidden by default on screen */
+              .bmz-print-ticket-container { display: block; }
+              @media print {
+                body * { visibility: hidden !important; }
+                .bmz-print-ticket-overlay, .bmz-print-ticket-overlay * { visibility: visible !important; }
+                .bmz-print-ticket-overlay { position: fixed; inset: 0; margin: 0; padding: 0; background: white; width: 100%; height: 100%; overflow: visible; }
+                .bmz-print-ticket-container { width: 80mm; max-width: 80mm; margin: 0; padding: 10px; border: none; font-family: monospace; }
+                .bmz-no-print { display: none !important; }
+              }
+            `}</style>
+            <div className="bmz-print-ticket-container bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-xs shadow-lg font-mono text-[11px] text-slate-800">
+              <div className="text-center border-b border-dashed border-slate-300 pb-3 mb-3">
+                <p className="text-sm font-black uppercase tracking-wider text-slate-900">{SYSTEM_CONFIG.businessName}</p>
+                <p className="text-[10px] uppercase font-bold text-slate-400 mt-0.5">Delivery Ticket</p>
+              </div>
+              
+              <div className="space-y-1.5 mb-3">
+                <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Customer:</span><span className="font-black text-slate-950 text-right">{activePrintDrop.customerName}</span></div>
+                {(() => {
+                  const cust = getCustomer(activePrintDrop.customerName);
+                  return cust?.phone ? (
+                    <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Phone:</span><span className="font-bold text-slate-900">{cust.phone}</span></div>
+                  ) : null;
+                })()}
+                <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Date:</span><span className="font-bold text-slate-900">{new Date(activePrintDrop.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Service:</span><span className="font-black text-accent uppercase">{activePrintDrop.slot}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Payment:</span><span className={`font-black uppercase ${activePrintDrop.paymentStatus === 'Paid' ? 'text-success' : 'text-danger'}`}>{activePrintDrop.paymentStatus === 'Paid' ? 'Paid' : 'Unpaid'}</span></div>
+              </div>
+
+              <div className="border-t border-b border-dashed border-slate-300 py-3 my-3">
+                <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider mb-2">Items</p>
+                <div className="space-y-2.5">
+                  {activePrintDrop.items.map((item, idx) => {
+                    const { detail, person } = splitNotesTag(item.notes);
+                    return (
+                      <div key={idx} className="space-y-0.5">
+                        <div className="flex justify-between font-bold text-slate-950">
+                          <span>{item.qty}x {item.name}</span>
+                          <span>Rs {item.price * item.qty}</span>
+                        </div>
+                        {detail && <p className="text-[10px] text-slate-500 leading-tight pl-2">↳ {detail}</p>}
+                        {person && <p className="text-[10px] font-bold text-accent pl-2">👤 For {person}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider mb-1">Delivery Address</p>
+                {(() => {
+                  const cust = getCustomer(activePrintDrop.customerName);
+                  const addr = cust?.addresses?.[0];
+                  return addr ? (
+                    <div className="font-bold text-slate-950 leading-snug">
+                      <p>{addr.street}</p>
+                      <p>{addr.city}</p>
+                    </div>
+                  ) : (
+                    <p className="text-slate-400 italic">No address specified</p>
+                  );
+                })()}
+              </div>
+
+              <div className="text-center border-t border-dashed border-slate-300 pt-3 mt-4 text-[9px] text-slate-400 space-y-0.5">
+                <p>BonManzE Mauritian Delights 🌿</p>
+                <p className="font-mono text-[8px] opacity-75">Order Ref: {activePrintDrop.orderId.slice(0, 8).toUpperCase()}</p>
+              </div>
+              
+              <div className="bmz-no-print mt-5 flex gap-2">
+                <button
+                  onClick={() => setActivePrintDrop(null)}
+                  className="flex-1 py-2 bg-slate-100 text-slate-500 hover:bg-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-pointer"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  className="flex-1 py-2 bg-primary text-white hover:bg-primary/95 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-pointer"
+                >
+                  Print Again
                 </button>
               </div>
             </div>
