@@ -613,9 +613,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const mealPrice = (m: MealSelection, weekdayKey: WeekdayKey, service: Service, weekStart: string): number => {
     const c = menuFor(service, weekStart)[weekdayKey].find(x => x.id === m.curryId);
     const b = MEAL_BASES.find(x => x.id === m.baseId);
+    const dh = m.dhalId !== 'none' ? MEAL_DHALS.find(x => x.id === m.dhalId) : null;
+    const sl = m.saladId !== 'none' ? MEAL_SALADS.find(x => x.id === m.saladId) : null;
     const v = m.beverageId !== 'none' ? MEAL_BEVERAGES.find(x => x.id === m.beverageId) : null;
     const d = m.dessertId !== 'none' ? MEAL_DESSERTS.find(x => x.id === m.dessertId) : null;
-    return (c?.price || 0) + (b?.up || 0) + (v?.price || 0) + (d?.price || 0);
+    return (c?.price || 0) + (b?.up || 0) + (dh?.price || 0) + (sl?.price || 0) + (v?.price || 0) + (d?.price || 0);
   };
   const mealSummaryLabel = (m: MealSelection, weekdayKey: WeekdayKey, service: Service, weekStart: string): string => {
     const c = menuFor(service, weekStart)[weekdayKey].find(x => x.id === m.curryId);
@@ -1226,20 +1228,20 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const handleCheckout = async () => {
     if (!currentUser || cartCount === 0 || checkoutLoading) return;
     const payloadItems: {
-      curryId: string; baseId: string; beverageId: string; dessertId: string;
+      curryId: string; baseId: string; dhalId: string; saladId: string; beverageId: string; dessertId: string;
       note: string; deliveryDate: string; service: Service; slotIndex: number;
     }[] = [];
     orderableWeeks.forEach(week => {
       week.days.forEach(d => {
         (cart[d.date] || []).forEach((m, idx) => {
           payloadItems.push({
-            curryId: m.curryId, baseId: m.baseId, beverageId: m.beverageId, dessertId: m.dessertId,
+            curryId: m.curryId, baseId: m.baseId, dhalId: m.dhalId, saladId: m.saladId, beverageId: m.beverageId, dessertId: m.dessertId,
             note: mealNotesLine(m), deliveryDate: d.date, service: 'Lunch', slotIndex: idx,
           });
         });
         (dinnerCart[d.date] || []).forEach((m, idx) => {
           payloadItems.push({
-            curryId: m.curryId, baseId: m.baseId, beverageId: m.beverageId, dessertId: m.dessertId,
+            curryId: m.curryId, baseId: m.baseId, dhalId: m.dhalId, saladId: m.saladId, beverageId: m.beverageId, dessertId: m.dessertId,
             note: mealNotesLine(m), deliveryDate: d.date, service: 'Dinner', slotIndex: idx,
           });
         });
@@ -2895,10 +2897,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               >
                 <div className="space-y-3">
                   {(!selectedCurry || dishDhalApplicable(selectedCurry)) && (
-                    <ChipRow label="🫘 Dhal" options={filterAddOnOptions(MEAL_DHALS, selectedCurry?.dhalOptionIds)} selected={builder.sel.dhalId} onSelect={id => requestExtraChange('dhalId', id)} noneLabel="None" />
+                    <ChipRow label="🫘 Dhal" options={filterAddOnOptions(MEAL_DHALS, selectedCurry?.dhalOptionIds)} selected={builder.sel.dhalId} onSelect={id => requestExtraChange('dhalId', id)} noneLabel="None" showPrice />
                   )}
                   {(!selectedCurry || dishSaladApplicable(selectedCurry)) && (
-                    <ChipRow label="🥗 Salad" options={filterAddOnOptions(MEAL_SALADS, selectedCurry?.saladOptionIds)} selected={builder.sel.saladId} onSelect={id => requestExtraChange('saladId', id)} noneLabel="None" />
+                    <ChipRow label="🥗 Salad" options={filterAddOnOptions(MEAL_SALADS, selectedCurry?.saladOptionIds)} selected={builder.sel.saladId} onSelect={id => requestExtraChange('saladId', id)} noneLabel="None" showPrice />
                   )}
                   {(!selectedCurry || dishBeverageApplicable(selectedCurry)) && (
                     <ChipRow label="🥤 Beverage" options={filterAddOnOptions(MEAL_BEVERAGES, selectedCurry?.beverageOptionIds)} selected={builder.sel.beverageId} onSelect={id => setBuilderSel({ beverageId: id })} noneLabel="None" showPrice />

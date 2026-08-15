@@ -244,11 +244,13 @@ export const confirmCheckout = onCall(async (request) => {
   const customer = customerSnap.data();
 
   // ---- Load current catalogs/config in parallel ----
-  const [configSnap, tiersSnap, groupsSnap, basesSnap, bevSnap, desSnap, defaultsSnap] = await Promise.all([
+  const [configSnap, tiersSnap, groupsSnap, basesSnap, dhalsSnap, saladsSnap, bevSnap, desSnap, defaultsSnap] = await Promise.all([
     db.collection('config').doc('system').get(),
     db.collection('loyaltyTiers').doc('current').get(),
     db.collection('customerGroups').doc('current').get(),
     db.collection('mealBases').doc('current').get(),
+    db.collection('mealDhals').doc('current').get(),
+    db.collection('mealSalads').doc('current').get(),
     db.collection('mealBeverages').doc('current').get(),
     db.collection('mealDesserts').doc('current').get(),
     db.collection('menuDefaults').doc('current').get(),
@@ -277,6 +279,8 @@ export const confirmCheckout = onCall(async (request) => {
   const tiersArr = (tiersSnap.data() || {}).items || [];
   const groupsArr = (groupsSnap.data() || {}).items || [];
   const basesArr = (basesSnap.data() || {}).items || [];
+  const dhalsArr = (dhalsSnap.data() || {}).items || [];
+  const saladsArr = (saladsSnap.data() || {}).items || [];
   const bevArr = (bevSnap.data() || {}).items || [];
   const desArr = (desSnap.data() || {}).items || [];
   const menuDefaults = defaultsSnap.data() || {};
@@ -326,7 +330,7 @@ export const confirmCheckout = onCall(async (request) => {
     if (!raw || typeof raw !== 'object') {
       throw new HttpsError('invalid-argument', `Item ${i} is malformed.`);
     }
-    const { curryId, baseId, beverageId, dessertId, note, deliveryDate, service, slotIndex } = raw;
+    const { curryId, baseId, dhalId, saladId, beverageId, dessertId, note, deliveryDate, service, slotIndex } = raw;
     if (typeof curryId !== 'string' || !curryId) {
       throw new HttpsError('invalid-argument', `Item ${i} is missing curryId.`);
     }
@@ -340,10 +344,12 @@ export const confirmCheckout = onCall(async (request) => {
 
     const { dish, weekStart, weekdayKey } = await findDish(deliveryDate, service, curryId);
     const base = basesArr.find((b) => b.id === baseId);
+    const dhal = dhalId && dhalId !== 'none' ? dhalsArr.find((d) => d.id === dhalId) : null;
+    const salad = saladId && saladId !== 'none' ? saladsArr.find((s) => s.id === saladId) : null;
     const beverage = beverageId && beverageId !== 'none' ? bevArr.find((b) => b.id === beverageId) : null;
     const dessert = dessertId && dessertId !== 'none' ? desArr.find((d) => d.id === dessertId) : null;
 
-    const price = (dish.price || 0) + (base?.up || 0) + (beverage?.price || 0) + (dessert?.price || 0);
+    const price = (dish.price || 0) + (base?.up || 0) + (dhal?.price || 0) + (salad?.price || 0) + (beverage?.price || 0) + (dessert?.price || 0);
 
     priced.push({
       itemId: curryId,

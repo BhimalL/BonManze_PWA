@@ -1466,8 +1466,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const CATALOG_META: Record<CatalogKey, { label: string; items: AddOnOption[]; add: (i: AddOnOption) => Promise<void>; update: (id: string, u: Partial<AddOnOption>) => Promise<void>; remove: (id: string) => Promise<void>; hasGroup: boolean; hasPrice: boolean }> = {
     base: { label: 'Base', items: bases, add: addBaseOption, update: updateBaseOption, remove: removeBaseOption, hasGroup: true, hasPrice: true },
-    dhal: { label: 'Dhal', items: dhals, add: addDhalOption, update: updateDhalOption, remove: removeDhalOption, hasGroup: false, hasPrice: false },
-    salad: { label: 'Salad', items: salads, add: addSaladOption, update: updateSaladOption, remove: removeSaladOption, hasGroup: false, hasPrice: false },
+    dhal: { label: 'Dhal', items: dhals, add: addDhalOption, update: updateDhalOption, remove: removeDhalOption, hasGroup: false, hasPrice: true },
+    salad: { label: 'Salad', items: salads, add: addSaladOption, update: updateSaladOption, remove: removeSaladOption, hasGroup: false, hasPrice: true },
     beverage: { label: 'Beverage', items: beverages, add: addBeverageOption, update: updateBeverageOption, remove: removeBeverageOption, hasGroup: false, hasPrice: true },
     dessert: { label: 'Dessert', items: desserts, add: addDessertOption, update: updateDessertOption, remove: removeDessertOption, hasGroup: false, hasPrice: true },
   };
