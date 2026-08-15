@@ -4889,20 +4889,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
                     <div className="space-y-3 pt-4 border-t border-slate-100">
                       <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Customer Stats & Balance</p>
-                      <div className="grid grid-cols-3 gap-3">
-                        <div className="bg-[#3E7D22]/5 border border-[#3E7D22]/10 rounded-2xl p-3 flex flex-col justify-center min-h-[70px]">
-                          <span className="text-[8px] uppercase font-black text-slate-400 tracking-wider">LTV</span>
-                          <span className="text-sm font-black text-slate-900 mt-0.5">Rs {editCustomer.ltv?.toLocaleString() || '0'}</span>
+                      <div className="space-y-2">
+                        <div className="bg-[#3E7D22]/5 border border-[#3E7D22]/10 rounded-xl px-4 py-2.5 flex items-center justify-between">
+                          <span className="text-[9px] uppercase font-black text-slate-400 tracking-wider">Lifetime Value (LTV)</span>
+                          <span className="text-xs font-black text-slate-900">Rs {editCustomer.ltv?.toLocaleString() || '0'}</span>
                         </div>
                         
-                        <div className="bg-[#B4703A]/5 border border-[#B4703A]/10 rounded-2xl p-3 flex flex-col justify-center min-h-[70px]">
-                          <span className="text-[8px] uppercase font-black text-slate-400 tracking-wider">Points</span>
-                          <span className="text-sm font-black text-slate-900 mt-0.5">{editCustomer.points || 0} pts</span>
+                        <div className="bg-[#B4703A]/5 border border-[#B4703A]/10 rounded-xl px-4 py-2.5 flex items-center justify-between">
+                          <span className="text-[9px] uppercase font-black text-slate-400 tracking-wider">Loyalty Points</span>
+                          <span className="text-xs font-black text-slate-900">{editCustomer.points || 0} pts</span>
                         </div>
 
-                        <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-3 flex flex-col justify-center min-h-[70px]">
-                          <span className="text-[8px] uppercase font-black text-slate-400 tracking-wider">Credit</span>
-                          <span className="text-sm font-black text-slate-900 mt-0.5">Rs {editCustomer.storeCredit || 0}</span>
+                        <div className="bg-slate-50 border border-slate-200/60 rounded-xl px-4 py-2.5 flex items-center justify-between">
+                          <span className="text-[9px] uppercase font-black text-slate-400 tracking-wider">Store Credit Balance</span>
+                          <span className="text-xs font-black text-slate-900">Rs {editCustomer.storeCredit || 0}</span>
                         </div>
                       </div>
                     </div>

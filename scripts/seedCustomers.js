@@ -59,7 +59,7 @@ const MOCK_CUSTOMERS = [
     segment: 'VIP', group: 'VIP', lastOrder: '2023-10-15',
     ltv: 45000, points: 10450, storeCredit: 1250.00, tier: 'Diamond',
     birthday: '1990-06-12', avatar: 'https://picsum.photos/seed/m/100/100',
-    referenceCode: 'MARC-VIP-1',
+    referenceCode: 'MARCUS',
     gdprConsent: { marketing: true, sms: true, dataProcessing: true },
     addresses: [
       { id: 'a1', label: 'Home', street: 'Penthouse 4, Cyber Tower 1', city: 'Ebene', zip: '72201', country: 'Mauritius' },
@@ -74,7 +74,7 @@ const MOCK_CUSTOMERS = [
     segment: 'VIP', group: 'Corporate', lastOrder: '2023-10-31',
     ltv: 28400, points: 300, storeCredit: 0, tier: 'Bronze',
     birthday: '1985-10-31', avatar: 'https://picsum.photos/seed/cust1/100/100',
-    referenceCode: 'ELEA-CORP',
+    referenceCode: 'ELEANOR',
     gdprConsent: { marketing: true, sms: true, dataProcessing: true },
     addresses: [
       { id: 'a1', label: 'Work', street: '12 Coastal Road', city: 'Grand Baie', zip: '30510', country: 'Mauritius' },
@@ -88,7 +88,7 @@ const MOCK_CUSTOMERS = [
     segment: 'Regular', group: 'ABC Motors Co Ltd', lastOrder: '2023-10-10',
     ltv: 12500, points: 1450, storeCredit: 450.50, tier: 'Silver',
     birthday: '1995-01-27', avatar: 'https://picsum.photos/seed/s/100/100',
-    referenceCode: 'SARAH-001',
+    referenceCode: 'SARAH',
     gdprConsent: { marketing: true, sms: false, dataProcessing: true },
     addresses: [
       { id: 'a1', label: 'Home', street: '123 Cybercity Ave', city: 'Ebene', zip: '72201', country: 'Mauritius' },
