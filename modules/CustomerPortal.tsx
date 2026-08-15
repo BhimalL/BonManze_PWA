@@ -412,11 +412,41 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [view, setView] = useState<'home' | 'menu' | 'order' | 'contact'>('home');
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [cart, setCart] = useState<Record<string, MealSelection[]>>({});
+  const [cart, setCart] = useState<Record<string, MealSelection[]>>(() => {
+    try {
+      const saved = localStorage.getItem('bmz_customer_cart_lunch');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
   // Dinner's own draft cart, kept as a separate parallel state rather than
   // folding a service key into `cart` — same shape, same day-keyed pattern,
   // just a second bucket so Lunch's existing logic above stays untouched.
-  const [dinnerCart, setDinnerCart] = useState<Record<string, MealSelection[]>>({});
+  const [dinnerCart, setDinnerCart] = useState<Record<string, MealSelection[]>>(() => {
+    try {
+      const saved = localStorage.getItem('bmz_customer_cart_dinner');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bmz_customer_cart_lunch', JSON.stringify(cart));
+    } catch (e) {
+      console.error('Failed to save lunch cart to localStorage', e);
+    }
+  }, [cart]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bmz_customer_cart_dinner', JSON.stringify(dinnerCart));
+    } catch (e) {
+      console.error('Failed to save dinner cart to localStorage', e);
+    }
+  }, [dinnerCart]);
   // Which offering the Menu tab is currently browsing/adding to — the Draft
   // review further down shows both services at once regardless of this.
   const [activeService, setActiveService] = useState<Service>('Lunch');
