@@ -1465,7 +1465,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // --- Add-on catalog management (Base / Dhal / Salad / Beverage / Dessert) ---
 
   const CATALOG_META: Record<CatalogKey, { label: string; items: AddOnOption[]; add: (i: AddOnOption) => Promise<void>; update: (id: string, u: Partial<AddOnOption>) => Promise<void>; remove: (id: string) => Promise<void>; hasGroup: boolean; hasPrice: boolean }> = {
-    base: { label: 'Base', items: bases, add: addBaseOption, update: updateBaseOption, remove: removeBaseOption, hasGroup: true, hasPrice: true },
+    base: { label: 'Base', items: bases, add: addBaseOption, update: updateBaseOption, remove: removeBaseOption, hasGroup: false, hasPrice: true },
     dhal: { label: 'Dhal', items: dhals, add: addDhalOption, update: updateDhalOption, remove: removeDhalOption, hasGroup: false, hasPrice: true },
     salad: { label: 'Salad', items: salads, add: addSaladOption, update: updateSaladOption, remove: removeSaladOption, hasGroup: false, hasPrice: true },
     beverage: { label: 'Beverage', items: beverages, add: addBeverageOption, update: updateBeverageOption, remove: removeBeverageOption, hasGroup: false, hasPrice: true },
@@ -1486,7 +1486,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       emoji: addOnForm.emoji.trim() || '•',
       name: addOnForm.name.trim() || 'Untitled',
       [priceField]: isNaN(parsedPrice) ? 0 : parsedPrice,
-      ...(meta.hasGroup ? { group: addOnForm.group.trim() || DEFAULT_BASE_GROUP } : {})
+      group: editingAddOn.catalog === 'base' ? (addOnForm.group.trim() || DEFAULT_BASE_GROUP) : undefined
     } as Partial<AddOnOption>));
     setEditingAddOn(null);
   };
@@ -1501,11 +1501,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       emoji: draft.emoji.trim() || '•',
       name: draft.name.trim(),
     };
-    if (catalog === 'base') item.up = isNaN(parsedPrice) ? 0 : parsedPrice;
-    else item.price = isNaN(parsedPrice) ? 0 : parsedPrice;
-    if (meta.hasGroup) item.group = draft.group.trim() || DEFAULT_BASE_GROUP;
+    if (catalog === 'base') {
+      item.up = isNaN(parsedPrice) ? 0 : parsedPrice;
+      item.group = DEFAULT_BASE_GROUP;
+    } else {
+      item.price = isNaN(parsedPrice) ? 0 : parsedPrice;
+    }
     runMenuWrite(meta.add(item));
-    setNewAddOnForm(f => ({ ...f, [catalog]: { emoji: draft.emoji, name: '', price: catalog === 'dhal' || catalog === 'salad' ? '' : '0', group: meta.hasGroup ? draft.group : '' } }));
+    setNewAddOnForm(f => ({ ...f, [catalog]: { emoji: draft.emoji, name: '', price: catalog === 'dhal' || catalog === 'salad' ? '' : '0', group: '' } }));
   };
 
   // --- Icon Library management (Settings → Icons) ---
