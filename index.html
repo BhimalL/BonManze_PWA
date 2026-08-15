@@ -7,6 +7,10 @@
     <title>BonManzE — Homemade. Delivered Fresh.</title>
     <link rel="icon" href="/bonmanze-icon.png">
     <link rel="apple-touch-icon" href="/bonmanze-icon.png">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#3E7D22">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=Lexend:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -84,6 +88,15 @@
 </head>
 <body class="bg-background text-slate-900 font-sans antialiased">
     <div id="root"></div>
-<script type="module" src="/index.tsx"></script>
+    <script type="module" src="/index.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then(reg => console.log('[PWA] Service Worker registered successfully on scope:', reg.scope))
+            .catch(err => console.error('[PWA] Service Worker registration failed:', err));
+        });
+      }
+    </script>
 </body>
 </html>
