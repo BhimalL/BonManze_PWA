@@ -279,6 +279,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Customer App's own This week/Next week switcher.
   const [activeMenuWeek, setActiveMenuWeek] = useState<WeekChoice>('This');
   const [paymentDrop, setPaymentDrop] = useState<DropTask | null>(null);
+  const [reuseWeekIndex, setReuseWeekIndex] = useState<number>(0);
 
   // In-flight/error state for the real Firestore writes behind Mark
   // Delivered/Mark Paid (see handleMarkDelivered/markPaid below) — these
@@ -1821,8 +1822,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             <h2 className="text-base font-black text-slate-900">{weekLabel}'s Curry Menu — {service}</h2>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => { setReusePickerFor(reusePickerFor === service ? null : service); setReuseSourceWeek(''); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
+                type="button"
+                onClick={() => { setReusePickerFor(reusePickerFor === service ? null : service); setReuseWeekIndex(0); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <History className="size-3.5" /> Reuse a previous week
               </button>
@@ -1841,61 +1843,106 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </div>
           </div>
 
-          {reusePickerFor === service && (
-            <div className="mb-4 p-4 bg-primary/5 border border-primary/20 rounded-2xl flex flex-col gap-3">
-              <div className="flex items-center gap-3 flex-wrap">
-                <p className="text-xs font-bold text-slate-600 shrink-0">Copy a saved week's {service.toLowerCase()} lineup into {weekLabel}:</p>
+          {reusePickerFor === service && (() => {
+            const savedWeeks = savedWeeksFor(service, activeMenuWeekStart);
+            const sourceWeekStart = savedWeeks[reuseWeekIndex] || '';
+            return (
+              <div className="mb-6 p-5 bg-[#FAF9F5] border border-[#E7E0D0] rounded-3xl flex flex-col gap-4 animate-fade-in">
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <div className="space-y-1">
+                    <h4 className="text-xs font-black text-slate-900">Reuse a previous week's {service.toLowerCase()} lineup</h4>
+                    <p className="text-[11px] text-slate-400 font-medium">Browse past configurations using the navigation buttons and copy the menu lineup.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setReusePickerFor(null); }}
+                    className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+
                 {savedWeeks.length === 0 ? (
-                  <p className="text-[11px] text-slate-400 font-medium">No other saved weeks yet — edit, add, or remove a dish on a different week first to save one.</p>
+                  <div className="py-6 text-center text-slate-400 border border-dashed border-[#E7E0D0] bg-white rounded-2xl">
+                    <p className="text-xs font-bold">No previous saved weeks found.</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Edit, add, or remove a dish on another week first to build a past menu library.</p>
+                  </div>
                 ) : (
                   <>
-                    <select
-                      value={reuseSourceWeek}
-                      onChange={e => setReuseSourceWeek(e.target.value)}
-                      className="text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
-                    >
-                      <option value="">Choose a week…</option>
-                      {savedWeeks.map(w => <option key={w} value={w}>{formatWeekStartForDropdown(w)}</option>)}
-                    </select>
-                    <button
-                      type="button"
-                      disabled={!reuseSourceWeek}
-                      onClick={() => applyReuseWeek(service, activeMenuWeekStart, reuseSourceWeek)}
-                      className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[11px] font-black bg-primary text-white disabled:opacity-40 transition-colors cursor-pointer"
-                    >
-                      <Copy className="size-3.5" /> Copy lineup into {weekLabel}
-                    </button>
+                    {/* Carousel Navigation Selector Row */}
+                    <div className="flex items-center justify-between bg-white rounded-2xl border border-[#E7E0D0] p-3 shadow-sm">
+                      <button
+                        type="button"
+                        disabled={reuseWeekIndex >= savedWeeks.length - 1}
+                        onClick={() => setReuseWeekIndex(prev => prev + 1)}
+                        className="px-4 py-2 hover:bg-slate-50 border border-slate-200 text-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-xl text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer"
+                      >
+                        ← Previous Week
+                      </button>
+                      
+                      <div className="text-center">
+                        <span className="text-xs font-black text-slate-950 block">
+                          {formatWeekStartForDropdown(sourceWeekStart)}
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
+                          Week {reuseWeekIndex + 1} of {savedWeeks.length}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={reuseWeekIndex <= 0}
+                        onClick={() => setReuseWeekIndex(prev => prev - 1)}
+                        className="px-4 py-2 hover:bg-slate-50 border border-slate-200 text-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-xl text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer"
+                      >
+                        Next Week →
+                      </button>
+                    </div>
+
+                    {/* Live Day-by-Day Preview Grid of target past week */}
+                    {sourceWeekStart && (() => {
+                      const previewMenu = service === 'Dinner' ? dinnerMenuForWeek(sourceWeekStart) : lunchMenuForWeek(sourceWeekStart);
+                      return (
+                        <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4.5 space-y-2.5 shadow-sm">
+                          <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Curry Lineup Preview</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                            {WEEKDAY_KEYS.map(day => (
+                              <div key={day} className="bg-slate-50/50 rounded-xl border border-slate-100 p-3 flex flex-col justify-start">
+                                <span className="text-[9px] font-black text-primary tracking-widest uppercase mb-2">{day}</span>
+                                <div className="space-y-1.5 flex-1">
+                                  {previewMenu[day].length === 0 ? (
+                                    <span className="text-[10px] text-slate-300 font-bold italic block">No dishes</span>
+                                  ) : (
+                                    previewMenu[day].map(dish => (
+                                      <div key={dish.id} className="text-[11px] font-black text-slate-700 leading-tight truncate flex items-center gap-1" title={`${dish.emoji} ${dish.name}`}>
+                                        <span className="text-xs shrink-0">{dish.emoji}</span>
+                                        <span className="truncate">{dish.name}</span>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Apply Lineup Confirm Button */}
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => applyReuseWeek(service, activeMenuWeekStart, sourceWeekStart)}
+                        className="px-6 py-3 bg-primary text-white hover:bg-primary/95 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <Copy className="size-3.5" /> Reuse this weekly menu lineup
+                      </button>
+                    </div>
                   </>
                 )}
               </div>
-              {reuseSourceWeek && (() => {
-                const previewMenu = service === 'Dinner' ? dinnerMenuForWeek(reuseSourceWeek) : lunchMenuForWeek(reuseSourceWeek);
-                return (
-                  <div className="w-full bg-white/40 border border-slate-200/50 rounded-xl p-3.5 space-y-2 animate-in slide-in-from-top-1 duration-200">
-                    <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Lineup Preview ({formatWeekStartForDropdown(reuseSourceWeek)})</p>
-                    <div className="grid grid-cols-5 gap-2.5 overflow-x-auto pb-1">
-                      {WEEKDAY_KEYS.map(day => (
-                        <div key={day} className="bg-white rounded-xl border border-slate-100 p-2.5 min-w-[110px]">
-                          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5">{day}</p>
-                          <div className="space-y-1">
-                            {previewMenu[day].length === 0 ? (
-                              <p className="text-[10px] text-slate-300 font-bold italic">No dishes scheduled</p>
-                            ) : (
-                              previewMenu[day].map(dish => (
-                                <p key={dish.id} className="text-[10px] font-bold text-slate-700 truncate" title={`${dish.emoji} ${dish.name}`}>
-                                  {dish.emoji} {dish.name}
-                                </p>
-                              ))
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-          )}
+            );
+          })()}
 
           {csvImportTarget === service && csvError && (
             <p className="mb-4 text-[11px] font-bold text-red-500">{csvError}</p>
