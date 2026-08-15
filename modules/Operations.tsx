@@ -4744,135 +4744,173 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       {editCustomer && (
         <Portal>
           <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-300">
+            <div className="bg-white rounded-[32px] w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-300">
               <div className="p-6 border-b border-slate-100 flex items-center justify-between shrink-0">
-                <h2 className="text-lg font-black text-slate-900">Edit Customer CRM</h2>
+                <h2 className="text-lg font-black text-slate-900 font-sans tracking-tight">Edit Customer CRM</h2>
                 <button onClick={() => setEditCustomer(null)} className="p-2 text-slate-400 hover:text-danger">
                   <X className="size-5" />
                 </button>
               </div>
-              <div className="p-6 space-y-6 overflow-y-auto flex-1">
-                <div>
-                  <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-2">Customer Profile</p>
-                  <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100 animate-fade-in">
-                    <img src={editCustomer.avatar} alt={editCustomer.name} className="size-12 rounded-full border border-slate-200" />
+              <div className="p-6 overflow-y-auto flex-1">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  {/* LEFT COLUMN: Customer Details */}
+                  <div className="space-y-6">
                     <div>
-                      <p className="text-sm font-bold text-slate-900">{editCustomer.name}</p>
-                      <p className="text-xs text-slate-500">{editCustomer.email}</p>
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mb-2">Customer Profile</p>
+                      <div className="flex items-center gap-3.5 p-3.5 bg-slate-50 rounded-2xl border border-slate-100 animate-fade-in">
+                        <img src={editCustomer.avatar} alt={editCustomer.name} className="size-12 rounded-full border border-slate-200" />
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{editCustomer.name}</p>
+                          <p className="text-xs text-slate-500">{editCustomer.email}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Personal Details</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">First Name</label>
+                          <input
+                            type="text"
+                            value={editCustFirstName}
+                            onChange={e => setEditCustFirstName(e.target.value)}
+                            className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Last Name</label>
+                          <input
+                            type="text"
+                            value={editCustLastName}
+                            onChange={e => setEditCustLastName(e.target.value)}
+                            className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Email Address</label>
+                          <input
+                            type="email"
+                            value={editCustEmail}
+                            onChange={e => setEditCustEmail(e.target.value)}
+                            className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Username (Read-only)</label>
+                          <input
+                            type="text"
+                            disabled
+                            value={editCustomer.referenceCode ? editCustomer.referenceCode.toLowerCase() : ''}
+                            className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none bg-slate-100 text-slate-400 cursor-not-allowed"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Birthday</label>
+                          <input
+                            type="date"
+                            value={editCustBirthday}
+                            onChange={e => setEditCustBirthday(e.target.value)}
+                            className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Phone Number</label>
+                          <input
+                            type="text"
+                            value={editCustPhone}
+                            onChange={e => setEditCustPhone(e.target.value)}
+                            className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 pt-4 border-t border-slate-100">
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Primary Address</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Street Address</label>
+                          <input
+                            type="text"
+                            value={editCustStreet}
+                            onChange={e => setEditCustStreet(e.target.value)}
+                            placeholder="e.g. 12 Rue de la Paix"
+                            className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">City / Town</label>
+                          <input
+                            type="text"
+                            value={editCustCity}
+                            onChange={e => setEditCustCity(e.target.value)}
+                            placeholder="e.g. Port Louis"
+                            className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">First Name</label>
-                    <input
-                      type="text"
-                      value={editCustFirstName}
-                      onChange={e => setEditCustFirstName(e.target.value)}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    />
-                  </div>
+                  {/* RIGHT COLUMN: Configuration & CRM */}
+                  <div className="space-y-6 lg:border-l lg:border-slate-100 lg:pl-8">
+                    <div className="space-y-4">
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Configuration & Groups</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Loyalty Tier</label>
+                          <select
+                            value={editCustTier}
+                            onChange={e => setEditCustTier(e.target.value)}
+                            className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                          >
+                            {loyaltyTiers.map(t => (
+                              <option key={t.id} value={t.name}>{t.name}</option>
+                            ))}
+                          </select>
+                        </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Last Name</label>
-                    <input
-                      type="text"
-                      value={editCustLastName}
-                      onChange={e => setEditCustLastName(e.target.value)}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    />
-                  </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Customer Group</label>
+                          <select
+                            value={editCustGroup}
+                            onChange={e => setEditCustGroup(e.target.value)}
+                            className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                          >
+                            <option value="">None (Regular Customer)</option>
+                            {customerGroups.map(g => (
+                              <option key={g.id} value={g.id}>{g.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Email Address</label>
-                    <input
-                      type="email"
-                      value={editCustEmail}
-                      onChange={e => setEditCustEmail(e.target.value)}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    />
-                  </div>
+                    <div className="space-y-4 pt-6 border-t border-slate-100">
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Customer Stats & Balance</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 gap-4">
+                        <div className="bg-[#3E7D22]/5 border border-[#3E7D22]/10 rounded-2xl p-4 flex flex-col justify-center">
+                          <span className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Lifetime Value (LTV)</span>
+                          <span className="text-xl font-black text-slate-900 mt-1">Rs {editCustomer.ltv?.toLocaleString() || '0'}</span>
+                        </div>
+                        
+                        <div className="bg-[#B4703A]/5 border border-[#B4703A]/10 rounded-2xl p-4 flex flex-col justify-center">
+                          <span className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Loyalty Points</span>
+                          <span className="text-xl font-black text-slate-900 mt-1">{editCustomer.points || 0} pts</span>
+                        </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Username (Read-only)</label>
-                    <input
-                      type="text"
-                      disabled
-                      value={editCustomer.referenceCode ? editCustomer.referenceCode.toLowerCase() : ''}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none bg-slate-100 text-slate-400 cursor-not-allowed"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Birthday</label>
-                    <input
-                      type="date"
-                      value={editCustBirthday}
-                      onChange={e => setEditCustBirthday(e.target.value)}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Phone Number</label>
-                    <input
-                      type="text"
-                      value={editCustPhone}
-                      onChange={e => setEditCustPhone(e.target.value)}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Loyalty Tier</label>
-                    <select
-                      value={editCustTier}
-                      onChange={e => setEditCustTier(e.target.value)}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    >
-                      {loyaltyTiers.map(t => (
-                        <option key={t.id} value={t.name}>{t.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Customer Group</label>
-                    <select
-                      value={editCustGroup}
-                      onChange={e => setEditCustGroup(e.target.value)}
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    >
-                      <option value="">None (Regular Customer)</option>
-                      {customerGroups.map(g => (
-                        <option key={g.id} value={g.id}>{g.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="space-y-4 pt-4 border-t border-slate-100">
-                  <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Primary Address</p>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Street Address</label>
-                    <input
-                      type="text"
-                      value={editCustStreet}
-                      onChange={e => setEditCustStreet(e.target.value)}
-                      placeholder="e.g. 12 Rue de la Paix"
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">City / Town</label>
-                    <input
-                      type="text"
-                      value={editCustCity}
-                      onChange={e => setEditCustCity(e.target.value)}
-                      placeholder="e.g. Port Louis"
-                      className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
-                    />
+                        <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-4 flex flex-col justify-center">
+                          <span className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Store Credit Balance</span>
+                          <span className="text-xl font-black text-slate-900 mt-1">Rs {editCustomer.storeCredit || 0}</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
