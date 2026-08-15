@@ -321,6 +321,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [pendingPaymentKey, setPendingPaymentKey] = useState<string | null>(null);
   const [opsActionError, setOpsActionError] = useState<string | null>(null);
   const [activePrintDrop, setActivePrintDrop] = useState<DropTask | null>(null);
+  const [activePrintService, setActivePrintService] = useState<{ date: string; service: 'Lunch' | 'Dinner'; drops: DropTask[] } | null>(null);
 
   // Automatically trigger window.print() when activePrintDrop is selected,
   // then clear the state to close the print rendering container.
@@ -333,6 +334,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       return () => clearTimeout(timer);
     }
   }, [activePrintDrop]);
+
+  // Automatically trigger window.print() when activePrintService is selected,
+  // then clear the state to close the print rendering container.
+  useEffect(() => {
+    if (activePrintService) {
+      const timer = setTimeout(() => {
+        window.print();
+        setActivePrintService(null);
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [activePrintService]);
 
   // Meal Library / Menu Planner / add-on catalogs / Icon Library mutators
   // (addMainDish, updateBaseOption, lunchMenuStore's update/addDish/etc.,
@@ -4530,13 +4543,31 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <div className="space-y-4">
                     {showLunch && (
                       <div className="bg-primary/5 rounded-2xl p-4 space-y-3">
-                        <p className="text-[10px] font-black uppercase text-primary tracking-widest">☀️ Lunch · {lunchDrops.length} drop{lunchDrops.length !== 1 ? 's' : ''}</p>
+                        <div className="flex items-center justify-between gap-4 flex-wrap border-b border-primary/10 pb-2">
+                          <p className="text-[10px] font-black uppercase text-primary tracking-widest">☀️ Lunch · {lunchDrops.length} drop{lunchDrops.length !== 1 ? 's' : ''}</p>
+                          <button
+                            type="button"
+                            onClick={() => setActivePrintService({ date: activeDeliveryDayDate as string, service: 'Lunch', drops: lunchDrops })}
+                            className="px-3 py-1.5 bg-primary text-white rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1 hover:bg-primary/95 active:scale-95 transition-all cursor-pointer shadow-sm"
+                          >
+                            <Printer className="size-3" /> Print Lunch Stickers
+                          </button>
+                        </div>
                         {lunchDrops.map(renderDropCard)}
                       </div>
                     )}
                     {showDinner && (
                       <div className="bg-accent/5 rounded-2xl p-4 space-y-3">
-                        <p className="text-[10px] font-black uppercase text-accent tracking-widest">🌙 Dinner · {dinnerDrops.length} drop{dinnerDrops.length !== 1 ? 's' : ''}</p>
+                        <div className="flex items-center justify-between gap-4 flex-wrap border-b border-accent/10 pb-2">
+                          <p className="text-[10px] font-black uppercase text-accent tracking-widest">🌙 Dinner · {dinnerDrops.length} drop{dinnerDrops.length !== 1 ? 's' : ''}</p>
+                          <button
+                            type="button"
+                            onClick={() => setActivePrintService({ date: activeDeliveryDayDate as string, service: 'Dinner', drops: dinnerDrops })}
+                            className="px-3 py-1.5 bg-accent text-white rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1 hover:bg-accent/95 active:scale-95 transition-all cursor-pointer shadow-sm"
+                          >
+                            <Printer className="size-3" /> Print Dinner Stickers
+                          </button>
+                        </div>
                         {dinnerDrops.map(renderDropCard)}
                       </div>
                     )}
@@ -5153,6 +5184,141 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   Print Again
                 </button>
               </div>
+            </div>
+          </div>
+        </Portal>
+      )}
+
+      {activePrintService && (
+        <Portal>
+          <div className="fixed inset-0 z-[10000] bg-white flex flex-col justify-start items-center p-4 overflow-y-auto bmz-print-stickers-overlay">
+            <style>{`
+              /* Hidden by default on screen */
+              .bmz-sticker-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(60mm, 1fr));
+                gap: 4mm;
+                width: 100%;
+                max-width: 1200px;
+                padding: 10px;
+              }
+              .bmz-sticker-card {
+                width: 76mm;
+                height: 48mm;
+                border: 1px dashed #cbd5e1;
+                border-radius: 8px;
+                padding: 10px;
+                font-family: monospace;
+                font-size: 10px;
+                color: #1e293b;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+                background: white;
+                box-sizing: border-box;
+                page-break-inside: avoid;
+                break-inside: avoid;
+              }
+              @media print {
+                body * { visibility: hidden !important; }
+                .bmz-print-stickers-overlay, .bmz-print-stickers-overlay * { visibility: visible !important; }
+                .bmz-print-stickers-overlay { position: fixed; inset: 0; margin: 0; padding: 0; background: white; width: 100%; height: 100%; overflow: visible; }
+                .bmz-sticker-grid {
+                  display: grid;
+                  grid-template-columns: repeat(2, 1fr);
+                  gap: 0;
+                  width: 100%;
+                  max-width: 100%;
+                  padding: 0;
+                }
+                .bmz-sticker-card {
+                  border: 1px dashed #e2e8f0;
+                  border-radius: 0;
+                  page-break-after: always;
+                  break-after: page;
+                }
+                .bmz-no-print { display: none !important; }
+              }
+            `}</style>
+            <div className="w-full max-w-4xl bg-slate-50 border border-slate-200 rounded-3xl p-6 shadow-xl bmz-no-print mb-6">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-base font-black text-slate-900 font-sans tracking-tight">Sticker Print Preview</h2>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Generating stickers for {activePrintService.service} · {new Date(activePrintService.date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' })}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setActivePrintService(null)}
+                    className="px-4 py-2 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={() => window.print()}
+                    className="px-5 py-2 bg-primary text-white hover:bg-primary/95 rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
+                  >
+                    Print Stickers
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="bmz-sticker-grid">
+              {(() => {
+                const stickers: React.ReactNode[] = [];
+                activePrintService.drops.forEach(drop => {
+                  const cust = getCustomer(drop.customerName);
+                  const custGroupName = cust?.group || 'Regular Customer';
+                  
+                  drop.items.forEach(item => {
+                    const { detail, person, instructions } = splitNotesTag(item.notes);
+                    // Print 'qty' separate stickers for each single container box
+                    for (let i = 0; i < item.qty; i++) {
+                      stickers.push(
+                        <div key={`${drop.key}-${item.itemId}-${i}`} className="bmz-sticker-card">
+                          <div className="border-b border-slate-200 pb-1 flex justify-between items-center">
+                            <span className="font-extrabold uppercase tracking-wider text-[8px] text-slate-400">BonManzE 🌿</span>
+                            <span className="font-extrabold text-[8px] text-slate-400">
+                              {new Date(activePrintService.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
+                            </span>
+                          </div>
+                          
+                          <div className="py-1">
+                            <p className="font-black text-xs text-slate-900 leading-tight">{item.name}</p>
+                            {detail && <p className="text-[9px] text-slate-500 mt-0.5 leading-snug">↳ {detail}</p>}
+                          </div>
+                          
+                          <div className="border-t border-slate-100 pt-1 space-y-0.5">
+                            <div className="flex justify-between items-center text-[9px]">
+                              <span className="font-bold text-slate-800 truncate max-w-[120px]">{drop.customerName}</span>
+                              <span className="px-1 py-0.5 rounded bg-slate-100 text-[8px] font-bold text-slate-500 uppercase max-w-[80px] truncate">
+                                {custGroupName}
+                              </span>
+                            </div>
+                            
+                            {person && (
+                              <p className="text-[9px] font-black text-primary">👤 For {person}</p>
+                            )}
+                            {instructions && (
+                              <p className="text-[9px] font-black text-[#B4703A]">🍳 Req: {instructions}</p>
+                            )}
+                          </div>
+                          
+                          <div className="text-[8px] text-slate-400 text-right opacity-70 border-t border-slate-100 pt-0.5 mt-0.5">
+                            Box {i + 1} of {item.qty} · {activePrintService.service}
+                          </div>
+                        </div>
+                      );
+                    }
+                  });
+                });
+                
+                return stickers.length > 0 ? stickers : (
+                  <p className="text-slate-400 italic text-center py-10 font-sans text-xs col-span-full">No active items to print stickers for.</p>
+                );
+              })()}
             </div>
           </div>
         </Portal>
