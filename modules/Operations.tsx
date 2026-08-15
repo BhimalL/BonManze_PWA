@@ -152,6 +152,18 @@ const splitNotesTag = (notes?: string): { detail: string; person: string | null;
   return { detail: details.join(' · '), person, instructions };
 };
 
+const isNoteForCustomer = (personName: string | null, customerName: string, cust?: Customer | null): boolean => {
+  if (!personName) return false;
+  const pLower = personName.trim().toLowerCase();
+  const cLower = customerName.trim().toLowerCase();
+  if (pLower === cLower) return true;
+  if (cust) {
+    if (cust.firstName && pLower === cust.firstName.trim().toLowerCase()) return true;
+    if (cust.lastName && pLower === cust.lastName.trim().toLowerCase()) return true;
+  }
+  return false;
+};
+
 const InstructionsTag = ({ text }: { text: string }) => (
   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-warning/10 text-[#B4703A] border border-warning/15 text-[9px] font-black uppercase shrink-0">
     🍳 {text}
@@ -5134,6 +5146,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 <div className="space-y-2.5">
                   {activePrintDrop.items.map((item, idx) => {
                     const { detail, person, instructions } = splitNotesTag(item.notes);
+                    const cust = getCustomer(activePrintDrop.customerName);
+                    const isForUser = isNoteForCustomer(person, activePrintDrop.customerName, cust);
                     return (
                       <div key={idx} className="space-y-0.5">
                         <div className="flex justify-between font-bold text-slate-950">
@@ -5141,7 +5155,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           <span>Rs {item.price * item.qty}</span>
                         </div>
                         {detail && <p className="text-[10px] text-slate-500 leading-tight pl-2">↳ {detail}</p>}
-                        {person && <p className="text-[10px] font-bold text-accent pl-2">👤 For {person}</p>}
+                        {person && !isForUser && <p className="text-[10px] font-bold text-accent pl-2">👤 For {person}</p>}
                         {instructions && <p className="text-[10px] font-bold text-[#B4703A] pl-2">🍳 Req: {instructions}</p>}
                       </div>
                     );
@@ -5195,26 +5209,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             <style>{`
               /* Hidden by default on screen */
               .bmz-sticker-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(60mm, 1fr));
-                gap: 4mm;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 20px;
+                justify-content: center;
                 width: 100%;
                 max-width: 1200px;
                 padding: 10px;
               }
-              .bmz-sticker-card {
-                width: 76mm;
-                height: 48mm;
-                border: 1px dashed #cbd5e1;
-                border-radius: 8px;
-                padding: 10px;
+              .bmz-print-ticket-container {
+                width: 80mm;
+                max-width: 80mm;
                 font-family: monospace;
-                font-size: 10px;
-                color: #1e293b;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-                background: white;
                 box-sizing: border-box;
                 page-break-inside: avoid;
                 break-inside: avoid;
@@ -5224,16 +5230,15 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 .bmz-print-stickers-overlay, .bmz-print-stickers-overlay * { visibility: visible !important; }
                 .bmz-print-stickers-overlay { position: fixed; inset: 0; margin: 0; padding: 0; background: white; width: 100%; height: 100%; overflow: visible; }
                 .bmz-sticker-grid {
-                  display: grid;
-                  grid-template-columns: repeat(2, 1fr);
-                  gap: 0;
+                  display: block;
                   width: 100%;
-                  max-width: 100%;
                   padding: 0;
                 }
-                .bmz-sticker-card {
-                  border: 1px dashed #e2e8f0;
-                  border-radius: 0;
+                .bmz-print-ticket-container {
+                  border: none !important;
+                  box-shadow: none !important;
+                  margin: 0;
+                  padding: 10px;
                   page-break-after: always;
                   break-after: page;
                 }
@@ -5243,9 +5248,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             <div className="w-full max-w-4xl bg-slate-50 border border-slate-200 rounded-3xl p-6 shadow-xl bmz-no-print mb-6">
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <h2 className="text-base font-black text-slate-900 font-sans tracking-tight">Sticker Print Preview</h2>
+                  <h2 className="text-base font-black text-slate-900 font-sans tracking-tight">Delivery Tickets Print Preview</h2>
                   <p className="text-xs text-slate-500 font-medium">
-                    Generating stickers for {activePrintService.service} · {new Date(activePrintService.date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' })}
+                    Generating delivery tickets for {activePrintService.service} · {new Date(activePrintService.date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' })}
                   </p>
                 </div>
                 <div className="flex gap-2">
@@ -5259,66 +5264,74 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     onClick={() => window.print()}
                     className="px-5 py-2 bg-primary text-white hover:bg-primary/95 rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
                   >
-                    Print Stickers
+                    Print Tickets
                   </button>
                 </div>
               </div>
             </div>
 
             <div className="bmz-sticker-grid">
-              {(() => {
-                const stickers: React.ReactNode[] = [];
-                activePrintService.drops.forEach(drop => {
-                  const cust = getCustomer(drop.customerName);
-                  const custGroupName = cust?.group || 'Regular Customer';
-                  
-                  drop.items.forEach(item => {
-                    const { detail, person, instructions } = splitNotesTag(item.notes);
-                    // Print 'qty' separate stickers for each single container box
-                    for (let i = 0; i < item.qty; i++) {
-                      stickers.push(
-                        <div key={`${drop.key}-${item.itemId}-${i}`} className="bmz-sticker-card">
-                          <div className="border-b border-slate-200 pb-1 flex justify-between items-center">
-                            <span className="font-extrabold uppercase tracking-wider text-[8px] text-slate-400">BonManzE 🌿</span>
-                            <span className="font-extrabold text-[8px] text-slate-400">
-                              {new Date(activePrintService.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
-                            </span>
-                          </div>
-                          
-                          <div className="py-1">
-                            <p className="font-black text-xs text-slate-900 leading-tight">{item.name}</p>
-                            {detail && <p className="text-[9px] text-slate-500 mt-0.5 leading-snug">↳ {detail}</p>}
-                          </div>
-                          
-                          <div className="border-t border-slate-100 pt-1 space-y-0.5">
-                            <div className="flex justify-between items-center text-[9px]">
-                              <span className="font-bold text-slate-800 truncate max-w-[120px]">{drop.customerName}</span>
-                              <span className="px-1 py-0.5 rounded bg-slate-100 text-[8px] font-bold text-slate-500 uppercase max-w-[80px] truncate">
-                                {custGroupName}
-                              </span>
-                            </div>
-                            
-                            {person && (
-                              <p className="text-[9px] font-black text-primary">👤 For {person}</p>
-                            )}
-                            {instructions && (
-                              <p className="text-[9px] font-black text-[#B4703A]">🍳 Req: {instructions}</p>
-                            )}
-                          </div>
-                          
-                          <div className="text-[8px] text-slate-400 text-right opacity-70 border-t border-slate-100 pt-0.5 mt-0.5">
-                            Box {i + 1} of {item.qty} · {activePrintService.service}
-                          </div>
-                        </div>
-                      );
-                    }
-                  });
-                });
+              {activePrintService.drops.map(drop => {
+                const cust = getCustomer(drop.customerName);
+                const addr = cust?.addresses?.[0];
                 
-                return stickers.length > 0 ? stickers : (
-                  <p className="text-slate-400 italic text-center py-10 font-sans text-xs col-span-full">No active items to print stickers for.</p>
+                return (
+                  <div key={drop.key} className="bmz-print-ticket-container bg-white border border-slate-200 rounded-2xl p-6 shadow-lg font-mono text-[11px] text-slate-800">
+                    <div className="text-center border-b border-dashed border-slate-300 pb-3 mb-3">
+                      <p className="text-sm font-black uppercase tracking-wider text-slate-900">{SYSTEM_CONFIG.businessName}</p>
+                      <p className="text-[10px] uppercase font-bold text-slate-400 mt-0.5">Delivery Ticket</p>
+                    </div>
+                    
+                    <div className="space-y-1.5 mb-3">
+                      <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Customer:</span><span className="font-black text-slate-950 text-right">{drop.customerName}</span></div>
+                      {cust?.phone && (
+                        <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Phone:</span><span className="font-bold text-slate-900">{cust.phone}</span></div>
+                      )}
+                      <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Date:</span><span className="font-bold text-slate-900">{new Date(drop.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span></div>
+                      <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Service:</span><span className="font-black text-accent uppercase">{drop.slot}</span></div>
+                      <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Payment:</span><span className={`font-black uppercase ${drop.paymentStatus === 'Paid' ? 'text-success' : 'text-danger'}`}>{drop.paymentStatus === 'Paid' ? 'Paid' : 'Unpaid'}</span></div>
+                    </div>
+
+                    <div className="border-t border-b border-dashed border-slate-300 py-3 my-3">
+                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider mb-2">Items</p>
+                      <div className="space-y-2.5">
+                        {drop.items.map((item, idx) => {
+                          const { detail, person, instructions } = splitNotesTag(item.notes);
+                          const isForUser = isNoteForCustomer(person, drop.customerName, cust);
+                          return (
+                            <div key={idx} className="space-y-0.5">
+                              <div className="flex justify-between font-bold text-slate-950">
+                                <span>{item.qty}x {item.name}</span>
+                                <span>Rs {item.price * item.qty}</span>
+                              </div>
+                              {detail && <p className="text-[10px] text-slate-500 leading-tight pl-2">↳ {detail}</p>}
+                              {person && !isForUser && <p className="text-[10px] font-bold text-accent pl-2">👤 For {person}</p>}
+                              {instructions && <p className="text-[10px] font-bold text-[#B4703A] pl-2">🍳 Req: {instructions}</p>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="mb-4">
+                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider mb-1">Delivery Address</p>
+                      {addr ? (
+                        <div className="font-bold text-slate-950 leading-snug">
+                          <p>{addr.street}</p>
+                          <p>{addr.city}</p>
+                        </div>
+                      ) : (
+                        <p className="text-slate-400 italic">No address specified</p>
+                      )}
+                    </div>
+
+                    <div className="text-center border-t border-dashed border-slate-300 pt-3 mt-4 text-[9px] text-slate-400 space-y-0.5">
+                      <p>BonManzE Mauritian Delights 🌿</p>
+                      <p className="font-mono text-[8px] opacity-75">Order Ref: {drop.orderId.slice(0, 8).toUpperCase()}</p>
+                    </div>
+                  </div>
                 );
-              })()}
+              })}
             </div>
           </div>
         </Portal>
