@@ -260,7 +260,7 @@ const getThisWeekDays = (systemDateStr: string): WeekDay[] => {
   const [y, m, d] = systemDateStr.split('-').map(Number);
   const base = new Date(y, (m || 1) - 1, d || 1);
   const dow = base.getDay();
-  const diffToMonday = dow === 0 ? 1 : (1 - dow);
+  const diffToMonday = dow === 6 ? 2 : (dow === 0 ? 1 : (1 - dow));
   const monday = new Date(base);
   monday.setDate(base.getDate() + diffToMonday);
   const out: WeekDay[] = [];
