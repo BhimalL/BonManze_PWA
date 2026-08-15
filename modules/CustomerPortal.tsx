@@ -1909,8 +1909,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   </div>
                 </div>
               </div>
-              <p className="relative z-10 text-sm font-black italic leading-snug mt-4">"{isBirthday ? 'Zwaye Laniverser! 🎂🎉' : culturePhrase.cr}"</p>
-              <p className="relative z-10 text-xs opacity-80 mt-1">{isBirthday ? 'Wishing you a wonderful day filled with delicious curries! 🎂🎈' : culturePhrase.en}</p>
+              <p className="relative z-10 text-sm font-black italic leading-snug mt-4">"{isBirthday ? (SYSTEM_CONFIG.birthdayHeaderCreole || 'Zwaye Laniverser! 🎂🎉') : culturePhrase.cr}"</p>
+              <p className="relative z-10 text-xs opacity-80 mt-1">{isBirthday ? (SYSTEM_CONFIG.birthdayHeaderEnglish || 'Wishing you a wonderful day filled with delicious curries! 🎂🎈') : culturePhrase.en}</p>
               {todaysArrivingLines.length > 0 && (
                 <div className="relative z-10 mt-4 flex items-center gap-3 bg-white/10 backdrop-blur-md border border-white/15 rounded-2xl p-3">
                   <img src={dishPhotoFor(todaysArrivingLines[0].item.itemId)} className="size-11 rounded-xl object-cover shrink-0 border-2 border-white/25" alt={todaysArrivingLines[0].item.name} />

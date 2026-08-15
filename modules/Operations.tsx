@@ -561,7 +561,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     tagline: SYSTEM_CONFIG.businessTagline,
     logoUrl: SYSTEM_CONFIG.businessLogoUrl,
     supportPhone: SYSTEM_CONFIG.supportPhone,
-    supportEmail: SYSTEM_CONFIG.supportEmail
+    supportEmail: SYSTEM_CONFIG.supportEmail,
+    birthdayHeaderCreole: SYSTEM_CONFIG.birthdayHeaderCreole || '',
+    birthdayHeaderEnglish: SYSTEM_CONFIG.birthdayHeaderEnglish || '',
+    birthdayStickerCreole: SYSTEM_CONFIG.birthdayStickerCreole || '',
+    birthdayStickerEnglish: SYSTEM_CONFIG.birthdayStickerEnglish || ''
   });
 
   // Order cutoff & delivery windows — previously hardcoded into the
@@ -812,7 +816,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         tagline: SYSTEM_CONFIG.businessTagline,
         logoUrl: SYSTEM_CONFIG.businessLogoUrl,
         supportPhone: SYSTEM_CONFIG.supportPhone,
-        supportEmail: SYSTEM_CONFIG.supportEmail
+        supportEmail: SYSTEM_CONFIG.supportEmail,
+        birthdayHeaderCreole: SYSTEM_CONFIG.birthdayHeaderCreole || '',
+        birthdayHeaderEnglish: SYSTEM_CONFIG.birthdayHeaderEnglish || '',
+        birthdayStickerCreole: SYSTEM_CONFIG.birthdayStickerCreole || '',
+        birthdayStickerEnglish: SYSTEM_CONFIG.birthdayStickerEnglish || ''
       });
       setDinnerEnabledLocal(SYSTEM_CONFIG.dinnerEnabled);
       setDeliveryForm({
@@ -851,6 +859,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       brandForm.logoUrl !== SYSTEM_CONFIG.businessLogoUrl ||
       brandForm.supportPhone !== SYSTEM_CONFIG.supportPhone ||
       brandForm.supportEmail !== SYSTEM_CONFIG.supportEmail ||
+      brandForm.birthdayHeaderCreole !== (SYSTEM_CONFIG.birthdayHeaderCreole || '') ||
+      brandForm.birthdayHeaderEnglish !== (SYSTEM_CONFIG.birthdayHeaderEnglish || '') ||
+      brandForm.birthdayStickerCreole !== (SYSTEM_CONFIG.birthdayStickerCreole || '') ||
+      brandForm.birthdayStickerEnglish !== (SYSTEM_CONFIG.birthdayStickerEnglish || '') ||
       deliveryForm.lunchOrderCutoffTime !== SYSTEM_CONFIG.lunchOrderCutoffTime ||
       Number(deliveryForm.lunchOrderCutoffDayOffset) !== SYSTEM_CONFIG.lunchOrderCutoffDayOffset ||
       deliveryForm.lunchCancelCutoffTime !== SYSTEM_CONFIG.lunchCancelCutoffTime ||
@@ -883,6 +895,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       businessLogoUrl: brandForm.logoUrl.trim(),
       supportPhone: brandForm.supportPhone.trim() || SYSTEM_CONFIG.supportPhone,
       supportEmail: brandForm.supportEmail.trim() || SYSTEM_CONFIG.supportEmail,
+      birthdayHeaderCreole: brandForm.birthdayHeaderCreole.trim(),
+      birthdayHeaderEnglish: brandForm.birthdayHeaderEnglish.trim(),
+      birthdayStickerCreole: brandForm.birthdayStickerCreole.trim(),
+      birthdayStickerEnglish: brandForm.birthdayStickerEnglish.trim(),
       
       // Legacy unified fallbacks to prevent breaking old codebase references:
       cutoffTime: deliveryForm.lunchOrderCutoffTime,
@@ -921,7 +937,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       tagline: SYSTEM_CONFIG.businessTagline,
       logoUrl: SYSTEM_CONFIG.businessLogoUrl,
       supportPhone: SYSTEM_CONFIG.supportPhone,
-      supportEmail: SYSTEM_CONFIG.supportEmail
+      supportEmail: SYSTEM_CONFIG.supportEmail,
+      birthdayHeaderCreole: SYSTEM_CONFIG.birthdayHeaderCreole || '',
+      birthdayHeaderEnglish: SYSTEM_CONFIG.birthdayHeaderEnglish || '',
+      birthdayStickerCreole: SYSTEM_CONFIG.birthdayStickerCreole || '',
+      birthdayStickerEnglish: SYSTEM_CONFIG.birthdayStickerEnglish || ''
     });
     setDeliveryForm({
       lunchOrderCutoffTime: SYSTEM_CONFIG.lunchOrderCutoffTime,
@@ -3710,6 +3730,61 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 />
               </div>
             </div>
+
+            {/* Birthday Greeting Configuration Card */}
+            <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-6 space-y-4">
+              <div>
+                <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  🎂 Birthday Greeting Configuration
+                </h4>
+                <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                  Customize the greetings shown to customers on their birthday inside the Customer App and printed on their delivery tickets.
+                </p>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Customer App Header (Creole)</label>
+                  <input
+                    type="text"
+                    value={brandForm.birthdayHeaderCreole}
+                    onChange={e => setBrandForm(f => ({ ...f, birthdayHeaderCreole: e.target.value }))}
+                    placeholder="Zwaye Laniverser! 🎂🎉"
+                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white transition-all"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Customer App Subtitle (English)</label>
+                  <input
+                    type="text"
+                    value={brandForm.birthdayHeaderEnglish}
+                    onChange={e => setBrandForm(f => ({ ...f, birthdayHeaderEnglish: e.target.value }))}
+                    placeholder="Wishing you a wonderful day filled with delicious curries! 🎂🎈"
+                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white transition-all"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Print Sticker Banner (Creole)</label>
+                  <input
+                    type="text"
+                    value={brandForm.birthdayStickerCreole}
+                    onChange={e => setBrandForm(f => ({ ...f, birthdayStickerCreole: e.target.value }))}
+                    placeholder="🎂 ZWAYE LANIVERSER! 🎂"
+                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white transition-all"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Print Sticker Subtitle (English)</label>
+                  <input
+                    type="text"
+                    value={brandForm.birthdayStickerEnglish}
+                    onChange={e => setBrandForm(f => ({ ...f, birthdayStickerEnglish: e.target.value }))}
+                    placeholder="Happy Birthday!"
+                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white transition-all"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -5145,8 +5220,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 const isBirthday = cust ? isBirthdayToday(cust.birthday, activePrintDrop.date) : false;
                 return isBirthday ? (
                   <div className="text-center border border-dashed border-rose-300 bg-rose-50 text-rose-700 font-extrabold rounded-lg py-2 px-1 mb-3">
-                    🎂 ZWAYE LANIVERSER! 🎂
-                    <p className="text-[8px] font-bold uppercase tracking-wide text-rose-500 mt-0.5">Happy Birthday!</p>
+                    {SYSTEM_CONFIG.birthdayStickerCreole || '🎂 ZWAYE LANIVERSER! 🎂'}
+                    <p className="text-[8px] font-bold uppercase tracking-wide text-rose-500 mt-0.5">{SYSTEM_CONFIG.birthdayStickerEnglish || 'Happy Birthday!'}</p>
                   </div>
                 ) : null;
               })()}
@@ -5309,8 +5384,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       const isBirthday = cust ? isBirthdayToday(cust.birthday, drop.date) : false;
                       return isBirthday ? (
                         <div className="text-center border border-dashed border-rose-300 bg-rose-50 text-rose-700 font-extrabold rounded-lg py-2 px-1 mb-3">
-                          🎂 ZWAYE LANIVERSER! 🎂
-                          <p className="text-[8px] font-bold uppercase tracking-wide text-rose-500 mt-0.5">Happy Birthday!</p>
+                          {SYSTEM_CONFIG.birthdayStickerCreole || '🎂 ZWAYE LANIVERSER! 🎂'}
+                          <p className="text-[8px] font-bold uppercase tracking-wide text-rose-500 mt-0.5">{SYSTEM_CONFIG.birthdayStickerEnglish || 'Happy Birthday!'}</p>
                         </div>
                       ) : null;
                     })()}

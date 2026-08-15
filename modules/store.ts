@@ -152,7 +152,11 @@ export const SYSTEM_CONFIG = {
   // Dinner is a second, independently toggleable offering that otherwise
   // works exactly like Lunch — same weekly-menu pattern, same cart/checkout
   // flow, same 9AM same-day cutoff. See WEEKLY_DINNER_MENU below.
-  dinnerEnabled: true
+  dinnerEnabled: true,
+  birthdayHeaderCreole: 'Zwaye Laniverser! 🎂🎉',
+  birthdayHeaderEnglish: 'Wishing you a wonderful day filled with delicious curries! 🎂🎈',
+  birthdayStickerCreole: '🎂 ZWAYE LANIVERSER! 🎂',
+  birthdayStickerEnglish: 'Happy Birthday!'
 };
 
 export const formatNumber = (value: number | undefined | null) => {
@@ -1915,6 +1919,10 @@ export const updateSystemConfig = async (updates: Partial<typeof SYSTEM_CONFIG>)
   if (updates.dinnerOrderCutoffDayOffset !== undefined) SYSTEM_CONFIG.dinnerOrderCutoffDayOffset = updates.dinnerOrderCutoffDayOffset;
   if (updates.dinnerCancelCutoffTime !== undefined) SYSTEM_CONFIG.dinnerCancelCutoffTime = updates.dinnerCancelCutoffTime;
   if (updates.dinnerCancelCutoffDayOffset !== undefined) SYSTEM_CONFIG.dinnerCancelCutoffDayOffset = updates.dinnerCancelCutoffDayOffset;
+  if (updates.birthdayHeaderCreole !== undefined) SYSTEM_CONFIG.birthdayHeaderCreole = updates.birthdayHeaderCreole;
+  if (updates.birthdayHeaderEnglish !== undefined) SYSTEM_CONFIG.birthdayHeaderEnglish = updates.birthdayHeaderEnglish;
+  if (updates.birthdayStickerCreole !== undefined) SYSTEM_CONFIG.birthdayStickerCreole = updates.birthdayStickerCreole;
+  if (updates.birthdayStickerEnglish !== undefined) SYSTEM_CONFIG.birthdayStickerEnglish = updates.birthdayStickerEnglish;
   configListeners.forEach(l => l());
 
   await setDoc(doc(db, 'config', 'system'), dropUndefined({
