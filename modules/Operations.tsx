@@ -1479,12 +1479,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   // --- Reuse a previous week's plan ---
 
-  const savedWeeksFor = (service: Service): string[] => {
+  const savedWeeksFor = (service: Service, activeWeekStart: string): string[] => {
     const starts = service === 'Dinner' ? listDinnerWeekStarts() : listLunchWeekStarts();
-    // Menu tab only ever plans This/Next/Week+2 — offering to "reuse" the
-    // exact week you're already looking at isn't useful, so it's filtered
-    // out of its own picker (still reusable *into* from another week).
-    return starts;
+    // Only return weeks that are strictly in the past relative to the week
+    // being edited, sorted in reverse-chronological order (newest/most recent first).
+    return starts
+      .filter(w => w < activeWeekStart)
+      .sort((a, b) => b.localeCompare(a));
   };
 
   const applyReuseWeek = (service: Service, destinationWeekStart: string, sourceWeekStart: string) => {
@@ -1813,7 +1814,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       "This Week";
 
     const renderServiceMenu = (service: Service, activeMenu: Record<WeekdayKey, CurryOption[]>) => {
-      const savedWeeks = savedWeeksFor(service).filter(w => w !== activeMenuWeekStart);
+      const savedWeeks = savedWeeksFor(service, activeMenuWeekStart);
       return (
         <div key={service} className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
           <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
