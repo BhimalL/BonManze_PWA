@@ -487,3 +487,29 @@ This session modularized the Settings panel, converted card lists/catalogs into 
 * **Commits**: `d3044fb` (settings sub-tabs modularization + tabular lists/catalogs + CRM group selection) — pushed to `origin/main`.
 
 
+## 2026-08-15: Antigravity — Kitchen & Delivery Status Lifecycle, Batch Print Tickets, & Configurable Birthday Greetings
+
+We completed the approved kitchen/delivery status workflow and advanced printing features.
+
+### What was done
+1. **Order Status Lifecycles (`modules/types.ts` & `modules/Operations.tsx`)**
+   * Added the `'En route'` delivery phase.
+   * **Kitchen Tab**: Added **"Start Cooking"** buttons for Lunch and Dinner. Clicking them updates all active meal items to `'Preparing'` in Firestore.
+   * **Delivery Tab**: Added **"Dispatch"** buttons to trigger the `'En route'` state, displaying a truck emoji in transit.
+2. **Customer App Home Status Banners (`modules/CustomerPortal.tsx`)**
+   * Configured the Homepage header banner to track `'Preparing'` and `'En route'` statuses in real-time.
+   * Color-coded status badges: `Cancelled` $\rightarrow$ Danger (Red), `Completed` $\rightarrow$ Success (Green), and `Preparing`/`En route` $\rightarrow$ Warning (Orange).
+3. **Batch Ticket Printing (`modules/Operations.tsx`)**
+   * Placed **"Print Lunch Tickets"** and **"Print Dinner Tickets"** buttons next to service headers in the Delivery List.
+   * Generates a sequence of full delivery tickets (receipt style) matching the exact design, spacing, and styling of the individual ticket view.
+4. **Redundant "For Person" Tag Suppression (`modules/Operations.tsx`)**
+   * Implemented checks to suppress the `👤 For Person` note label when the person matches the customer's own name.
+5. **Configurable Birthday Messages & Settings Card (`modules/store.ts` & `modules/Operations.tsx`)**
+   * Added a **🎂 Birthday Greeting Configuration** card in **Operations > Settings > Identity Tab** to customize Creole/English greetings inside the customer app and printed stickers.
+   * Fully integrated with dirty check, discard settings, and Firestore document write updates.
+
+### Key Architecture Notes
+* **Type Safety & Verification**: Checked compilation using `npx tsc --noEmit` (clean exit 0).
+* **Git Status**: Clean working directory, all commits successfully pushed to `origin/main` on GitHub (`ef3148c` and `e68cc89`).
+
+
