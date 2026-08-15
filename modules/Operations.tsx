@@ -934,7 +934,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       } else if (editCustStreet.trim() || editCustCity.trim()) {
         updatedAddresses.push({
           id: `ADDR-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
-          label: 'Primary',
+          label: 'Delivery',
           street: editCustStreet.trim(),
           city: editCustCity.trim(),
           zip: '',
@@ -4827,7 +4827,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     </div>
 
                     <div className="space-y-3 pt-3 border-t border-slate-100">
-                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Primary Address</p>
+                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Delivery Address</p>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="space-y-1">
                           <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Street Address</label>
