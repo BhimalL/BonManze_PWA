@@ -78,6 +78,7 @@ import {
   addOrder,
   cancelOrderItem,
   editOrderItem,
+  updateOrderItemRating,
   submitPaymentClaim,
   MEAL_PLAN_PAYMENT_METHOD_NAMES,
   formatCurrency,
@@ -1530,22 +1531,21 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     if (!rateTarget || !rateStars) return;
     setRatingSubmitting(true);
     try {
+      // Update order item rating in local store (automatically persists via notifyOrderListeners)
+      updateOrderItemRating(rateTarget.orderId, rateTarget.itemId, rateStars, rateComment.trim());
+
       if (rateTarget.fsItemId) {
-        // Real Firestore document: save rating and comment directly!
+        // Real Firestore document update if synced
         const itemRef = doc(db, 'orders', rateTarget.orderId, 'items', rateTarget.fsItemId);
         await updateDoc(itemRef, {
           rating: rateStars,
           ratingComment: rateComment.trim()
         });
-      } else {
-        // Mock fallback for local pre-seeded orders
-        setRatings(prev => ({
-          ...prev,
-          [rateTarget.itemId]: { stars: rateStars, comment: rateComment.trim() }
-        }));
       }
       toast(`Thanks! ${rateStars}★ review sent to the kitchen`);
       setRateTarget(null);
+      setRateComment('');
+      setRateStars(0);
     } catch (err) {
       console.error('Failed to submit rating', err);
       toast('Failed to save rating. Please try again.');

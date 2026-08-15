@@ -1551,6 +1551,19 @@ export const updateOrderStatus = (id: string, status: Order['status']) => {
   notifyOrderListeners();
 };
 
+export const updateOrderItemRating = (orderId: string, itemId: string, rating: number, comment: string) => {
+  ACTIVE_ORDERS = ACTIVE_ORDERS.map(o => {
+    if (o.id === orderId) {
+      return {
+        ...o,
+        items: o.items.map(item => item.itemId === itemId ? { ...item, rating, ratingComment: comment } : item)
+      };
+    }
+    return o;
+  });
+  notifyOrderListeners();
+};
+
 export const updateOrderPayment = (id: string, status: 'Paid' | 'Pending' | 'Refunded', tenderType?: Order['tenderType'], methodName?: string, user?: string) => {
   ACTIVE_ORDERS = ACTIVE_ORDERS.map(o => {
     if (o.id === id) {

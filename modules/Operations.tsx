@@ -35,7 +35,8 @@ import {
   ImagePlus,
   Loader2,
   AlertCircle,
-  Printer
+  Printer,
+  FileSpreadsheet
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, getDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc } from 'firebase/firestore';
@@ -148,7 +149,7 @@ interface OperationsProps {
   onExit: () => void;
 }
 
-type Tab = 'dashboard' | 'menu' | 'library' | 'orders' | 'delivery' | 'payments' | 'customers' | 'settings';
+type Tab = 'dashboard' | 'menu' | 'library' | 'orders' | 'delivery' | 'payments' | 'customers' | 'transactions' | 'settings';
 
 // Which offering a curry-menu edit applies to — Dinner is a second,
 // independently toggleable offering that otherwise mirrors Lunch exactly.
@@ -176,6 +177,7 @@ const TABS: { id: Exclude<Tab, 'settings'>; label: string; icon: any }[] = [
   { id: 'delivery', label: 'Delivery List', icon: Truck },
   { id: 'payments', label: 'Payments', icon: Wallet },
   { id: 'customers', label: 'Customer Directory', icon: Users },
+  { id: 'transactions', label: 'Transactions Ledger', icon: FileSpreadsheet },
 ];
 
 const formatDay = (dateKey: string) => {
@@ -444,6 +446,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const csvFileInputRef = useRef<HTMLInputElement>(null);
   const [csvImportTarget, setCsvImportTarget] = useState<Service | null>(null);
   const [csvError, setCsvError] = useState('');
+
+  // Transactions Tab filter states
+  const [txSearch, setTxSearch] = useState('');
+  const [txDateRange, setTxDateRange] = useState<'All' | 'Today' | 'ThisWeek' | 'Custom'>('All');
+  const [txCustomStart, setTxCustomStart] = useState('');
+  const [txCustomEnd, setTxCustomEnd] = useState('');
+  const [txServiceSlot, setTxServiceSlot] = useState<'All' | 'Lunch' | 'Dinner'>('All');
+  const [txPaymentStatus, setTxPaymentStatus] = useState<'All' | 'Paid' | 'Pending' | 'Refunded'>('All');
+  const [txDeliveryStatus, setTxDeliveryStatus] = useState<'All' | 'Active' | 'Completed' | 'Cancelled'>('All');
+  const [txRatingFilter, setTxRatingFilter] = useState<'All' | 'Rated' | 'Unrated' | '5star' | 'LowRating'>('All');
 
   // Dinner is a second, independently toggleable offering (same pattern as
   // the VAT switch below) — customers never see this switch, only Bhimal
@@ -1544,6 +1556,67 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const exportTransactionsCSV = (rowsToExport: any[]) => {
+    const headers = [
+      'Order ID',
+      'Order Placed Date',
+      'Delivery Date',
+      'Service',
+      'Customer Name',
+      'Customer Phone',
+      'Dish Name',
+      'Qty',
+      'Price (Rs)',
+      'Item Total (Rs)',
+      'Discount Share (Rs)',
+      'VAT Share (Rs)',
+      'Net Total (Rs)',
+      'Payment Status',
+      'Payment Method',
+      'Payment Reference',
+      'Delivery Status',
+      'Rating',
+      'Feedback Comment'
+    ];
+
+    const csvRows = [headers.join(',')];
+
+    rowsToExport.forEach(r => {
+      const row = [
+        csvEscape(r.orderId),
+        csvEscape(r.timestamp),
+        csvEscape(r.deliveryDate),
+        csvEscape(r.serviceSlot),
+        csvEscape(r.customerName),
+        csvEscape(r.customerPhone),
+        csvEscape(r.itemName),
+        r.qty.toString(),
+        r.price.toString(),
+        r.itemTotal.toFixed(2),
+        r.discount.toFixed(2),
+        r.vat.toFixed(2),
+        r.totalWithTax.toFixed(2),
+        csvEscape(r.paymentStatus),
+        csvEscape(r.paymentMethod),
+        csvEscape(r.paymentRef),
+        csvEscape(r.deliveryStatus),
+        r.rating !== undefined ? r.rating.toString() : '',
+        csvEscape(r.ratingComment || '')
+      ];
+      csvRows.push(row.join(','));
+    });
+
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `BonManze_Transactions_Export_${systemDate}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // Minimal RFC4180-ish line splitter — handles quoted fields containing
@@ -2853,6 +2926,391 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     );
   };
 
+  const renderTransactionsTab = () => {
+    // 1. Compile all transaction rows from ACTIVE_ORDERS
+    const rows: {
+      orderId: string;
+      timestamp: string;
+      deliveryDate: string;
+      customerName: string;
+      customerPhone: string;
+      itemName: string;
+      notes?: string;
+      qty: number;
+      price: number;
+      itemTotal: number;
+      discount: number;
+      vat: number;
+      totalWithTax: number;
+      paymentStatus: string;
+      paymentMethod: string;
+      paymentRef: string;
+      deliveryStatus: string;
+      rating?: number;
+      ratingComment?: string;
+      serviceSlot: string;
+    }[] = [];
+
+    orders.forEach(o => {
+      o.items.forEach(item => {
+        const cust = getCustomer(o.customerName);
+        const itemTotal = item.price * item.qty;
+        
+        // Calculate proportional discounts & VAT
+        const proportion = o.total > 0 ? (itemTotal / o.total) : 0;
+        const itemDiscount = (o.discount || 0) * proportion;
+        const itemVat = (o.vat || 0) * proportion;
+        const itemNetTotal = itemTotal - itemDiscount + itemVat;
+
+        rows.push({
+          orderId: o.id,
+          timestamp: o.timestamp,
+          deliveryDate: item.deliveryDate || item.deliveryDay || '',
+          customerName: o.customerName,
+          customerPhone: cust?.phone || '',
+          itemName: item.name,
+          notes: item.notes,
+          qty: item.qty,
+          price: item.price,
+          itemTotal: itemTotal,
+          discount: itemDiscount,
+          vat: itemVat,
+          totalWithTax: itemNetTotal,
+          paymentStatus: item.paymentStatus || o.paymentStatus || 'Pending',
+          paymentMethod: item.paymentMethodName || o.paymentMethodName || '',
+          paymentRef: item.paymentReference || '',
+          deliveryStatus: item.status || 'Active',
+          rating: item.rating,
+          ratingComment: item.ratingComment,
+          serviceSlot: item.serviceSlot || 'Lunch'
+        });
+      });
+    });
+
+    // Sort: newest delivery date first, then newest order timestamp first
+    rows.sort((a, b) => b.deliveryDate.localeCompare(a.deliveryDate) || b.timestamp.localeCompare(a.timestamp));
+
+    // 2. Apply filters
+    const filteredRows = rows.filter(r => {
+      // Fuzzy search
+      if (txSearch.trim()) {
+        const q = txSearch.toLowerCase();
+        const matchCust = r.customerName.toLowerCase().includes(q);
+        const matchId = r.orderId.toLowerCase().includes(q);
+        const matchItem = r.itemName.toLowerCase().includes(q);
+        if (!matchCust && !matchId && !matchItem) return false;
+      }
+
+      // Service slot
+      if (txServiceSlot !== 'All' && r.serviceSlot !== txServiceSlot) return false;
+
+      // Payment status
+      if (txPaymentStatus !== 'All' && r.paymentStatus !== txPaymentStatus) return false;
+
+      // Delivery status
+      if (txDeliveryStatus !== 'All' && r.deliveryStatus !== txDeliveryStatus) return false;
+
+      // Ratings
+      if (txRatingFilter !== 'All') {
+        if (txRatingFilter === 'Rated' && r.rating === undefined) return false;
+        if (txRatingFilter === 'Unrated' && r.rating !== undefined) return false;
+        if (txRatingFilter === '5star' && r.rating !== 5) return false;
+        if (txRatingFilter === 'LowRating' && (r.rating === undefined || r.rating > 3)) return false;
+      }
+
+      // Date filters
+      if (txDateRange === 'Today') {
+        if (r.deliveryDate !== systemDate) return false;
+      } else if (txDateRange === 'ThisWeek') {
+        const days = getThisWeekDays(systemDate).map(d => d.date);
+        if (!days.includes(r.deliveryDate)) return false;
+      } else if (txDateRange === 'Custom') {
+        if (txCustomStart && r.deliveryDate < txCustomStart) return false;
+        if (txCustomEnd && r.deliveryDate > txCustomEnd) return false;
+      }
+
+      return true;
+    });
+
+    // 3. Totals summation for filtered set
+    const totals = filteredRows.reduce((acc, curr) => {
+      acc.qty += curr.qty;
+      acc.subtotal += curr.itemTotal;
+      acc.discount += curr.discount;
+      acc.vat += curr.vat;
+      acc.net += curr.totalWithTax;
+      return acc;
+    }, { qty: 0, subtotal: 0, discount: 0, vat: 0, net: 0 });
+
+    return (
+      <div className="space-y-6 animate-fade-in pb-16">
+        {/* Header and Export controls */}
+        <div className="flex items-center justify-between gap-4 flex-wrap bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm">
+          <div className="space-y-1">
+            <h2 className="text-base font-black text-slate-900">Transactions Ledger</h2>
+            <p className="text-xs text-slate-400 font-medium">View, filter, and export detailed transaction data, itemized totals, and customer reviews.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => exportTransactionsCSV(filteredRows)}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-primary hover:bg-primary/95 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer"
+          >
+            <Download className="size-4" /> Export Filtered to CSV
+          </button>
+        </div>
+
+        {/* Filters Panel */}
+        <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm space-y-4">
+          <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 flex items-center gap-1">Filter Ledger Details</p>
+          
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+            {/* Search Input */}
+            <div className="space-y-1.5">
+              <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Search</label>
+              <div className="relative">
+                <Search className="absolute left-3 top-3.5 size-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Customer, Order ID, Dish..."
+                  value={txSearch}
+                  onChange={e => setTxSearch(e.target.value)}
+                  className="w-full text-xs font-bold pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all placeholder-slate-400"
+                />
+              </div>
+            </div>
+
+            {/* Date Range Selector */}
+            <div className="space-y-1.5">
+              <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Delivery Date Range</label>
+              <select
+                value={txDateRange}
+                onChange={e => setTxDateRange(e.target.value as any)}
+                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+              >
+                <option value="All">All History</option>
+                <option value="Today">Today Only</option>
+                <option value="ThisWeek">This Week Only</option>
+                <option value="Custom">Custom Range...</option>
+              </select>
+            </div>
+
+            {/* Service Type */}
+            <div className="space-y-1.5">
+              <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Service</label>
+              <select
+                value={txServiceSlot}
+                onChange={e => setTxServiceSlot(e.target.value as any)}
+                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+              >
+                <option value="All">All Services</option>
+                <option value="Lunch">Lunch</option>
+                <option value="Dinner">Dinner</option>
+              </select>
+            </div>
+
+            {/* Payment Status */}
+            <div className="space-y-1.5">
+              <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Payment Status</label>
+              <select
+                value={txPaymentStatus}
+                onChange={e => setTxPaymentStatus(e.target.value as any)}
+                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+              >
+                <option value="All">All Payments</option>
+                <option value="Paid">Paid</option>
+                <option value="Pending">Pending</option>
+                <option value="Refunded">Refunded</option>
+              </select>
+            </div>
+
+            {/* Delivery Status */}
+            <div className="space-y-1.5">
+              <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Delivery Status</label>
+              <select
+                value={txDeliveryStatus}
+                onChange={e => setTxDeliveryStatus(e.target.value as any)}
+                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+              >
+                <option value="All">All Deliveries</option>
+                <option value="Active">Active</option>
+                <option value="Preparing">Preparing</option>
+                <option value="Completed">Completed</option>
+                <option value="Cancelled">Cancelled</option>
+              </select>
+            </div>
+
+            {/* Rating and Reviews Filter */}
+            <div className="space-y-1.5">
+              <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Customer Rating</label>
+              <select
+                value={txRatingFilter}
+                onChange={e => setTxRatingFilter(e.target.value as any)}
+                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+              >
+                <option value="All">All Ratings</option>
+                <option value="Rated">Rated Only</option>
+                <option value="Unrated">Unrated Only</option>
+                <option value="5star">5 Star Reviews</option>
+                <option value="LowRating">Needs Attention (≤ 3 stars)</option>
+              </select>
+            </div>
+
+            {/* Custom Date Pickers */}
+            {txDateRange === 'Custom' && (
+              <>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Start Date</label>
+                  <input
+                    type="date"
+                    value={txCustomStart}
+                    onChange={e => setTxCustomStart(e.target.value)}
+                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">End Date</label>
+                  <input
+                    type="date"
+                    value={txCustomEnd}
+                    onChange={e => setTxCustomEnd(e.target.value)}
+                    className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Totals Summary Card Row */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Rows Filtered</p>
+            <h4 className="text-base font-black text-slate-900">{filteredRows.length} items</h4>
+          </div>
+          <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Subtotal Sum</p>
+            <h4 className="text-base font-black text-slate-900">Rs {totals.subtotal.toFixed(2)}</h4>
+          </div>
+          <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Discounts Sum</p>
+            <h4 className="text-base font-black text-danger">-{totals.discount.toFixed(2)}</h4>
+          </div>
+          <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">VAT Sum</p>
+            <h4 className="text-base font-black text-slate-500">Rs {totals.vat.toFixed(2)}</h4>
+          </div>
+          <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm col-span-2 md:col-span-1">
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Net Total (Revenue)</p>
+            <h4 className="text-base font-black text-success">Rs {totals.net.toFixed(2)}</h4>
+          </div>
+        </div>
+
+        {/* Transactions Table */}
+        <div className="bg-white rounded-[32px] border border-[#E7E0D0] shadow-sm overflow-hidden">
+          {filteredRows.length === 0 ? (
+            <EmptyState icon={<FileSpreadsheet className="size-10" />} label="No matching transactions found" />
+          ) : (
+            <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+              <table className="w-full text-left border-collapse text-[11px]">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-[#E7E0D0] text-slate-400 font-black uppercase tracking-wider sticky top-0 z-10">
+                    <th className="px-5 py-4 min-w-[90px]">Order ID</th>
+                    <th className="px-5 py-4 min-w-[100px]">Delivery Date</th>
+                    <th className="px-5 py-4 min-w-[70px]">Service</th>
+                    <th className="px-5 py-4 min-w-[120px]">Customer</th>
+                    <th className="px-5 py-4 min-w-[160px]">Dish / Details</th>
+                    <th className="px-5 py-4 text-right min-w-[80px]">Price</th>
+                    <th className="px-5 py-4 text-right min-w-[80px]">Net Total</th>
+                    <th className="px-5 py-4 text-center min-w-[100px]">Payment</th>
+                    <th className="px-5 py-4 text-center min-w-[90px]">Delivery</th>
+                    <th className="px-5 py-4 min-w-[120px]">Rating & Feedback</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E7E0D0]/60 font-bold text-slate-700">
+                  {filteredRows.map((r, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-5 py-3 font-mono text-[10px] text-slate-400 uppercase">
+                        #{r.orderId.slice(0, 8)}
+                      </td>
+                      <td className="px-5 py-3 whitespace-nowrap">
+                        {r.deliveryDate ? new Date(r.deliveryDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }) : 'N/A'}
+                      </td>
+                      <td className="px-5 py-3">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${r.serviceSlot === 'Dinner' ? 'bg-accent/10 text-accent' : 'bg-primary/10 text-primary'}`}>
+                          {r.serviceSlot}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3">
+                        <p className="font-black text-slate-900">{r.customerName}</p>
+                        <p className="text-[10px] text-slate-400 font-normal">{r.customerPhone}</p>
+                      </td>
+                      <td className="px-5 py-3">
+                        <p className="text-slate-900">{r.qty}x {r.itemName}</p>
+                        {r.notes && <p className="text-[9px] text-slate-400 font-normal mt-0.5 leading-snug">↳ {r.notes}</p>}
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        Rs {r.price}
+                      </td>
+                      <td className="px-5 py-3 text-right font-black text-slate-950">
+                        Rs {r.totalWithTax.toFixed(2)}
+                      </td>
+                      <td className="px-5 py-3 text-center">
+                        <div className="flex flex-col items-center justify-center gap-0.5">
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                            r.paymentStatus === 'Paid' ? 'bg-success/15 text-success' : 'bg-danger/15 text-danger'
+                          }`}>
+                            {r.paymentStatus}
+                          </span>
+                          {r.paymentMethod && (
+                            <span className="text-[9px] text-slate-400 font-medium leading-none">
+                              {r.paymentMethod} {r.paymentRef ? `(Ref: ${r.paymentRef.slice(0, 6)})` : ''}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                          r.deliveryStatus === 'Completed' || r.deliveryStatus === 'Delivered'
+                            ? 'bg-success/15 text-success'
+                            : r.deliveryStatus === 'Cancelled'
+                            ? 'bg-slate-200 text-slate-500'
+                            : 'bg-primary/15 text-primary'
+                        }`}>
+                          {r.deliveryStatus}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3">
+                        {r.rating !== undefined ? (
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-0.5">
+                              {Array.from({ length: 5 }).map((_, i) => (
+                                <Star
+                                  key={i}
+                                  className={`size-3 ${i < r.rating! ? 'fill-warning text-warning' : 'text-slate-200'}`}
+                                />
+                              ))}
+                            </div>
+                            {r.ratingComment && (
+                              <p className="text-[10px] text-slate-500 font-medium italic leading-snug break-words max-w-[150px]">
+                                "{r.ratingComment}"
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-300 italic font-normal">No rating yet</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const renderSettingsTab = () => {
     return (
       <div className="space-y-8 animate-fade-in pb-24">
@@ -3964,6 +4422,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </div>
           )}
 
+          {tab === 'transactions' && renderTransactionsTab()}
           {tab === 'settings' && renderSettingsTab()}
         </div>
       </main>
