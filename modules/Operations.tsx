@@ -41,6 +41,7 @@ import {
   ChevronRight,
   PanelLeftClose,
   PanelLeftOpen,
+  RefreshCw,
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, getDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc } from 'firebase/firestore';
@@ -1664,6 +1665,69 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setReuseSourceWeek('');
   };
 
+  const syncWeekWithLibrary = (service: Service) => {
+    const weekDates = [0, 1, 2, 3, 4].map(offset => addDays(activeMenuWeekStart, offset));
+    const hasOrders = orders.some(order =>
+      order.items.some(item =>
+        item.serviceSlot === service &&
+        item.status !== 'Cancelled' &&
+        weekDates.includes(item.deliveryDate)
+      )
+    );
+
+    if (hasOrders) {
+      const confirmSync = window.confirm(
+        `This week already has active customer orders for ${service.toLowerCase()}. ` +
+        `Syncing will update the menu details for future checkouts, but existing orders will keep their original details.\n\n` +
+        `Do you want to proceed?`
+      );
+      if (!confirmSync) return;
+    }
+
+    const activeMenu = service === 'Dinner' ? dinnerMenuForWeek(activeMenuWeekStart) : lunchMenuForWeek(activeMenuWeekStart);
+    const updatedMenu: Record<WeekdayKey, CurryOption[]> = {
+      MON: [], TUE: [], WED: [], THU: [], FRI: []
+    };
+    let changesCount = 0;
+
+    WEEKDAY_KEYS.forEach(day => {
+      updatedMenu[day] = activeMenu[day].map(dish => {
+        if (!dish.mainId) return dish;
+        const main = mainDishes.find(m => m.id === dish.mainId);
+        if (!main) return dish;
+
+        const hasChanged =
+          dish.name !== main.name ||
+          dish.desc !== main.desc ||
+          dish.emoji !== main.emoji ||
+          dish.price !== main.price ||
+          dish.photoUrl !== main.photoUrl;
+
+        if (hasChanged) {
+          changesCount++;
+          return {
+            ...dish,
+            name: main.name,
+            desc: main.desc,
+            emoji: main.emoji,
+            price: main.price,
+            photoUrl: main.photoUrl,
+          };
+        }
+        return dish;
+      });
+    });
+
+    if (changesCount === 0) {
+      alert("This week's menu is already up to date with the Meal Library.");
+      return;
+    }
+
+    const setMenu = service === 'Dinner' ? setDinnerWeekMenu : setLunchWeekMenu;
+    runMenuWrite(setMenu(activeMenuWeekStart, updatedMenu));
+    alert(`Successfully synced ${changesCount} dish(es) with the Meal Library.`);
+  };
+
   // --- CSV import / export ---
   // Format: one header row, then one row per dish —
   // day,id,emoji,name,desc,price,dhalApplicable,saladApplicable
@@ -2104,6 +2168,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <History className="size-3.5" /> Reuse a previous week
+              </button>
+              <button
+                type="button"
+                onClick={() => syncWeekWithLibrary(service)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <RefreshCw className="size-3.5" /> Sync with Library
               </button>
               <button
                 onClick={() => exportMenuCSV(service, activeMenuWeekStart)}
