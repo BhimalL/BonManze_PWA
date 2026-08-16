@@ -525,3 +525,20 @@ We identified and resolved an issue with blank values in the Transaction Ledger 
    * Type-checked successfully (`npx tsc --noEmit`) and pushed the fix to `origin/main` (`86ed10e`).
 
 
+## 2026-08-16: Antigravity — Menu Sync & Popups/Alerts Refactoring to Custom Modals
+
+Refactored the Operations Console popups and alerts to achieve complete UI consistency across the application.
+
+### What was done
+1. **Menu Planner 'Sync with Library' Button**:
+   * Implemented a `syncWeekWithLibrary` helper that pulls the latest presentation details (`name`, `price`, `description`, `emoji`, `photoUrl`) from the master Meal Library into the planned weekly menus for a selected service slot.
+   * Added the "Sync with Library" button next to "Reuse a previous week" in the weekly menu planner cards.
+2. **Refactored Native Browser Alerts to Custom Modals**:
+   * Replaced the native `window.confirm` and `window.alert` popups for the Menu Planner sync with a custom styled confirmation modal overlay (`syncDialog`).
+   * Created a global reusable notification modal state (`notification`) and deletion confirmation modal state (`deleteGroupConfirmId`) in the main Operations console layout, removing all native popups from the console:
+     * Refactored **Customer edit save failure** alert in `handleSaveCustomer`.
+     * Refactored **Loyalty Tiers save success/failure** alerts in `handleSaveLoyaltyTiers`.
+     * Refactored **Customer Group delete confirmation** in `handleDeleteGroup` to a custom warning modal layout.
+3. **Commit & Push**:
+   * Staged, committed, and pushed both updates (`c932d44` and `e3fa25b`) to `origin/main`.
+   * Verified database state imports and exports correctly across emulator restarts (EPERM fix tested cleanly).
