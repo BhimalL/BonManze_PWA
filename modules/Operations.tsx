@@ -3155,8 +3155,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         const cust = getCustomer(o.customerName);
         const itemTotal = item.price * item.qty;
         
-        // Calculate proportional discounts & VAT
-        const proportion = o.total > 0 ? (itemTotal / o.total) : 0;
+        // Calculate proportional discounts & VAT based on pre-tax subtotal
+        const orderSubtotal = o.subtotal || o.items.reduce((sum, it) => sum + (it.price * it.qty), 0);
+        const proportion = orderSubtotal > 0 ? (itemTotal / orderSubtotal) : 0;
         const itemDiscount = (o.discount || 0) * proportion;
         const itemVat = (o.vat || 0) * proportion;
         const itemNetTotal = itemTotal - itemDiscount + itemVat;
