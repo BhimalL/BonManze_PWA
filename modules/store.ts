@@ -15,7 +15,8 @@ import { MenuItem, LoyaltyTier, CustomerGroup, Order, OrderItem, PaymentMethod, 
 // it already only ever reads through these bindings/functions too (see
 // BonManzE_Firestore_Schema.md, decision #12, for the full reasoning).
 import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebaseClient';
+import { auth, db } from '../firebaseClient';
+import { onAuthStateChanged } from 'firebase/auth';
 
 // Every mock-era optional field in this file (MainDish.cost/photoUrl,
 // CurryOption.baseOptionIds/dhalOptionIds/..., AddOnOption.price/up/group,
@@ -962,11 +963,7 @@ export const subscribeToIconLibrary = (listener: (items: IconEntry[]) => void) =
 // this listener needs its own error callback; without one, the Firestore
 // SDK logs an unhandled permission-denied error to the console on every
 // single customer page load.
-onSnapshot(doc(db, 'iconLibrary', 'current'), snap => {
-  if (!snap.exists()) return;
-  ICON_LIBRARY = (snap.data().items || []) as IconEntry[];
-  iconLibraryListeners.forEach(l => l([...ICON_LIBRARY]));
-}, () => { /* expected for customer sessions — icon library is staff-only */ });
+// Icon Library live sync is now managed inside the Auth observer block at the bottom of the file
 export const addIconEntry = async (item: IconEntry) => {
   await setDoc(doc(db, 'iconLibrary', 'current'), { items: dropUndefined([...ICON_LIBRARY, item]), updatedAt: serverTimestamp() });
 };
@@ -2042,11 +2039,7 @@ export const deleteCustomerGroup = async (id: string) => {
   await setDoc(doc(db, 'customerGroups', 'current'), { items: dropUndefined(CUSTOMER_GROUPS), updatedAt: serverTimestamp() });
 };
 
-onSnapshot(doc(db, 'customerGroups', 'current'), snap => {
-  if (!snap.exists()) return;
-  CUSTOMER_GROUPS = (snap.data().items || []) as CustomerGroup[];
-  groupListeners.forEach(l => l([...CUSTOMER_GROUPS]));
-});
+// Customer Groups live sync is now managed inside the Auth observer block at the bottom of the file
 
 // --- PERSISTENCE (localStorage) ---
 // Everything above this point is an in-memory mock that forgets everything
@@ -2168,3 +2161,48 @@ export const clearPersistedState = () => {
     console.warn('BonManzE: failed to restore persisted state', e);
   }
 })();
+
+// Real-time synchronization of restricted/staff-only collections (Icon Library & Customer Groups).
+// Since the read rules for these collections require active staff authentication, setting up
+// the listeners unconditionally on import (when auth.currentUser is initially null) causes them
+// to immediately fail and terminate. Instead, we subscribe/unsubscribe dynamically as the
+// user's authentication state changes.
+let activeStaffListenersUnsub: (() => void) | null = null;
+
+onAuthStateChanged(auth, user => {
+  if (activeStaffListenersUnsub) {
+    activeStaffListenersUnsub();
+    activeStaffListenersUnsub = null;
+  }
+
+  if (user) {
+    const unsubIcon = onSnapshot(
+      doc(db, 'iconLibrary', 'current'),
+      snap => {
+        if (!snap.exists()) return;
+        ICON_LIBRARY = (snap.data().items || []) as IconEntry[];
+        iconLibraryListeners.forEach(l => l([...ICON_LIBRARY]));
+      },
+      err => {
+        console.warn('Icon Library sync rejected (expected for customer accounts):', err);
+      }
+    );
+
+    const unsubGroup = onSnapshot(
+      doc(db, 'customerGroups', 'current'),
+      snap => {
+        if (!snap.exists()) return;
+        CUSTOMER_GROUPS = (snap.data().items || []) as CustomerGroup[];
+        groupListeners.forEach(l => l([...CUSTOMER_GROUPS]));
+      },
+      err => {
+        console.warn('Customer Groups sync rejected (expected for customer accounts):', err);
+      }
+    );
+
+    activeStaffListenersUnsub = () => {
+      unsubIcon();
+      unsubGroup();
+    };
+  }
+});
