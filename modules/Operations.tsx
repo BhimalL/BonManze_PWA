@@ -446,6 +446,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // tab) — this popup is select-only, it doesn't create new Mains.
   const [mainPickerFor, setMainPickerFor] = useState<{ day: WeekdayKey; service: Service; weekStart: string } | null>(null);
   const [mainPickerSearch, setMainPickerSearch] = useState('');
+  const [syncDialog, setSyncDialog] = useState<{
+    service: Service;
+    hasOrders: boolean;
+    changesCount: number;
+    updatedMenu?: Record<WeekdayKey, CurryOption[]>;
+    step: 'confirm' | 'result';
+  } | null>(null);
+  const [notification, setNotification] = useState<{
+    title: string;
+    message: string;
+    type: 'success' | 'error';
+  } | null>(null);
+  const [deleteGroupConfirmId, setDeleteGroupConfirmId] = useState<string | null>(null);
 
   // Base/Dhal/Salad/Beverage/Dessert catalogs — previously plain constants
   // with zero admin UI; now real reactive stores (see store.ts), subscribed
@@ -1036,7 +1049,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setEditCustomer(null);
     } catch (err) {
       console.error('Failed to update customer', err);
-      alert('Failed to update customer. Please try again.');
+      setNotification({
+        title: 'Update Failed',
+        message: 'Failed to update the customer record. Please try again.',
+        type: 'error'
+      });
     }
   };
   // Logo upload — there's no backend/file storage in this app, so the
@@ -1666,24 +1683,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const syncWeekWithLibrary = (service: Service) => {
-    const weekDates = [0, 1, 2, 3, 4].map(offset => addDays(activeMenuWeekStart, offset));
-    const hasOrders = orders.some(order =>
-      order.items.some(item =>
-        item.serviceSlot === service &&
-        item.status !== 'Cancelled' &&
-        weekDates.includes(item.deliveryDate)
-      )
-    );
-
-    if (hasOrders) {
-      const confirmSync = window.confirm(
-        `This week already has active customer orders for ${service.toLowerCase()}. ` +
-        `Syncing will update the menu details for future checkouts, but existing orders will keep their original details.\n\n` +
-        `Do you want to proceed?`
-      );
-      if (!confirmSync) return;
-    }
-
     const activeMenu = service === 'Dinner' ? dinnerMenuForWeek(activeMenuWeekStart) : lunchMenuForWeek(activeMenuWeekStart);
     const updatedMenu: Record<WeekdayKey, CurryOption[]> = {
       MON: [], TUE: [], WED: [], THU: [], FRI: []
@@ -1719,13 +1718,27 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     });
 
     if (changesCount === 0) {
-      alert("This week's menu is already up to date with the Meal Library.");
+      setSyncDialog({ service, hasOrders: false, changesCount: 0, step: 'result' });
       return;
     }
 
-    const setMenu = service === 'Dinner' ? setDinnerWeekMenu : setLunchWeekMenu;
-    runMenuWrite(setMenu(activeMenuWeekStart, updatedMenu));
-    alert(`Successfully synced ${changesCount} dish(es) with the Meal Library.`);
+    const weekDates = [0, 1, 2, 3, 4].map(offset => addDays(activeMenuWeekStart, offset));
+    const hasOrders = orders.some(order =>
+      order.items.some(item =>
+        item.serviceSlot === service &&
+        item.status !== 'Cancelled' &&
+        weekDates.includes(item.deliveryDate)
+      )
+    );
+
+    setSyncDialog({ service, hasOrders, changesCount, updatedMenu, step: 'confirm' });
+  };
+
+  const executeSyncWeek = () => {
+    if (!syncDialog || !syncDialog.updatedMenu) return;
+    const setMenu = syncDialog.service === 'Dinner' ? setDinnerWeekMenu : setLunchWeekMenu;
+    runMenuWrite(setMenu(activeMenuWeekStart, syncDialog.updatedMenu));
+    setSyncDialog(prev => prev ? { ...prev, step: 'result' } : null);
   };
 
   // --- CSV import / export ---
@@ -2478,6 +2491,105 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           </div>
           </Portal>
         )}
+
+        {syncDialog && (
+          <Portal>
+            <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setSyncDialog(null)}>
+              <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col animate-slide-up" onClick={e => e.stopPropagation()}>
+                <div className="p-5 border-b border-[#E7E0D0] flex items-center justify-between">
+                  <h3 className="text-sm font-black text-slate-900">
+                    {syncDialog.step === 'confirm' ? 'Sync Menu with Library' : 'Menu Sync Status'}
+                  </h3>
+                  <button onClick={() => setSyncDialog(null)} className="p-1.5 text-slate-400 hover:text-danger"><X className="size-4" /></button>
+                </div>
+
+                <div className="p-6 flex flex-col items-center text-center gap-4">
+                  {syncDialog.step === 'confirm' ? (
+                    <>
+                      {syncDialog.hasOrders ? (
+                        <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+                          <AlertCircle className="size-6 animate-pulse" />
+                        </div>
+                      ) : (
+                        <div className="w-12 h-12 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                          <RefreshCw className="size-6 text-primary animate-spin" style={{ animationDuration: '3s' }} />
+                        </div>
+                      )}
+
+                      <div className="space-y-2">
+                        <h4 className="text-sm font-bold text-slate-800">
+                          {syncDialog.hasOrders ? 'Active Orders Detected!' : 'Confirm Menu Sync'}
+                        </h4>
+                        <div className="text-xs text-slate-500 font-medium leading-relaxed">
+                          {syncDialog.hasOrders ? (
+                            <span className="text-amber-700 font-bold block bg-amber-50 border border-amber-100 p-3.5 rounded-2xl text-left mb-3">
+                              This week already has active customer orders for {syncDialog.service.toLowerCase()}. Syncing will update the menu details for future checkouts, but existing orders will keep their original details.
+                            </span>
+                          ) : (
+                            <span>
+                              Are you sure you want to sync this week's {syncDialog.service.toLowerCase()} menu with the Meal Library? This will update the name, description, emoji, price, and photo of all planned dishes that have a linked Meal Library item.
+                            </span>
+                          )}
+                          <span className="block mt-2 font-bold text-primary">
+                            This will sync {syncDialog.changesCount} planned dish(es).
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="w-full flex items-center gap-3 mt-2">
+                        <button
+                          type="button"
+                          onClick={() => setSyncDialog(null)}
+                          className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={executeSyncWeek}
+                          className={`flex-1 py-3 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md transition-all cursor-pointer ${
+                            syncDialog.hasOrders ? 'bg-amber-600 hover:bg-amber-700' : 'bg-primary hover:bg-primary/95'
+                          }`}
+                        >
+                          Sync Menu
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                        <CheckCircle2 className="size-6" />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <h4 className="text-sm font-bold text-slate-800">
+                          {syncDialog.changesCount === 0 ? 'Already Up To Date' : 'Sync Complete'}
+                        </h4>
+                        <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                          {syncDialog.changesCount === 0 ? (
+                            "This week's menu is already fully up to date with your Meal Library. No changes were needed."
+                          ) : (
+                            `Successfully synced ${syncDialog.changesCount} dish(es) with the master Meal Library.`
+                          )}
+                        </p>
+                      </div>
+
+                      <div className="w-full mt-2">
+                        <button
+                          type="button"
+                          onClick={() => setSyncDialog(null)}
+                          className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer"
+                        >
+                          Close
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </Portal>
+        )}
       </div>
     );
   };
@@ -2903,10 +3015,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const handleSaveLoyaltyTiers = async () => {
     try {
       await updateLoyaltyTiers(loyaltyTiersForm);
-      alert('Loyalty tiers saved successfully!');
+      setNotification({
+        title: 'Loyalty Tiers Saved',
+        message: 'Your changes to the loyalty tiers have been saved successfully.',
+        type: 'success'
+      });
     } catch (err) {
       console.error('Failed to save loyalty tiers', err);
-      alert('Failed to save loyalty tiers. Please try again.');
+      setNotification({
+        title: 'Save Failed',
+        message: 'Failed to save loyalty tiers. Please try again.',
+        type: 'error'
+      });
     }
   };
 
@@ -2926,13 +3046,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     }
   };
 
-  const handleDeleteGroup = async (id: string) => {
-    if (confirm('Are you sure you want to delete this customer group?')) {
-      try {
-        await deleteCustomerGroup(id);
-      } catch (err) {
-        console.error('Failed to delete group', err);
-      }
+  const executeDeleteGroup = async () => {
+    if (!deleteGroupConfirmId) return;
+    try {
+      await deleteCustomerGroup(deleteGroupConfirmId);
+      setDeleteGroupConfirmId(null);
+    } catch (err) {
+      console.error('Failed to delete group', err);
+      setDeleteGroupConfirmId(null);
+      setNotification({
+        title: 'Delete Failed',
+        message: 'Failed to delete the customer group. Please try again.',
+        type: 'error'
+      });
     }
   };
 
@@ -3133,7 +3259,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <td className="px-6 py-4 text-center">
                         <div className="flex items-center justify-center gap-1.5 font-normal">
                           <button onClick={() => startEditGroup(group)} className="p-1.5 text-primary hover:bg-[#FAF9F5] rounded-lg transition-all cursor-pointer"><Edit3 className="size-3.5" /></button>
-                          <button onClick={() => handleDeleteGroup(group.id)} className="p-1.5 text-danger hover:bg-danger/5 rounded-lg transition-all cursor-pointer"><Trash2 className="size-3.5" /></button>
+                          <button onClick={() => setDeleteGroupConfirmId(group.id)} className="p-1.5 text-danger hover:bg-danger/5 rounded-lg transition-all cursor-pointer"><Trash2 className="size-3.5" /></button>
                         </div>
                       </td>
                     </tr>
@@ -5507,6 +5633,82 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        </Portal>
+      )}
+
+      {/* GLOBAL NOTIFICATION MODAL */}
+      {notification && (
+        <Portal>
+          <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setNotification(null)}>
+            <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden flex flex-col animate-slide-up" onClick={e => e.stopPropagation()}>
+              <div className="p-5 border-b border-[#E7E0D0] flex items-center justify-between">
+                <h3 className="text-sm font-black text-slate-900">{notification.title}</h3>
+                <button onClick={() => setNotification(null)} className="p-1.5 text-slate-400 hover:text-danger"><X className="size-4" /></button>
+              </div>
+              <div className="p-6 flex flex-col items-center text-center gap-4">
+                {notification.type === 'success' ? (
+                  <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="size-6" />
+                  </div>
+                ) : (
+                  <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                    <AlertCircle className="size-6" />
+                  </div>
+                )}
+                <p className="text-xs text-slate-500 font-semibold leading-relaxed">
+                  {notification.message}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setNotification(null)}
+                  className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer mt-2"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </Portal>
+      )}
+
+      {/* GLOBAL DELETE CUSTOMER GROUP CONFIRMATION MODAL */}
+      {deleteGroupConfirmId && (
+        <Portal>
+          <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDeleteGroupConfirmId(null)}>
+            <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden flex flex-col animate-slide-up" onClick={e => e.stopPropagation()}>
+              <div className="p-5 border-b border-[#E7E0D0] flex items-center justify-between">
+                <h3 className="text-sm font-black text-slate-900">Delete Customer Group</h3>
+                <button onClick={() => setDeleteGroupConfirmId(null)} className="p-1.5 text-slate-400 hover:text-danger"><X className="size-4" /></button>
+              </div>
+              <div className="p-6 flex flex-col items-center text-center gap-4">
+                <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                  <AlertCircle className="size-6 animate-pulse" />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-slate-800">Are you absolutely sure?</h4>
+                  <p className="text-xs text-slate-500 font-semibold leading-relaxed">
+                    This will permanently delete the customer group. This action cannot be undone and customers in this group will no longer receive their group discounts.
+                  </p>
+                </div>
+                <div className="w-full flex items-center gap-3 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteGroupConfirmId(null)}
+                    className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={executeDeleteGroup}
+                    className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md transition-all cursor-pointer"
+                  >
+                    Delete Group
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </Portal>
