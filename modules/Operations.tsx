@@ -1713,13 +1713,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     const removeEmojis = (str: string): string => {
       if (!str) return '';
       return str
-        .replace(/[\u1F600-\u1F64F]/g, '') // Emoticons
-        .replace(/[\u1F300-\u1F5FF]/g, '') // Symbols & Pictographs
-        .replace(/[\u1F680-\u1F6FF]/g, '') // Transport & Map Symbols
-        .replace(/[\u1F1E0-\u1F1FF]/g, '') // Flags
-        .replace(/[\u2600-\u27BF]/g, '')   // Misc Symbols & Dingbats
-        .replace(/[\uE000-\uF8FF]/g, '')   // Private Use Area
-        .replace(/[\uD83C-\uDBFF\uDC00-\uDFFF]/g, '') // Modern Emojis
+        .replace(/[\uD800-\uDFFF]/g, '')   // Remove surrogate pairs (emojis outside BMP)
+        .replace(/[\u2600-\u27BF]/g, '')   // Remove miscellaneous symbols & dingbats (stars, hearts, etc)
         .replace(/\s+/g, ' ')             // Clean duplicate spaces
         .trim();
     };
