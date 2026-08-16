@@ -513,3 +513,15 @@ We completed the approved kitchen/delivery status workflow and advanced printing
 * **Git Status**: Clean working directory, all commits successfully pushed to `origin/main` on GitHub (`ef3148c` and `e68cc89`).
 
 
+## 2026-08-16: Antigravity — Fixed Alphanumeric Wiping Bug in CSV Transaction Ledger Export
+
+We identified and resolved an issue with blank values in the Transaction Ledger CSV exports.
+
+### What was done
+1. **Regex Fix for Emoji Stripper (`modules/Operations.tsx`)**
+   * Identified that the regex inside `removeEmojis` used ranges like `/[\u1F600-\u1F64F]/g` without a unicode `/u` flag. This was incorrectly parsed as code units ranging from `0` to `\u1F64`, which matched and stripped all letters, numbers, and punctuation, wiping out the CSV columns.
+   * Replaced it with a safe surrogate pair filter `replace(/[\uD800-\uDFFF]/g, '')` and dingbats filter `replace(/[\u2600-\u27BF]/g, '')` which successfully strips emojis while preserving standard English and Creole alphanumeric characters.
+2. **Commit & Push**
+   * Type-checked successfully (`npx tsc --noEmit`) and pushed the fix to `origin/main` (`86ed10e`).
+
+
