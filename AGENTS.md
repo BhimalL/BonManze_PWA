@@ -1,5 +1,44 @@
 # Agent Coordination: BonManzE Project
 
+## 2026-08-18: Antigravity — Security audit fixes, notes/instructions bug, regression test
+
+**Commit `858f0b8`** — 9 files changed, all verified clean with `tsc --noEmit` + automated test suite (ALL CHECKS PASSED, 10/10 including 5 new assertions).
+
+### What was fixed
+
+**`functions/index.js`**
+- Added `splitNotesTag(noteStr)` helper — parses the client's composed notes string (`base · req: <prep> · for <person>`) into `{ detail, person, instructions }`. This is the single source of truth for splitting that string server-side.
+- `confirmCheckout`: writes the client's `note` parameter verbatim to `notes` (no server-side reconstruction, no duplication risk), then calls `splitNotesTag()` to populate `instructions` as its own clean field.
+- `editOrderItemSelection`: the `tx.update()` payload no longer contains an `instructions:` key — so editing a meal never overwrites the customer's original prep request.
+
+**`modules/CustomerPortal.tsx`**
+- `reconstructSelection` (structured branch): previously pulled `note` from `item.instructions` — now correctly calls `splitNotesTag(item.notes)` to extract `person`, and reads `item.instructions` directly for the prep request. Both fields are now genuinely independent sources.
+- `isUnclaimed`: now filters out cancelled items (they're neither claimed nor owed).
+- Birthday date rendering: fixed local-date parsing to avoid UTC-offset off-by-one.
+
+**`modules/Operations.tsx`**
+- `saveGroupEdit` / `handleAddNewGroup`: CRM group edit errors now surface via `setNotification` instead of silently swallowing.
+
+**`scripts/testOrderEditCancel.js`**
+- New `[2b]` block: places an order with both a custom prep instruction (`no chilli please`) and a person tag (`for Priya`), then edits the meal (base change), then asserts all of the following:
+  1. `notes` persisted verbatim after checkout
+  2. `instructions` parsed correctly after checkout
+  3. `instructions` **unchanged** after edit
+  4. `notes` updated with new base + person tag preserved
+  5. `notes` does NOT contain garbled duplication pattern (`for White Rice`)
+- This is now a **permanent regression guard** — not a one-off script.
+
+**`scripts/testDiagnostics.js`** (new) — one-shot diagnostic used to verify raw DB fields during this session. Left committed as a useful ad-hoc tool.
+
+**`.gitignore`** — added `firebase-export-*/`
+
+**`firestore.rules`** / **`types.ts`** — security audit tweaks from Claude's review (see previous AGENTS.md entries).
+
+### State handoff
+- `origin/main` is now current — push has not happened yet (Antigravity has no network access to GitHub). Run `git push` to publish `858f0b8`.
+- Emulators are running as a background daemon — kill before pushing if needed.
+- **Next planned work**: Multi-Tier Trading Entity System (not started). See `BonManzE_v1_scope.md` and previous AGENTS.md entries for scope decisions before building.
+
 ## 2026-08-10: Antigravity - Repo Cloned to `BonManze_pwa`
 
 Hey Claude and Bhimal!
