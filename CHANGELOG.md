@@ -919,3 +919,18 @@ fallback to the old abbreviated label if a date is ever missing/
 unparseable. `tsc`/`vite build` both clean. Updated `CustomerPortal.tsx`
 delivered to the device; not yet re-tested live or committed via
 Antigravity as of this write-up.
+
+---
+
+## 2026-08-16 — Batch Sticker Printing, Birthday Greetings, CSV Alphanumeric Fix, & Styled Modal Dialogs (Antigravity)
+
+**Commit:** [`e3fa25b`](https://github.com/BhimalL/BonManze_PWA/commit/e3fa25be31b017b2b716cf4c43831bfe746a5124) "feat: refactor legacy alerts and confirmation dialogs to styled modals", [`c932d44`](https://github.com/BhimalL/BonManze_PWA/commit/c932d448c40134f71a4f0bcf84b423f101183350) "feat: implement Sync with Library action in Menu Planner tab", and [`b0bf29f`](https://github.com/BhimalL/BonManze_PWA/commit/b0bf29f9df35d1341c305e269415c8c5026dfb77) "chore: update emulator scripts to run from local AppData folder to prevent OneDrive EPERM lockups".
+**Verified:** `npx tsc --noEmit` clean, pushed to `main`.
+
+**Changes:**
+- **OneDrive EPERM Emulator Fix** — Moved the Firebase emulator's active state data and directory executions to `%LOCALAPPDATA%\BonManzE` before booting the emulators, resolving Windows file-locking rename issues during automated exit exports on OneDrive-synced folder setups.
+- **Batch Sticker Printing** — Added custom formatted ticket rendering on thermal receipt stickers for Lunch and Dinner deliveries, automatically suppressing redundant `👤 For Person` note fields when custom requests matched the customer's legal name.
+- **Configurable Birthday Stickers & Greetings** — Added custom branding options inside Settings to define Creole/English greetings that display automatically on invoice stickers and app banners on a user's birthday.
+- **CSV Alphanumeric Export Fix** — Resolved a regex character range bug inside the emoji stripper (`removeEmojis`) which stripped alphanumeric characters from the exported CSV files. Replaced it with a safe surrogate pair filter to isolate emojis from raw text.
+- **Menu Planner Sync with master Meal Library** — Implemented a `"Sync with Library"` action button on the Lunch and Dinner weekly menu schedules, which matches planned items to their Meal Library source dishes and updates changed presentation attributes (`name`, `price`, `description`, `emoji`, `photoUrl`).
+- **Styled Modals Consistency** — Completely replaced native browser `alert()` and `confirm()` popup boxes with sleek, custom-designed overlay portals (like the menu planner warning modal, global notification modal, and customer group delete warning modal) to unify application styling with the Customer App overlays.
