@@ -366,7 +366,20 @@ const splitNotesTag = (notes?: string): { detail: string; person: string | null;
 // each name in the notes back against the known option lists — reliable as
 // long as those names stay unique across categories, which they are today.
 const reconstructSelection = (item: OrderItem): MealSelection => {
-  const { detail, person, instructions } = splitNotesTag(item.notes);
+  if (item.baseId !== undefined) {
+    const { person } = splitNotesTag(item.notes || '');
+    return {
+      curryId: item.itemId,
+      baseId: item.baseId || MEAL_BASES[0].id,
+      dhalId: item.dhalId || 'none',
+      saladId: item.saladId || 'none',
+      beverageId: item.beverageId || 'none',
+      dessertId: item.dessertId || 'none',
+      note: person || '',
+      instructions: item.instructions || ''
+    };
+  }
+  const { detail, person, instructions } = splitNotesTag(item.notes || '');
   const segments = detail.split(' · ').map(s => s.trim()).filter(Boolean);
   const baseMatch = MEAL_BASES.find(b => segments.includes(b.name));
   const dhalMatch = MEAL_DHALS.find(x => segments.includes(x.name));
@@ -401,7 +414,7 @@ const isPayNowMethod = (name: string) => name.includes('Juice');
 // Operations confirming it (via the Operator Console) sets paymentStatus to
 // 'Paid'. "Unclaimed" is the only state that still needs the customer to
 // act; "awaiting" just needs Operations to check their bank/wallet statement.
-const isUnclaimed = (item: OrderItem) => item.paymentStatus !== 'Paid' && !item.paymentMethodName;
+const isUnclaimed = (item: OrderItem) => item.paymentStatus !== 'Paid' && !item.paymentMethodName && item.status !== 'Cancelled';
 const isAwaitingConfirmation = (item: OrderItem) => item.paymentStatus !== 'Paid' && !!item.paymentMethodName;
 const paymentStatusInfo = (item: OrderItem): { label: string; tone: 'success' | 'warning' | 'danger' | 'slate' } => {
   if (item.status === 'Cancelled') {
@@ -2675,7 +2688,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <p className="text-xs text-slate-400 font-medium">{currentUser.email}</p>
               {currentUser.birthday && (
                 <p className="text-[10px] text-slate-500 font-bold mt-1.5 flex items-center justify-center gap-1">
-                  📅 Birthdate: {new Date(currentUser.birthday).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                  📅 Birthdate: {(() => {
+                    const [y, m, d] = currentUser.birthday.split('-').map(Number);
+                    const dt = new Date(y, m - 1, d);
+                    return Number.isNaN(dt.getTime()) ? currentUser.birthday : dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+                  })()}
                   {isBirthday && <span className="text-xs">🎉</span>}
                 </p>
               )}

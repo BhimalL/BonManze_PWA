@@ -100,6 +100,48 @@ async function main() {
   const orderAfterEdit = await adb.collection('orders').doc(orderId).get();
   check('order total updated in Firestore after edit', approx(orderAfterEdit.data().total, newTotal));
 
+  console.log('\n[2b] Confirm custom instructions + person tag survive an edit —');
+  // Place a second single-item order with both a prep instruction and a person tag in the note.
+  // The client's mealNotesLine() produces this composed string.
+  const composedNote = 'Brown Rice · req: no chilli please · for Priya';
+  const checkoutRes2 = await confirmCheckout({
+    items: [{ curryId: 'chk', baseId: 'brice', dhalId: 'none', saladId: 'none', beverageId: 'none', dessertId: 'none',
+              note: composedNote, deliveryDate: mon, service: 'Dinner', slotIndex: 0 }],
+    type: 'Delivery', paymentScheme: 'Upfront'
+  });
+  const orderId2 = checkoutRes2.data.orderId;
+  const itemsSnap2 = await adb.collection('orders').doc(orderId2).collection('items').get();
+  const dinnerItem = itemsSnap2.docs[0];
+  const dinnerBefore = dinnerItem.data();
+
+  check('[2b] notes persisted verbatim after checkout',
+    dinnerBefore.notes === composedNote,
+    `got: ${JSON.stringify(dinnerBefore.notes)}`);
+  check('[2b] instructions field parsed correctly after checkout',
+    dinnerBefore.instructions === 'no chilli please',
+    `got: ${JSON.stringify(dinnerBefore.instructions)}`);
+
+  // Now edit the meal (switch base, keep same person+instruction note on client side)
+  await editOrderItemSelection({
+    orderId: orderId2,
+    itemId: dinnerItem.id,
+    selection: { curryId: 'chk', baseId: 'wrice', dhalId: 'none', saladId: 'none',
+                 beverageId: 'none', dessertId: 'none', note: 'Priya' }
+  });
+
+  const dinnerAfterDoc = await adb.collection('orders').doc(orderId2).collection('items').doc(dinnerItem.id).get();
+  const dinnerAfter = dinnerAfterDoc.data();
+
+  check('[2b] instructions field unchanged after edit (not overwritten by person tag)',
+    dinnerAfter.instructions === 'no chilli please',
+    `got: ${JSON.stringify(dinnerAfter.instructions)}`);
+  check('[2b] notes field updated with new base, person tag preserved',
+    typeof dinnerAfter.notes === 'string' && dinnerAfter.notes.includes('for Priya'),
+    `got: ${JSON.stringify(dinnerAfter.notes)}`);
+  check('[2b] notes field does NOT contain the garbled duplication pattern',
+    typeof dinnerAfter.notes === 'string' && !dinnerAfter.notes.includes('for White Rice'),
+    `got: ${JSON.stringify(dinnerAfter.notes)}`);
+
   console.log('\n[3] Mark the items Paid and then cancel one item (chk) —');
   // First mark them Paid via Admin SDK
   for (const doc of itemsSnap.docs) {

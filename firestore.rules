@@ -55,16 +55,19 @@ service cloud.firestore {
         && !('points' in request.resource.data)
         && !('storeCredit' in request.resource.data)
         && !('tier' in request.resource.data)
-        && !('ltv' in request.resource.data);
+        && !('ltv' in request.resource.data)
+        && !('group' in request.resource.data);
       allow update: if (isCustomer(uid)
           && request.resource.data.points == resource.data.points
           && request.resource.data.storeCredit == resource.data.storeCredit
           && request.resource.data.tier == resource.data.tier
-          && request.resource.data.ltv == resource.data.ltv)
+          && request.resource.data.ltv == resource.data.ltv
+          && request.resource.data.group == resource.data.group)
         || (isStaffAllowed('manageCustomers')
           && request.resource.data.points == resource.data.points
           && request.resource.data.storeCredit == resource.data.storeCredit
-          && request.resource.data.ltv == resource.data.ltv);
+          && request.resource.data.ltv == resource.data.ltv
+          && request.resource.data.tier == resource.data.tier);
       allow delete: if false; // no hard-delete from the client, ever
     }
 
@@ -219,6 +222,9 @@ service cloud.firestore {
           && request.resource.data.customerId == resource.data.customerId
           && request.resource.data.deliveryDate == resource.data.deliveryDate
           && request.resource.data.serviceSlot == resource.data.serviceSlot
+          && request.resource.data.get('tierAtOrder', null) == resource.data.get('tierAtOrder', null)
+          && request.resource.data.get('isReconciled', null) == resource.data.get('isReconciled', null)
+          && request.resource.data.get('notes', null) == resource.data.get('notes', null)
           && (resource.data.paymentStatus != 'Paid'
               || (request.resource.data.get('paymentMethodName', null) == resource.data.get('paymentMethodName', null)
                   && request.resource.data.get('paymentReference', null) == resource.data.get('paymentReference', null))));

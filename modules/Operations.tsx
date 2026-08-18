@@ -3043,6 +3043,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setEditingGroupId(null);
     } catch (err) {
       console.error('Failed to update group', err);
+      setNotification({
+        title: 'Save Failed',
+        message: 'Failed to update the customer group. Please try again.',
+        type: 'error'
+      });
     }
   };
 
@@ -3076,6 +3081,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setNewGroupForm({ name: '', discountPercentage: 0, description: '' });
     } catch (err) {
       console.error('Failed to add group', err);
+      setNotification({
+        title: 'Save Failed',
+        message: 'Failed to add customer group. Please try again.',
+        type: 'error'
+      });
     }
   };
 

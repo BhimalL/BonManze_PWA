@@ -171,6 +171,27 @@ function weekdayKeyOf(deliveryDate) {
   return idx >= 0 && idx <= 4 ? WEEKDAY_KEYS[idx] : null;
 }
 
+function splitNotesTag(notes) {
+  if (!notes) return { detail: '', person: null, instructions: null };
+  const segments = notes.split(' · ');
+  let person = null;
+  let instructions = null;
+  const details = [];
+
+  segments.forEach(seg => {
+    const s = seg.trim();
+    if (s.startsWith('for ')) {
+      person = s.slice(4);
+    } else if (s.startsWith('req: ')) {
+      instructions = s.slice(5);
+    } else {
+      details.push(s);
+    }
+  });
+
+  return { detail: details.join(' · '), person, instructions };
+}
+
 // Timezone and Cutoff Helpers
 // Mauritius is UTC+4. Cloud Functions run in UTC, so we format/convert using Intl API.
 function getOverrideDate(request) {
@@ -351,12 +372,20 @@ export const confirmCheckout = onCall(async (request) => {
 
     const price = (dish.price || 0) + (base?.up || 0) + (dhal?.price || 0) + (salad?.price || 0) + (beverage?.price || 0) + (dessert?.price || 0);
 
+    const parsed = splitNotesTag(note);
+
     priced.push({
       itemId: curryId,
       name: `${dish.emoji || ''} ${dish.name || 'Meal'}`.trim(),
       qty: 1,
       price,
       notes: typeof note === 'string' ? note.slice(0, 500) : '',
+      baseId: baseId || '',
+      dhalId: dhalId || 'none',
+      saladId: saladId || 'none',
+      beverageId: beverageId || 'none',
+      dessertId: dessertId || 'none',
+      instructions: parsed.instructions || '',
       deliveryDate,
       deliveryDay: weekdayKey,
       serviceSlot: idx === 0 ? service : `${service}-${idx + 1}`,
@@ -816,17 +845,17 @@ export const editOrderItemSelection = onCall(async (request) => {
   }
 
   const base = basesArr.find((b) => b.id === baseId);
+  const dh = dhalId && dhalId !== 'none' ? dhalsArr.find(x => x.id === dhalId) : null;
+  const sl = saladId && saladId !== 'none' ? saladsArr.find(x => x.id === saladId) : null;
   const beverage = beverageId && beverageId !== 'none' ? bevArr.find((b) => b.id === beverageId) : null;
   const dessert = dessertId && dessertId !== 'none' ? desArr.find((d) => d.id === dessertId) : null;
 
-  const newPrice = (dish.price || 0) + (base?.up || 0) + (beverage?.price || 0) + (dessert?.price || 0);
+  const newPrice = (dish.price || 0) + (base?.up || 0) + (dh?.price || 0) + (sl?.price || 0) + (beverage?.price || 0) + (dessert?.price || 0);
 
   // Recalculate notes string:
   const parts = [];
   if (base) parts.push(base.name);
-  const dh = dhalId && dhalId !== 'none' ? dhalsArr.find(x => x.id === dhalId) : null;
   if (dh) parts.push(dh.name);
-  const sl = saladId && saladId !== 'none' ? saladsArr.find(x => x.id === saladId) : null;
   if (sl) parts.push(sl.name);
   if (beverage) parts.push(beverage.name);
   if (dessert) parts.push(dessert.name);
@@ -859,6 +888,11 @@ export const editOrderItemSelection = onCall(async (request) => {
       price: newPrice,
       notes: newNotes,
       name: `${dish.emoji || ''} ${dish.name || 'Meal'}`.trim(),
+      baseId: baseId || '',
+      dhalId: dhalId || 'none',
+      saladId: saladId || 'none',
+      beverageId: beverageId || 'none',
+      dessertId: dessertId || 'none',
       updatedAt: Timestamp.now()
     });
 

@@ -36,3 +36,6 @@ _deleted_modules/
 # "emulators" script) — outside anything OneDrive backs up, so this line is
 # now just a safety net in case a future run ever falls back to the old path.
 .emulator-data/
+
+# Seeding / snapshot database export folders
+firebase-export-*/

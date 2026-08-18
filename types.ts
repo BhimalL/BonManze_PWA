@@ -143,15 +143,16 @@ export interface OrderItem {
   status?: 'Active' | 'Preparing' | 'Cancelled' | 'Ready' | 'En route' | 'Delivered' | 'Completed';
   isReconciled?: boolean;
   paymentMethodName?: string;
-  // Reference the customer was given (and/or entered themselves) when they
-  // told the app how they'd pay — lets Operations match a Juice/MauCAS
-  // transfer against a bank/wallet statement before confirming payment.
-  // Setting this does NOT mean the meal is paid: paymentStatus only becomes
-  // 'Paid' once Operations confirms, so a claimed-but-unconfirmed payment is
-  // paymentStatus 'Pending' + paymentMethodName/paymentReference set.
   paymentReference?: string;
   rating?: number;
   ratingComment?: string;
+  baseId?: string;
+  dhalId?: string;
+  saladId?: string;
+  beverageId?: string;
+  dessertId?: string;
+  instructions?: string;
+  tierAtOrder?: string;
 }
 
 export interface Order {

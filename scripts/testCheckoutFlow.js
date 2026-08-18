@@ -27,7 +27,7 @@
 
 import { initializeApp } from 'firebase/app';
 import { getAuth, connectAuthEmulator, signInWithEmailAndPassword } from 'firebase/auth';
-import { getFirestore, connectFirestoreEmulator, collection, doc, setDoc, getDoc } from 'firebase/firestore';
+import { getFirestore, connectFirestoreEmulator, collection, doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'firebase/functions';
 
 import { initializeApp as adminInitializeApp } from 'firebase-admin/app';
@@ -86,6 +86,11 @@ async function main() {
 
   console.log('\n[1] Sign in as Eleanor (real seeded customer) and call confirmCheckout —');
   await signInWithEmailAndPassword(auth, 'eleanor.f@gmail.com', 'BonManzeTest2!');
+  await adb.collection('customers').doc(auth.currentUser.uid).update({
+    points: 300,
+    tier: 't1',
+    ltv: 1500
+  });
 
   // Default-rotation ids/prices, copied from modules/store.ts /
   // scripts/migrateMenuLibrary.js (2026-08-12) — see this file's header.
@@ -148,6 +153,29 @@ async function main() {
     check('direct client order create is rejected', false, 'setDoc unexpectedly succeeded — rules gap NOT closed');
   } catch (err) {
     check('direct client order create is rejected', err.code === 'permission-denied', err.code);
+  }
+
+  console.log('\n[4a] Confirm security rules: client cannot modify their own customer group —');
+  try {
+    await updateDoc(doc(db, 'customers', auth.currentUser.uid), { group: 'g-corporate-vip' });
+    check('client self-assignment of group is rejected', false, 'updateDoc unexpectedly succeeded');
+  } catch (err) {
+    check('client self-assignment of group is rejected', err.code === 'permission-denied', err.code);
+  }
+
+  console.log('\n[4b] Confirm security rules: client cannot update tierAtOrder or isReconciled on an order item —');
+  const testItemRef = doc(db, 'orders', orderId, 'items', itemsSnap.docs[0].id);
+  try {
+    await updateDoc(testItemRef, { tierAtOrder: 't4' });
+    check('client modification of tierAtOrder is rejected', false, 'updateDoc unexpectedly succeeded');
+  } catch (err) {
+    check('client modification of tierAtOrder is rejected', err.code === 'permission-denied', err.code);
+  }
+  try {
+    await updateDoc(testItemRef, { isReconciled: true });
+    check('client modification of isReconciled is rejected', false, 'updateDoc unexpectedly succeeded');
+  } catch (err) {
+    check('client modification of isReconciled is rejected', err.code === 'permission-denied', err.code);
   }
 
   console.log('\n[5] Mark every item Paid (Admin SDK write — see note below) and check the loyalty trigger —');
