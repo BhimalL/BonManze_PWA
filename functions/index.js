@@ -859,6 +859,7 @@ export const editOrderItemSelection = onCall(async (request) => {
   if (sl) parts.push(sl.name);
   if (beverage) parts.push(beverage.name);
   if (dessert) parts.push(dessert.name);
+  if (item.instructions) parts.push(`req: ${item.instructions}`);
   if (note && note.trim()) parts.push(`for ${note.trim()}`);
   const newNotes = parts.join(' · ');
 

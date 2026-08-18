@@ -138,6 +138,9 @@ async function main() {
   check('[2b] notes field updated with new base, person tag preserved',
     typeof dinnerAfter.notes === 'string' && dinnerAfter.notes.includes('for Priya'),
     `got: ${JSON.stringify(dinnerAfter.notes)}`);
+  check('[2b] notes field still contains req: segment after edit (display sites depend on this)',
+    typeof dinnerAfter.notes === 'string' && dinnerAfter.notes.includes('req: no chilli please'),
+    `got: ${JSON.stringify(dinnerAfter.notes)}`);
   check('[2b] notes field does NOT contain the garbled duplication pattern',
     typeof dinnerAfter.notes === 'string' && !dinnerAfter.notes.includes('for White Rice'),
     `got: ${JSON.stringify(dinnerAfter.notes)}`);
