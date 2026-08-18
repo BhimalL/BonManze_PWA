@@ -145,6 +145,31 @@ async function main() {
     typeof dinnerAfter.notes === 'string' && !dinnerAfter.notes.includes('for White Rice'),
     `got: ${JSON.stringify(dinnerAfter.notes)}`);
 
+  console.log('\n[2c] Confirm editing WITH a new instructions value actually changes it —');
+  // Edit the same item again, this time sending a genuinely new instructions
+  // string (as the "Custom instructions / Prep requests?" field in the edit
+  // modal does) — this must overwrite the old instructions, not just survive
+  // untouched like [2b] above.
+  await editOrderItemSelection({
+    orderId: orderId2,
+    itemId: dinnerItem.id,
+    selection: { curryId: 'chk', baseId: 'wrice', dhalId: 'none', saladId: 'none',
+                 beverageId: 'none', dessertId: 'none', note: 'Priya', instructions: 'extra spicy please' }
+  });
+
+  const dinnerAfterEdit2Doc = await adb.collection('orders').doc(orderId2).collection('items').doc(dinnerItem.id).get();
+  const dinnerAfterEdit2 = dinnerAfterEdit2Doc.data();
+
+  check('[2c] instructions field updated to the new value sent by the edit',
+    dinnerAfterEdit2.instructions === 'extra spicy please',
+    `got: ${JSON.stringify(dinnerAfterEdit2.instructions)}`);
+  check('[2c] notes field reflects the new instructions, not the stale one',
+    typeof dinnerAfterEdit2.notes === 'string' && dinnerAfterEdit2.notes.includes('req: extra spicy please') && !dinnerAfterEdit2.notes.includes('no chilli please'),
+    `got: ${JSON.stringify(dinnerAfterEdit2.notes)}`);
+  check('[2c] person tag still preserved alongside the new instructions',
+    typeof dinnerAfterEdit2.notes === 'string' && dinnerAfterEdit2.notes.includes('for Priya'),
+    `got: ${JSON.stringify(dinnerAfterEdit2.notes)}`);
+
   console.log('\n[3] Mark the items Paid and then cancel one item (chk) —');
   // First mark them Paid via Admin SDK
   for (const doc of itemsSnap.docs) {

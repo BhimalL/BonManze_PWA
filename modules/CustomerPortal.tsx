@@ -1072,7 +1072,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
             saladId: sel.saladId,
             beverageId: sel.beverageId,
             dessertId: sel.dessertId,
-            note: sel.note
+            note: sel.note,
+            instructions: sel.instructions
           },
           systemDate,
         })

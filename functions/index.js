@@ -825,7 +825,12 @@ export const editOrderItemSelection = onCall(async (request) => {
   const saladsArr = (saladsSnap.data() || {}).items || [];
 
   // Find dish on the menu to check price
-  const { baseId, beverageId, dessertId, dhalId, saladId, note } = selection;
+  const { baseId, beverageId, dessertId, dhalId, saladId, note, instructions } = selection;
+  // The edit modal lets the customer change the prep instructions text too —
+  // only use it if this call actually sent one (a string, even ''); older
+  // clients or call sites that never send `instructions` at all must not
+  // wipe out what's already stored.
+  const finalInstructions = typeof instructions === 'string' ? instructions.slice(0, 500) : (item.instructions || '');
   const deliveryDate = item.deliveryDate;
   const service = item.serviceSlot.startsWith('Dinner') ? 'Dinner' : 'Lunch';
   
@@ -859,7 +864,7 @@ export const editOrderItemSelection = onCall(async (request) => {
   if (sl) parts.push(sl.name);
   if (beverage) parts.push(beverage.name);
   if (dessert) parts.push(dessert.name);
-  if (item.instructions) parts.push(`req: ${item.instructions}`);
+  if (finalInstructions) parts.push(`req: ${finalInstructions}`);
   if (note && note.trim()) parts.push(`for ${note.trim()}`);
   const newNotes = parts.join(' · ');
 
@@ -894,6 +899,7 @@ export const editOrderItemSelection = onCall(async (request) => {
       saladId: saladId || 'none',
       beverageId: beverageId || 'none',
       dessertId: dessertId || 'none',
+      instructions: finalInstructions,
       updatedAt: Timestamp.now()
     });
 
