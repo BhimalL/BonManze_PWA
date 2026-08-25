@@ -55,6 +55,13 @@ service firebase.storage {
       allow write: if isStaffAllowed('manageMenu');
     }
 
+    // Entity logos — public read (the receipt page needs to render them),
+    // manageConfig-gated write.
+    match /entities/{entityId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isStaffAllowed('manageConfig');
+    }
+
     // Everything else stays locked down by default.
     match /{allOtherPaths=**} {
       allow read, write: if false;

@@ -1,5 +1,5 @@
 
-import { MenuItem, LoyaltyTier, CustomerGroup, Order, OrderItem, PaymentMethod, Customer } from '../types';
+import { MenuItem, LoyaltyTier, CustomerGroup, Order, OrderItem, PaymentMethod, Customer, AuditLogType } from '../types';
 // Meal Library / Menu Planner (Mains, weekly Lunch/Dinner menus, the
 // menuDefaults fallback, and the five Base/Dhal/Salad/Beverage/Dessert
 // add-on catalogs plus the Icon Library) are wired directly to Firestore
@@ -2206,3 +2206,29 @@ onAuthStateChanged(auth, user => {
     };
   }
 });
+
+// unified audit log writer (serverTimestamp sentinel for firestore rules validation)
+export const writeAuditLog = async (
+  type: AuditLogType,
+  description: string
+): Promise<void> => {
+  const user = auth.currentUser;
+  if (!user) return;
+
+  try {
+    const staffUid = user.uid;
+    const staffName = user.displayName || 'Unknown Staff';
+
+    const logRef = doc(collection(db, 'auditLog'));
+    await setDoc(logRef, {
+      staffUid,
+      staffName,
+      timestamp: serverTimestamp(),
+      type,
+      description
+    });
+  } catch (err) {
+    console.error('Failed to write audit log:', err);
+  }
+};
+

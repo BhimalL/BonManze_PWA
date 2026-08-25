@@ -970,3 +970,89 @@ export const editOrderItemSelection = onCall(async (request) => {
   return { newPrice, newTotal, refundAmount };
 });
 
+// createStaffMember — callable.
+// Gated to active staff users whose role permissions include manageRoles: true.
+// Provisioned out-of-band by the admin setting a temporary password.
+export const createStaffMember = onCall(async (request) => {
+  // 1. Verify caller is authenticated
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'You must be signed in.');
+  }
+
+  // 2. Verify caller is an active staff member with manageRoles permission
+  const callerUid = request.auth.uid;
+  const callerStaffSnap = await db.collection('staff').doc(callerUid).get();
+  if (!callerStaffSnap.exists) {
+    throw new HttpsError('permission-denied', 'Caller is not a registered staff member.');
+  }
+  
+  const callerData = callerStaffSnap.data();
+  if (callerData.active !== true) {
+    throw new HttpsError('permission-denied', 'Caller account is deactivated.');
+  }
+
+  const roleId = callerData.roleId;
+  if (!roleId) {
+    throw new HttpsError('permission-denied', 'Caller has no assigned role.');
+  }
+
+  const roleSnap = await db.collection('roles').doc(roleId).get();
+  if (!roleSnap.exists || roleSnap.data().permissions.manageRoles !== true) {
+    throw new HttpsError('permission-denied', 'You do not have permission to manage staff.');
+  }
+
+  // 3. Validate input parameters
+  const { name, email, password, roleId: targetRoleId } = request.data || {};
+  if (typeof name !== 'string' || !name.trim()) {
+    throw new HttpsError('invalid-argument', 'Name is required.');
+  }
+  if (typeof email !== 'string' || !email.includes('@')) {
+    throw new HttpsError('invalid-argument', 'A valid email is required.');
+  }
+  if (typeof password !== 'string' || password.length < 6) {
+    throw new HttpsError('invalid-argument', 'Password must be at least 6 characters.');
+  }
+  if (typeof targetRoleId !== 'string' || !targetRoleId.trim()) {
+    throw new HttpsError('invalid-argument', 'Role assignment is required.');
+  }
+
+  // Verify target role exists in Firestore
+  const targetRoleSnap = await db.collection('roles').doc(targetRoleId).get();
+  if (!targetRoleSnap.exists) {
+    throw new HttpsError('invalid-argument', 'The target role does not exist.');
+  }
+
+  // 4. Create Firebase Auth user
+  let userRecord;
+  try {
+    userRecord = await auth.createUser({
+      email: email.trim().toLowerCase(),
+      password: password,
+      displayName: name.trim(),
+    });
+  } catch (err) {
+    if (err && err.code === 'auth/email-already-exists') {
+      throw new HttpsError('already-exists', 'An account with that email already exists.');
+    }
+    throw new HttpsError('internal', 'Could not create the auth account.');
+  }
+
+  // 5. Create staff/{uid} document in Firestore
+  try {
+    await db.collection('staff').doc(userRecord.uid).set({
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      roleId: targetRoleId,
+      active: true,
+      createdAt: Timestamp.now(),
+    });
+  } catch (err) {
+    // If the Firestore write fails, clean up the auth user to keep state consistent
+    await auth.deleteUser(userRecord.uid);
+    throw new HttpsError('internal', 'Could not create the staff record in Firestore.');
+  }
+
+  return { uid: userRecord.uid };
+});
+
+

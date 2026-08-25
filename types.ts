@@ -196,3 +196,44 @@ export interface Order {
   entityBankReference?: string;
   entityLogoStoragePath?: string;
 }
+
+export interface Role {
+  id: string;
+  name: string;
+  permissions: {
+    manageMenu: boolean;
+    manageOrders: boolean;
+    manageCustomers: boolean;
+    manageConfig: boolean;
+    manageRoles: boolean;
+    manageRegistrations: boolean;
+  };
+  createdAt: any;
+  updatedAt: any;
+}
+
+export interface Staff {
+  id: string; // auth UID
+  name: string;
+  email: string;
+  roleId: string;
+  active: boolean;
+  createdAt: any;
+}
+
+export type AuditLogType =
+  | 'ConfigChange'
+  | 'RoleChange'
+  | 'RegistrationDecision'
+  | 'EntityReassignment'
+  | 'PaymentConfirmed'
+  | 'DeliveryConfirmed';
+
+export interface AuditLog {
+  id: string;
+  staffUid: string;
+  staffName: string;
+  timestamp: any; // serverTimestamp
+  type: AuditLogType;
+  description: string;
+}

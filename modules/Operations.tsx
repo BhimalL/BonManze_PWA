@@ -45,9 +45,11 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc, Timestamp } from 'firebase/firestore';
-import { auth, db } from '../firebaseClient';
-import { Order, OrderItem, Customer, PaymentMethod, LoyaltyTier, CustomerGroup, Entity } from '../types';
+import { doc, getDoc, setDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc, Timestamp } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { auth, db, functions, storage } from '../firebaseClient';
+import { Order, OrderItem, Customer, PaymentMethod, LoyaltyTier, CustomerGroup, Entity, Role, Staff } from '../types';
 import { Portal } from './Portal';
 import { IconPickerButton } from './IconPicker';
 import {
@@ -130,7 +132,8 @@ import {
   subscribeToIconLibrary,
   addIconEntry,
   updateIconEntry,
-  removeIconEntry
+  removeIconEntry,
+  writeAuditLog
 } from './store';
 
 const splitNotesTag = (notes?: string): { detail: string; person: string | null; instructions: string | null } => {
@@ -318,6 +321,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // describes.
   const [staffAuthUser, setStaffAuthUser] = useState<any | null>(null);
   const [staffDocRaw, setStaffDocRaw] = useState<any | null>(null);
+  const [currentPermissions, setCurrentPermissions] = useState<{
+    manageMenu: boolean;
+    manageOrders: boolean;
+    manageCustomers: boolean;
+    manageConfig: boolean;
+    manageRoles: boolean;
+    manageRegistrations: boolean;
+  } | null>(null);
   const [staffAuthChecking, setStaffAuthChecking] = useState(true);
   const [staffLoginEmail, setStaffLoginEmail] = useState('');
   const [staffLoginPassword, setStaffLoginPassword] = useState('');
@@ -490,9 +501,48 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Settings has its own General/Icons sub-tabs now that it manages the
   // Icon Library too — everything that used to be the whole Settings page
   // lives under "General".
-  const [settingsSubTab, setSettingsSubTab] = useState<'identity' | 'delivery' | 'tax' | 'loyalty' | 'groups' | 'icons' | 'danger'>('identity');
+  const [settingsSubTab, setSettingsSubTab] = useState<'identity' | 'delivery' | 'tax' | 'loyalty' | 'groups' | 'icons' | 'rolesAndStaff' | 'tradingEntities'>('identity');
   const [loyaltyTiers, setLoyaltyTiers] = useState<LoyaltyTier[]>([]);
   const [customerGroups, setCustomerGroups] = useState<CustomerGroup[]>([]);
+
+  const hasTabPermission = (tabId: Tab): boolean => {
+    if (staffAuthChecking) return true;
+    if (!staffAuthUser) return false;
+    if (!currentPermissions) return false;
+    switch (tabId) {
+      case 'dashboard':
+        return true;
+      case 'menu':
+      case 'library':
+        return currentPermissions.manageMenu === true;
+      case 'orders':
+      case 'delivery':
+      case 'payments':
+        return currentPermissions.manageOrders === true;
+      case 'customers':
+        return currentPermissions.manageCustomers === true;
+      case 'pendingRegistrations':
+        return currentPermissions.manageRegistrations === true;
+      case 'transactions':
+        return currentPermissions.manageOrders === true || currentPermissions.manageConfig === true;
+      case 'settings':
+        return currentPermissions.manageConfig === true || currentPermissions.manageRoles === true;
+      default:
+        return false;
+    }
+  };
+
+  useEffect(() => {
+    if (tab === 'settings' && currentPermissions) {
+      if (settingsSubTab === 'rolesAndStaff' && !currentPermissions.manageRoles) {
+        setSettingsSubTab('identity');
+      } else if (settingsSubTab !== 'rolesAndStaff' && !currentPermissions.manageConfig) {
+        if (currentPermissions.manageRoles) {
+          setSettingsSubTab('rolesAndStaff');
+        }
+      }
+    }
+  }, [tab, currentPermissions, settingsSubTab]);
 
   // Which existing add-on catalog entry is being edited inline, and its
   // draft form — mirrors editingCurry/editForm's shape for the five add-on
@@ -632,6 +682,32 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setDangerConfirm(null);
     setDangerResetDone(true);
   };
+  void dangerConfirm; void dangerResetDone; void handleDangerReset; // retained for type-safety; UI removed
+
+  // --- Roles & Staff sub-tab state ---
+  const [rolesRaw, setRolesRaw] = useState<Role[]>([]);
+  const [staffListRaw, setStaffListRaw] = useState<Staff[]>([]);
+  const [showAddStaffModal, setShowAddStaffModal] = useState(false);
+  const [newStaffForm, setNewStaffForm] = useState({ name: '', email: '', password: '', roleId: '' });
+  const [addStaffError, setAddStaffError] = useState<string | null>(null);
+  const [addStaffLoading, setAddStaffLoading] = useState(false);
+  const [showAddRoleModal, setShowAddRoleModal] = useState(false);
+  const [roleForm, setRoleForm] = useState({
+    name: '',
+    manageMenu: false, manageOrders: false, manageCustomers: false,
+    manageConfig: false, manageRoles: false, manageRegistrations: false,
+  });
+  const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
+  const [roleActionError, setRoleActionError] = useState<string | null>(null);
+  const [roleActionLoading, setRoleActionLoading] = useState(false);
+
+  // --- Trading Entities sub-tab state ---
+  const [showAddEntityModal, setShowAddEntityModal] = useState(false);
+  const [entityForm, setEntityForm] = useState({ name: '', brn: '', vatNumber: '', bankReference: '' });
+  const [editingEntityId, setEditingEntityId] = useState<string | null>(null);
+  const [entityActionError, setEntityActionError] = useState<string | null>(null);
+  const [entityActionLoading, setEntityActionLoading] = useState(false);
+  const [entityLogoFile, setEntityLogoFile] = useState<File | null>(null);
 
   // Staff auth listener — mirrors CustomerPortal.tsx's onAuthStateChanged
   // pattern. Verifies an active staff/{uid} doc exists before treating
@@ -643,19 +719,28 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       if (!user) {
         setStaffAuthUser(null);
         setStaffDocRaw(null);
+        setCurrentPermissions(null);
         setStaffAuthChecking(false);
         return;
       }
       try {
         const snap = await getDoc(doc(db, 'staff', user.uid));
         if (snap.exists() && snap.data().active === true) {
+          const staffData = snap.data();
+          const roleSnap = await getDoc(doc(db, 'roles', staffData.roleId));
+          if (roleSnap.exists()) {
+            setCurrentPermissions(roleSnap.data().permissions);
+          } else {
+            setCurrentPermissions(null);
+          }
           setStaffAuthUser(user);
-          setStaffDocRaw({ id: user.uid, ...snap.data() });
+          setStaffDocRaw({ id: user.uid, ...staffData });
         } else {
           setStaffAuthError('This account is not set up as active staff.');
           await signOut(auth);
           setStaffAuthUser(null);
           setStaffDocRaw(null);
+          setCurrentPermissions(null);
         }
       } catch (e) {
         console.error('staff doc lookup failed', e);
@@ -663,6 +748,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         await signOut(auth);
         setStaffAuthUser(null);
         setStaffDocRaw(null);
+        setCurrentPermissions(null);
       } finally {
         setStaffAuthChecking(false);
       }
@@ -693,6 +779,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     signOut(auth).finally(() => {
       setStaffAuthUser(null);
       setStaffDocRaw(null);
+      setCurrentPermissions(null);
       onExit();
     });
   };
@@ -785,7 +872,15 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setEntities(list);
     }, err => console.error('entities listener failed', err));
 
-    return () => { unsubCustomers(); unsubOrders(); unsubItems(); unsubEntities(); };
+    const unsubRoles = onSnapshot(collection(db, 'roles'), snap => {
+      setRolesRaw(snap.docs.map(d => ({ id: d.id, ...d.data() } as Role)));
+    }, err => console.warn('roles listener failed (permission-gated):', err));
+
+    const unsubStaff = onSnapshot(collection(db, 'staff'), snap => {
+      setStaffListRaw(snap.docs.map(d => ({ id: d.id, ...d.data() } as Staff)));
+    }, err => console.warn('staff listener failed (permission-gated):', err));
+
+    return () => { unsubCustomers(); unsubOrders(); unsubItems(); unsubEntities(); unsubRoles(); unsubStaff(); };
   }, [staffAuthUser]);
 
   // Reshapes the two raw listeners above into Order[] -- every downstream
@@ -980,6 +1075,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       bulkDiscountEnabled: bulkDiscountEnabled,
       bulkDiscountRate: isNaN(parsedBulkRate) ? SYSTEM_CONFIG.bulkDiscountRate : parsedBulkRate
     }));
+    writeAuditLog('ConfigChange', `Saved system configuration changes (Identity / Delivery / Tax / Offerings)`);
   };
 
   const discardSettings = () => {
@@ -1081,6 +1177,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           entityId: editCustEntityId || null,
           updatedAt: Timestamp.now()
         });
+        writeAuditLog('EntityReassignment', `Reassigned ${name} (${editCustomer.id}) from entity "${editCustomer.entityId || 'none'}" to "${editCustEntityId || 'none'}"`);
       }
 
       updateCustomerRecord(editCustomer.id, {
@@ -1408,6 +1505,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         batch.update(doc(db, 'orders', drop.orderId, 'items', i._fsItemId as string), { status: 'Completed' });
       });
       await batch.commit();
+      writeAuditLog('DeliveryConfirmed', `Marked ${targets.length} item(s) delivered for order ${drop.orderId} (${drop.customerName})`);
     } catch (e) {
       console.error('Mark Delivered failed', e);
       setOpsActionError('Mark Delivered failed — please try again.');
@@ -1495,6 +1593,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         });
       });
       await batch.commit();
+      writeAuditLog('PaymentConfirmed', `Marked ${targets.length} item(s) paid via ${method.name} for order ${drop.orderId} (${drop.customerName})`);
     } catch (e) {
       console.error('Mark Paid failed', e);
       setOpsActionError('Mark Paid failed — please try again.');
@@ -3818,11 +3917,24 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const renderSettingsTab = () => {
+    const canConfig = currentPermissions?.manageConfig === true;
+    const canRoles  = currentPermissions?.manageRoles  === true;
     return (
       <div className="space-y-8 animate-fade-in pb-24">
         {/* Sub-tabs Selector Row */}
         <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 rounded-2xl p-1.5 w-fit">
-          {(['identity', 'delivery', 'tax', 'loyalty', 'groups', 'icons', 'danger'] as const).map(t => {
+          {(
+            [
+              canConfig && 'identity',
+              canConfig && 'delivery',
+              canConfig && 'tax',
+              canConfig && 'loyalty',
+              canConfig && 'groups',
+              canConfig && 'icons',
+              canRoles  && 'rolesAndStaff',
+              canConfig && 'tradingEntities',
+            ].filter(Boolean) as ('identity' | 'delivery' | 'tax' | 'loyalty' | 'groups' | 'icons' | 'rolesAndStaff' | 'tradingEntities')[]
+          ).map(t => {
             const labels: Record<typeof t, string> = {
               identity: 'Identity',
               delivery: 'Delivery & Cut-offs',
@@ -3830,7 +3942,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               loyalty: 'Loyalty Tiers',
               groups: 'Customer Groups',
               icons: 'Icon Library',
-              danger: 'Danger Zone'
+              rolesAndStaff: 'Roles & Staff',
+              tradingEntities: 'Trading Entities',
             };
             return (
               <button
@@ -4290,36 +4403,331 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           </div>
         )}
 
-        {settingsSubTab === 'danger' && (
-          <div className="bg-white rounded-3xl border border-red-200 p-8 shadow-sm space-y-5">
-            <div>
-              <h3 className="text-base font-black text-red-600">Danger Zone</h3>
-              <p className="text-xs text-slate-400 font-medium mt-1">
-                Wipes test/demo data clean before going live. Does not touch the Meal Library, Menu Planner, or any Settings above — only order history and customer loyalty balances.
-              </p>
-            </div>
-            {dangerResetDone && (
-              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3">
-                <p className="text-[11px] font-bold text-emerald-700">All orders cleared, and every customer's points and store credit reset to Rs 0.</p>
-                <button onClick={() => setDangerResetDone(false)} className="p-1 text-emerald-600 hover:text-emerald-800 shrink-0"><X className="size-3.5" /></button>
+        {/* ── Roles & Staff ─────────────────────────────────────────── */}
+        {settingsSubTab === 'rolesAndStaff' && (
+          <div className="space-y-6">
+            {roleActionError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl px-4 py-3 flex items-center gap-2">
+                <AlertCircle className="size-4 shrink-0" /> {roleActionError}
               </div>
             )}
-            <div className="flex items-center justify-between border-t border-slate-100 pt-5">
-              <div>
-                <h4 className="text-xs font-black text-slate-900">Clear all orders & reset customer loyalty</h4>
-                <p className="text-[11px] text-slate-400 font-medium mt-0.5 max-w-md">
-                  Permanently deletes every order (Orders by Dish, Delivery List, Payments all go empty) and zeroes every customer's points and store credit. Customer records, addresses, and tiers are kept. Cannot be undone.
-                </p>
+            {/* Roles section */}
+            <div className="bg-white border border-[#E7E0D0] rounded-3xl p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-black text-slate-900">Roles</h3>
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">Define permission sets that staff members are assigned to.</p>
+                </div>
+                <button
+                  onClick={() => { setEditingRoleId(null); setRoleForm({ name: '', manageMenu: false, manageOrders: false, manageCustomers: false, manageConfig: false, manageRoles: false, manageRegistrations: false }); setShowAddRoleModal(true); }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors"
+                >
+                  <Plus className="size-3.5" /> Add Role
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => dangerConfirm === 'reset' ? handleDangerReset() : setDangerConfirm('reset')}
-                onBlur={() => setDangerConfirm(null)}
-                className={`shrink-0 px-4 py-2.5 rounded-xl text-xs font-black transition-colors ${dangerConfirm === 'reset' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100'}`}
-              >
-                {dangerConfirm === 'reset' ? 'Confirm — this cannot be undone' : 'Clear orders & reset loyalty'}
-              </button>
+              <div className="space-y-2">
+                {rolesRaw.map(role => (
+                  <div key={role.id} className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 bg-slate-50 hover:bg-slate-100 transition-colors">
+                    <div>
+                      <p className="text-sm font-black text-slate-900">{role.name}</p>
+                      <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                        {Object.entries(role.permissions || {}).filter(([, v]) => v).map(([k]) => k).join(' · ') || 'No permissions'}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setEditingRoleId(role.id);
+                        setRoleForm({ name: role.name, ...role.permissions });
+                        setShowAddRoleModal(true);
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors"
+                    >
+                      <Edit3 className="size-4" />
+                    </button>
+                  </div>
+                ))}
+                {rolesRaw.length === 0 && (
+                  <p className="text-xs text-slate-400 font-medium text-center py-6">No roles defined yet. Add your first role above.</p>
+                )}
+              </div>
             </div>
+
+            {/* Staff section */}
+            <div className="bg-white border border-[#E7E0D0] rounded-3xl p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-black text-slate-900">Staff Members</h3>
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">Staff accounts created here are provisioned with a temporary password you set.</p>
+                </div>
+                <button
+                  onClick={() => { setNewStaffForm({ name: '', email: '', password: '', roleId: rolesRaw[0]?.id || '' }); setAddStaffError(null); setShowAddStaffModal(true); }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors"
+                >
+                  <Plus className="size-3.5" /> Add Staff Member
+                </button>
+              </div>
+              <div className="space-y-2">
+                {staffListRaw.map(staff => {
+                  const role = rolesRaw.find(r => r.id === staff.roleId);
+                  const isSelf = staffAuthUser?.uid === staff.id;
+                  return (
+                    <div key={staff.id} className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 bg-slate-50">
+                      <div>
+                        <p className="text-sm font-black text-slate-900">{staff.name} {isSelf && <span className="text-[10px] text-primary font-bold">(You)</span>}</p>
+                        <p className="text-xs text-slate-400 font-medium">{staff.email} · {role?.name || staff.roleId}</p>
+                      </div>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${staff.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
+                        {staff.active ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
+                  );
+                })}
+                {staffListRaw.length === 0 && (
+                  <p className="text-xs text-slate-400 font-medium text-center py-6">No staff members yet. Add the first one above.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Add/Edit Role Modal */}
+            {showAddRoleModal && (
+              <Portal>
+                <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
+                  <div className="bg-white rounded-[32px] w-full max-w-md shadow-2xl overflow-hidden">
+                    <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                      <h2 className="text-lg font-black text-slate-900">{editingRoleId ? 'Edit Role' : 'New Role'}</h2>
+                      <button onClick={() => { setShowAddRoleModal(false); setRoleActionError(null); }} className="p-2 text-slate-400 hover:text-red-500"><X className="size-4" /></button>
+                    </div>
+                    <div className="p-6 space-y-4">
+                      <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Role Name</label>
+                        <input value={roleForm.name} onChange={e => setRoleForm(f => ({ ...f, name: e.target.value }))} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30" placeholder="e.g. Kitchen Staff" />
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Permissions</p>
+                        {(['manageMenu', 'manageOrders', 'manageCustomers', 'manageRegistrations', 'manageConfig', 'manageRoles'] as const).map(perm => (
+                          <label key={perm} className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer">
+                            <input type="checkbox" checked={roleForm[perm]} onChange={e => setRoleForm(f => ({ ...f, [perm]: e.target.checked }))} className="accent-primary size-4" />
+                            <span className="text-xs font-bold text-slate-700">{perm}</span>
+                          </label>
+                        ))}
+                      </div>
+                      {roleActionError && <p className="text-xs text-red-600 font-bold">{roleActionError}</p>}
+                    </div>
+                    <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
+                      <button onClick={() => { setShowAddRoleModal(false); setRoleActionError(null); }} className="px-4 py-2 text-xs font-black text-slate-500 hover:bg-slate-50 rounded-xl transition-colors">Cancel</button>
+                      <button
+                        disabled={roleActionLoading}
+                        onClick={async () => {
+                          if (!roleForm.name.trim()) { setRoleActionError('Role name is required.'); return; }
+                          setRoleActionLoading(true); setRoleActionError(null);
+                          try {
+                            const perms = { manageMenu: roleForm.manageMenu, manageOrders: roleForm.manageOrders, manageCustomers: roleForm.manageCustomers, manageRegistrations: roleForm.manageRegistrations, manageConfig: roleForm.manageConfig, manageRoles: roleForm.manageRoles };
+                            if (editingRoleId) {
+                              await updateDoc(doc(db, 'roles', editingRoleId), { name: roleForm.name.trim(), permissions: perms, updatedAt: Timestamp.now() });
+                              writeAuditLog('RoleChange', `Updated role "${roleForm.name.trim()}" (${editingRoleId})`);
+                            } else {
+                              const newRef = doc(collection(db, 'roles'));
+                              await setDoc(newRef, { name: roleForm.name.trim(), permissions: perms, createdAt: Timestamp.now(), updatedAt: Timestamp.now() });
+                              writeAuditLog('RoleChange', `Created new role "${roleForm.name.trim()}" (${newRef.id})`);
+                            }
+                            setShowAddRoleModal(false);
+                          } catch (e: any) {
+                            setRoleActionError(e.message || 'Failed to save role.');
+                          } finally {
+                            setRoleActionLoading(false);
+                          }
+                        }}
+                        className="px-5 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors disabled:opacity-50"
+                      >
+                        {roleActionLoading ? 'Saving…' : 'Save Role'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </Portal>
+            )}
+
+            {/* Add Staff Modal */}
+            {showAddStaffModal && (
+              <Portal>
+                <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
+                  <div className="bg-white rounded-[32px] w-full max-w-md shadow-2xl overflow-hidden">
+                    <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                      <h2 className="text-lg font-black text-slate-900">Add Staff Member</h2>
+                      <button onClick={() => { setShowAddStaffModal(false); setAddStaffError(null); }} className="p-2 text-slate-400 hover:text-red-500"><X className="size-4" /></button>
+                    </div>
+                    <div className="p-6 space-y-4">
+                      {(['name', 'email', 'password'] as const).map(f => (
+                        <div key={f}>
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{f === 'password' ? 'Temporary Password' : f.charAt(0).toUpperCase() + f.slice(1)}</label>
+                          <input
+                            type={f === 'password' ? 'password' : 'text'}
+                            value={newStaffForm[f]}
+                            onChange={e => setNewStaffForm(prev => ({ ...prev, [f]: e.target.value }))}
+                            className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            placeholder={f === 'email' ? 'staff@example.com' : f === 'password' ? 'Min 6 characters' : ''}
+                          />
+                        </div>
+                      ))}
+                      <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Assign Role</label>
+                        <select value={newStaffForm.roleId} onChange={e => setNewStaffForm(prev => ({ ...prev, roleId: e.target.value }))} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30">
+                          {rolesRaw.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                        </select>
+                      </div>
+                      {addStaffError && <p className="text-xs text-red-600 font-bold">{addStaffError}</p>}
+                    </div>
+                    <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
+                      <button onClick={() => { setShowAddStaffModal(false); setAddStaffError(null); }} className="px-4 py-2 text-xs font-black text-slate-500 hover:bg-slate-50 rounded-xl transition-colors">Cancel</button>
+                      <button
+                        disabled={addStaffLoading}
+                        onClick={async () => {
+                          if (!newStaffForm.name.trim() || !newStaffForm.email.trim() || !newStaffForm.password.trim()) { setAddStaffError('All fields are required.'); return; }
+                          setAddStaffLoading(true); setAddStaffError(null);
+                          try {
+                            const fn = httpsCallable<{ name: string; email: string; password: string; roleId: string }, { uid: string }>(functions, 'createStaffMember');
+                            const result = await fn({ name: newStaffForm.name.trim(), email: newStaffForm.email.trim(), password: newStaffForm.password, roleId: newStaffForm.roleId });
+                            writeAuditLog('RoleChange', `Created staff account for ${newStaffForm.name.trim()} (${result.data.uid}), role: ${newStaffForm.roleId}`);
+                            setShowAddStaffModal(false);
+                          } catch (e: any) {
+                            setAddStaffError(e.message || 'Failed to create staff account.');
+                          } finally {
+                            setAddStaffLoading(false);
+                          }
+                        }}
+                        className="px-5 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors disabled:opacity-50"
+                      >
+                        {addStaffLoading ? 'Creating…' : 'Create Account'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </Portal>
+            )}
+          </div>
+        )}
+
+        {/* ── Trading Entities ───────────────────────────────────────── */}
+        {settingsSubTab === 'tradingEntities' && (
+          <div className="space-y-6">
+            {entityActionError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl px-4 py-3 flex items-center gap-2">
+                <AlertCircle className="size-4 shrink-0" /> {entityActionError}
+              </div>
+            )}
+            <div className="bg-white border border-[#E7E0D0] rounded-3xl p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-black text-slate-900">Trading Entities</h3>
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">Legal trading entities. Each entity's name/BRN/VAT/bank reference is snapshotted onto orders at checkout.</p>
+                </div>
+                <button
+                  onClick={() => { setEditingEntityId(null); setEntityForm({ name: '', brn: '', vatNumber: '', bankReference: '' }); setEntityLogoFile(null); setShowAddEntityModal(true); }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors"
+                >
+                  <Plus className="size-3.5" /> Add Entity
+                </button>
+              </div>
+              <div className="space-y-3">
+                {entities.map(entity => (
+                  <div key={entity.id} className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 bg-slate-50">
+                    <div className="space-y-0.5">
+                      <p className="text-sm font-black text-slate-900">{entity.name}</p>
+                      <p className="text-xs text-slate-400 font-medium">BRN: {entity.brn} · VAT: {entity.vatNumber}</p>
+                      <p className="text-[10px] text-slate-300 font-medium">Bank ref: {entity.bankReference}</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setEditingEntityId(entity.id);
+                        setEntityForm({ name: entity.name, brn: entity.brn, vatNumber: entity.vatNumber, bankReference: entity.bankReference });
+                        setEntityLogoFile(null);
+                        setShowAddEntityModal(true);
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors"
+                    >
+                      <Edit3 className="size-4" />
+                    </button>
+                  </div>
+                ))}
+                {entities.length === 0 && (
+                  <p className="text-xs text-slate-400 font-medium text-center py-6">No trading entities yet.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Add/Edit Entity Modal */}
+            {showAddEntityModal && (
+              <Portal>
+                <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
+                  <div className="bg-white rounded-[32px] w-full max-w-md shadow-2xl overflow-hidden">
+                    <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                      <h2 className="text-lg font-black text-slate-900">{editingEntityId ? 'Edit Entity' : 'New Trading Entity'}</h2>
+                      <button onClick={() => { setShowAddEntityModal(false); setEntityActionError(null); }} className="p-2 text-slate-400 hover:text-red-500"><X className="size-4" /></button>
+                    </div>
+                    <div className="p-6 space-y-4">
+                      {(['name', 'brn', 'vatNumber', 'bankReference'] as const).map(f => (
+                        <div key={f}>
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{f === 'vatNumber' ? 'VAT Number' : f === 'brn' ? 'BRN' : f === 'bankReference' ? 'Bank Reference' : 'Entity Name'}</label>
+                          <input
+                            value={entityForm[f]}
+                            onChange={e => setEntityForm(prev => ({ ...prev, [f]: e.target.value }))}
+                            className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          />
+                        </div>
+                      ))}
+                      <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Logo (optional)</label>
+                        <input type="file" accept="image/*" onChange={e => setEntityLogoFile(e.target.files?.[0] ?? null)} className="mt-1 w-full text-xs font-medium text-slate-500" />
+                      </div>
+                      {entityActionError && <p className="text-xs text-red-600 font-bold">{entityActionError}</p>}
+                    </div>
+                    <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
+                      <button onClick={() => { setShowAddEntityModal(false); setEntityActionError(null); }} className="px-4 py-2 text-xs font-black text-slate-500 hover:bg-slate-50 rounded-xl transition-colors">Cancel</button>
+                      <button
+                        disabled={entityActionLoading}
+                        onClick={async () => {
+                          if (!entityForm.name.trim()) { setEntityActionError('Entity name is required.'); return; }
+                          setEntityActionLoading(true); setEntityActionError(null);
+                          try {
+                            let logoStoragePath: string | undefined;
+                            if (entityLogoFile) {
+                              const entityId = editingEntityId || doc(collection(db, 'entities')).id;
+                              const logoRef = storageRef(storage, `entities/${entityId}/logo`);
+                              await uploadBytes(logoRef, entityLogoFile);
+                              logoStoragePath = await getDownloadURL(logoRef);
+                            }
+                            const payload: Record<string, unknown> = {
+                              name: entityForm.name.trim(),
+                              brn: entityForm.brn.trim(),
+                              vatNumber: entityForm.vatNumber.trim(),
+                              bankReference: entityForm.bankReference.trim(),
+                              updatedAt: Timestamp.now(),
+                              ...(logoStoragePath ? { logoStoragePath } : {})
+                            };
+                            if (editingEntityId) {
+                              await updateDoc(doc(db, 'entities', editingEntityId), payload);
+                              writeAuditLog('ConfigChange', `Updated trading entity "${entityForm.name.trim()}" (${editingEntityId})`);
+                            } else {
+                              const newRef = doc(collection(db, 'entities'));
+                              await setDoc(newRef, { ...payload, active: true, createdAt: Timestamp.now() });
+                              writeAuditLog('ConfigChange', `Created trading entity "${entityForm.name.trim()}" (${newRef.id})`);
+                            }
+                            setShowAddEntityModal(false);
+                          } catch (e: any) {
+                            setEntityActionError(e.message || 'Failed to save entity.');
+                          } finally {
+                            setEntityActionLoading(false);
+                          }
+                        }}
+                        className="px-5 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors disabled:opacity-50"
+                      >
+                        {entityActionLoading ? 'Saving…' : 'Save Entity'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </Portal>
+            )}
           </div>
         )}
       </div>
@@ -4401,6 +4809,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const handleApprove = async (customerId: string) => {
     const entId = selectedEntities[customerId] || 'entity-a';
+    const cust = customers.find(c => c.id === customerId);
     try {
       await updateDoc(doc(db, 'customers', customerId), {
         entityId: entId,
@@ -4413,6 +4822,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         registrationStatus: 'Approved',
         rejectionReason: undefined
       });
+      writeAuditLog('RegistrationDecision', `Approved registration for ${cust?.name || customerId} (entity: ${entId})`);
       setNotification({ type: 'success', title: 'Registration Approved', message: 'Customer registration approved successfully.' });
     } catch (err: any) {
       setNotification({ type: 'error', title: 'Approval Failed', message: `Approval failed: ${err.message}` });
@@ -4425,6 +4835,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setNotification({ type: 'error', title: 'Input Required', message: 'Please provide a rejection reason.' });
       return;
     }
+    const cust = customers.find(c => c.id === customerId);
     try {
       await updateDoc(doc(db, 'customers', customerId), {
         registrationStatus: 'Rejected',
@@ -4436,6 +4847,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         rejectionReason: reason.trim()
       });
       setShowRejectDialog(null);
+      writeAuditLog('RegistrationDecision', `Rejected registration for ${cust?.name || customerId}: "${reason.trim()}"`);
       setNotification({ type: 'error', title: 'Registration Rejected', message: 'Customer registration has been rejected.' });
     } catch (err: any) {
       setNotification({ type: 'error', title: 'Rejection Failed', message: `Rejection failed: ${err.message}` });
@@ -4671,7 +5083,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
           {!sidebarCollapsed && <p className="px-3 text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 mt-2">Operations</p>}
           {sidebarCollapsed && <div className="h-4" />}
-          {TABS.map(t => {
+          {TABS.filter(t => hasTabPermission(t.id)).map(t => {
             const isPendingReg = t.id === 'pendingRegistrations';
             const count = isPendingReg ? pendingCustomers.length : 0;
             return (
@@ -4700,21 +5112,23 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             );
           })}
 
-          <div className="pt-4">
-            {!sidebarCollapsed && <p className="px-3 text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Configuration</p>}
-            <button
-              onClick={() => setTab('settings')}
-              title={sidebarCollapsed ? 'Settings' : undefined}
-              className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                tab === 'settings'
-                  ? `text-primary bg-primary/[0.04] ${sidebarCollapsed ? '' : 'border-l-4 border-primary'} shadow-[0_4px_12px_rgba(62,125,34,0.04)]`
-                  : 'text-slate-500 hover:bg-slate-50'
-              }`}
-            >
-              <SettingsIcon className="size-4 shrink-0" />
-              {!sidebarCollapsed && <span>Settings</span>}
-            </button>
-          </div>
+          {hasTabPermission('settings') && (
+            <div className="pt-4">
+              {!sidebarCollapsed && <p className="px-3 text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Configuration</p>}
+              <button
+                onClick={() => setTab('settings')}
+                title={sidebarCollapsed ? 'Settings' : undefined}
+                className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                  tab === 'settings'
+                    ? `text-primary bg-primary/[0.04] ${sidebarCollapsed ? '' : 'border-l-4 border-primary'} shadow-[0_4px_12px_rgba(62,125,34,0.04)]`
+                    : 'text-slate-500 hover:bg-slate-50'
+                }`}
+              >
+                <SettingsIcon className="size-4 shrink-0" />
+                {!sidebarCollapsed && <span>Settings</span>}
+              </button>
+            </div>
+          )}
         </nav>
 
         {/* Testing Controls — hidden when collapsed */}
@@ -4795,7 +5209,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-8 space-y-6">
-          {tab === 'dashboard' && renderDashboard()}
+          {!hasTabPermission(tab) ? (
+            <div className="bg-white border border-[#E7E0D0] rounded-3xl p-8 text-center space-y-4 max-w-md mx-auto my-12 shadow-sm">
+              <div className="inline-flex items-center justify-center size-12 rounded-full bg-red-50 text-red-600">
+                <X className="size-6" />
+              </div>
+              <h3 className="text-base font-black text-slate-900">Access Denied</h3>
+              <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                Your role does not have the necessary permissions to access this tab. Please contact your system administrator if you believe this is an error.
+              </p>
+            </div>
+          ) : (
+            <>
+              {tab === 'dashboard' && renderDashboard()}
           
           {tab === 'menu' && renderMenuTab()}
 
@@ -5480,6 +5906,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           {tab === 'pendingRegistrations' && renderPendingRegistrationsTab()}
           {tab === 'transactions' && renderTransactionsTab()}
           {tab === 'settings' && renderSettingsTab()}
+            </>
+          )}
         </div>
       </main>
 

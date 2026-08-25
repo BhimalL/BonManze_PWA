@@ -105,8 +105,13 @@ service cloud.firestore {
     // this is the one place a privilege-escalation path would open up if
     // it were folded into a broader permission instead of its own key.
     match /staff/{uid} {
-      allow read: if request.auth.uid == uid || isStaffAllowed('manageRoles');
-      allow write: if isStaffAllowed('manageRoles');
+      allow read: if isActiveStaff();
+      allow create: if false; // strictly created via createStaffMember Cloud Function
+      allow update: if isStaffAllowed('manageRoles')
+        && (request.auth.uid != uid
+            || (request.resource.data.active == true
+                && request.resource.data.roleId == resource.data.roleId));
+      allow delete: if false;
     }
 
     // ---- roles/{roleId} ----
@@ -122,8 +127,13 @@ service cloud.firestore {
     // changes made straight from the client. Never editable or deletable
     // once written — that's the point of an audit log.
     match /auditLog/{id} {
-      allow read: if isStaffAllowed('manageConfig') || isStaffAllowed('manageOrders');
-      allow create: if isStaffAllowed('manageConfig');
+      allow read: if isStaffAllowed('manageRoles');
+      allow create: if isActiveStaff()
+        && request.resource.data.staffUid == request.auth.uid
+        && request.resource.data.timestamp == request.time
+        && request.resource.data.type in ['ConfigChange', 'RoleChange', 'RegistrationDecision', 'EntityReassignment', 'PaymentConfirmed', 'DeliveryConfirmed']
+        && request.resource.data.description is string
+        && request.resource.data.description.size() > 0;
       allow update, delete: if false;
     }
 
