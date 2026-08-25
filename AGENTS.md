@@ -2,36 +2,47 @@
 
 ## 2026-08-25: Antigravity — Multi-Tier Trading Entity System Complete
 
-**Commits `48c9ace`, `02eec4e`, `ddc7d8c`, `27fb551`** — Multi-Tier Trading Entity System fully implemented, verified, and iterated with manual walkthrough fixes. All 14 assertions across validation suites pass.
+**Commits `48c9ace`, `02eec4e`, `ddc7d8c`, `27fb551`, `99f61ad`** — Multi-Tier Trading Entity System fully implemented, verified, and iterated with manual walkthrough fixes. All 14 assertions across validation suites pass.
 
-### What was built
+### 1. Security Rules Refactor & Database Seeding
+- **Rules Gating**: Refactored `firestore.rules` to correctly allow customer profile resubmission. Transitioning `registrationStatus` from `'Rejected'` to `'Pending'` and clearing the `rejectionReason` (setting it to `null`) now passes rules checkouts.
+- **Strict Lockdown of Key Modification**: Restricted staff keys editing via `affectedKeys().hasOnly(['entityId', 'registrationStatus', 'rejectionReason', 'updatedAt'])` to prevent unauthorized document mutation by administrative staff.
+- **Entities & Customer Backfill**: Created `entities/entity-a` and `entities/entity-b` documents with correct details and `logoStoragePath` unset. Backfilled all legacy customers to `'Pending'`. Assigned the `manageRegistrations: true` role to the live `Owner` user.
 
-**`firestore.rules`**
-- Gated customer profile resubmissions to transition `registrationStatus` from `'Rejected'` to `'Pending'` and clear `rejectionReason`.
-- Locked down registration management fields for editing staff via strict key diffing.
+### 2. Dual-Clone Sync Guardrail
+- Fixed the stale `.git/index.lock` file in the emulator workspace clone (`C:\Users\bhimall\BonManze_pwa`), cleaned the folder, and did a hard reset.
+- Prepended `git pull && ` to the `emulators` command in the `package.json` of **both** workspaces. Starting the emulators now guarantees that the latest rules and functions are pulled, preventing silent emulator code drift.
 
-**`functions/index.js`**
-- `registerCustomer`: Defaults new accounts to `'Pending'` status.
-- `confirmCheckout`: Verifies the customer is `'Approved'` and has an entity assigned, then denormalizes the assigned entity's legal details (name, BRN, VAT, bank reference) onto the order.
+### 3. Automated Verification (`scripts/testMultiEntity.js`)
+Added a new client-SDK-driven automated verification script validating:
+- **Resubmission Flow**: Verify Eleanor can successfully write profile updates alongside `registrationStatus: 'Pending'` and `rejectionReason: null` under client rules (simulating real customer interaction).
+- **Snapshot Freeze Stability**: Re-reads orders directly from the Firestore database after reassigning a customer to a different entity to ensure historical orders remain locked to original entity snapshots.
 
-**`modules/store.ts`**
-- Added entity placeholders (`entity-a`/`entity-b`) and updated CRM state update flows.
+### 4. Manual Walkthrough UI/UX Fixes (Latest Round)
+We resolved all of the manual feedback items from the walkthrough:
+- **Rejection Modal Backdrop & Overlay**:
+  - Wrapped the reject dialog block in `<Portal>` and set styling to `fixed inset-0 bg-slate-900/70 backdrop-blur-md z-[9999] animate-fade-in` to cover the left sidebar and header fully (fixing viewport clipping).
+  - Replaced the invalid Tailwind `bg-error` utility class with `bg-red-600 hover:bg-red-700` so the button text is visible.
+- **Rejection Confirmation Dialog**:
+  - Added a proper modal title (`Registration Rejected`).
+  - Swapped the success checkmark icon with the warning alert icon (`AlertCircle` in red).
+  - Changed the message to read `"Customer registration has been rejected."` to ensure the modal feels complete and polished.
+- **Customer Resubmit Form Fields**:
+  - Expanded the resubmit form in `CustomerPortal.tsx` to support editing **First Name**, **Last Name**, and **Email Address** alongside phone number and street addresses (enabling corrections for typosed names/emails).
+- **Subtle Trading Entities Selector**:
+  - Removed the large radio-button cards from the Pending Registrations card and replaced them with a compact drop-and-select `<select>` dropdown.
+- **CRM Integration**:
+  - Removed the inline selector dropdowns from the Customer Directory table columns and integrated entity assignment inside the main **Edit Customer CRM** details modal.
+- **Sidebar Tab Alerts**:
+  - Fixed the tab count badge in the sidebar to use valid Tailwind `bg-red-600` colors.
+  - Added a pulsing animation (`animate-pulse`) to the "Pending Registrations" sidebar tab to alert operations of pending requests.
+- **Theme Class Cleanup**:
+  - Fixed all remaining instances of invalid `error` Tailwind classes in both files, substituting valid Tailwind red utilities.
 
-**`modules/CustomerPortal.tsx`**
-- Added "Awaiting Approval" and "Registration Rejected" screens.
-- Expanded the rejection resubmit form with inputs for **First Name**, **Last Name**, and **Email Address** alongside phone/address to allow corrections of typo'd contact profiles.
-
-**`modules/Operations.tsx`**
-- Added **Pending Registrations** tab to operations dashboard with approve/reject actions.
-- Gated tab actions to staff with `manageRegistrations` role.
-- Replaced large entity selector radio cards on the pending registration cards with a subtle drop & select `<select>` dropdown.
-- Programmed the "Pending Registrations" sidebar tab to **pulse/glow** and show a red circle number when there are pending registrations.
-- Moved the assigned entity dropdown selector out of the customer directory table cells and placed it inside the main **Edit Customer CRM** details modal.
-- Fixed the rejection confirmation notification modal to have a title (`Registration Rejected`), a red alert icon (`AlertCircle`), and a solid red button background (`bg-red-600`).
-
-**`scripts/`**
-- `seedEntities.js`: Seeds entities and backfills existing customers to `'Pending'`.
-- `testMultiEntity.js`: New client-SDK-driven test asserting that resubmission works under rules, and customer entity reassignments do not alter pre-existing order invoices.
+### State Handoff for Claude
+- Both OneDrive active workspace and emulator workspace have been fully synced and pulled.
+- Running `npm run emulators` will pull the latest version and run the updated rules and functions automatically.
+- Automated tests suite (`npx tsc --noEmit` + `node scripts/testCheckoutFlow.js` + `node scripts/testOrderEditCancel.js` + `node scripts/testMultiEntity.js`) passes successfully.
 
 ---
 
