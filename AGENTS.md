@@ -2,7 +2,7 @@
 
 ## 2026-08-25: Antigravity — Multi-Tier Trading Entity System Complete
 
-**Commits `48c9ace`, `02eec4e`, `ddc7d8c`, `27fb551`, `99f61ad`** — Multi-Tier Trading Entity System fully implemented, verified, and iterated with manual walkthrough fixes. All 14 assertions across validation suites pass.
+**Commits `48c9ace`, `02eec4e`, `ddc7d8c`, `27fb551`, `99f61ad`, `2d2bfd7`** — Multi-Tier Trading Entity System fully implemented, verified, and iterated with manual walkthrough fixes. All 14 assertions across validation suites pass.
 
 ### 1. Security Rules Refactor & Database Seeding
 - **Rules Gating**: Refactored `firestore.rules` to correctly allow customer profile resubmission. Transitioning `registrationStatus` from `'Rejected'` to `'Pending'` and clearing the `rejectionReason` (setting it to `null`) now passes rules checkouts.
@@ -17,6 +17,7 @@
 Added a new client-SDK-driven automated verification script validating:
 - **Resubmission Flow**: Verify Eleanor can successfully write profile updates alongside `registrationStatus: 'Pending'` and `rejectionReason: null` under client rules (simulating real customer interaction).
 - **Snapshot Freeze Stability**: Re-reads orders directly from the Firestore database after reassigning a customer to a different entity to ensure historical orders remain locked to original entity snapshots.
+- **Split Write Logic Verification**: Simulates staff client-SDK edit operations to assert that combined writes (modifying both profile fields and `entityId` simultaneously) are blocked with `PERMISSION_DENIED` under rules, while split writes succeed.
 
 ### 4. Manual Walkthrough UI/UX Fixes (Latest Round)
 We resolved all of the manual feedback items from the walkthrough:
@@ -31,8 +32,9 @@ We resolved all of the manual feedback items from the walkthrough:
   - Expanded the resubmit form in `CustomerPortal.tsx` to support editing **First Name**, **Last Name**, and **Email Address** alongside phone number and street addresses (enabling corrections for typosed names/emails).
 - **Subtle Trading Entities Selector**:
   - Removed the large radio-button cards from the Pending Registrations card and replaced them with a compact drop-and-select `<select>` dropdown.
-- **CRM Integration**:
+- **CRM Integration & Split Write Bug**:
   - Removed the inline selector dropdowns from the Customer Directory table columns and integrated entity assignment inside the main **Edit Customer CRM** details modal.
+  - Fixed the split write bug: Split the CRM Edit modal's `handleSaveCustomer` function into two sequential writes—one for standard profile fields and another conditional write for `entityId` (sent only if changed)—to prevent violating independent rules checkouts (where combined edits would otherwise fail).
 - **Sidebar Tab Alerts**:
   - Fixed the tab count badge in the sidebar to use valid Tailwind `bg-red-600` colors.
   - Added a pulsing animation (`animate-pulse`) to the "Pending Registrations" sidebar tab to alert operations of pending requests.
