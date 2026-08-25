@@ -114,6 +114,7 @@ export const registerCustomer = onCall(async (request) => {
         avatar: '',
         referenceCode: normalizedUsername.toUpperCase(),
         gdprConsent: { marketing: false, sms: false, dataProcessing: true },
+        registrationStatus: 'Pending',
         createdAt: now,
         updatedAt: now,
       });
