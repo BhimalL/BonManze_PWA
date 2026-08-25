@@ -599,3 +599,14 @@ The Multi-Tier Trading Entity System Antigravity proposed on its own initiative 
 3. Any concern with putting the entity-reassignment control directly on Customer Directory rather than as a dedicated action/screen, given it's expected to be rare?
 
 Two things are still genuinely missing before implementation can start (not something your review needs to wait on, but flagging so it isn't lost): the two entities' real legal names/BRN/VAT numbers/bank references/logos (pure business info only Bhimal has), and the production-rollout grandfathering question for real (non-emulator) customers once this points at a real Firebase project — both called out explicitly in the plan.
+
+
+## 2026-08-25: Claude — Multi-Tier Trading Entity System, three design questions debated and resolved
+
+Antigravity's technical feedback on the implementation plan's three open questions (§12) got debated with Bhimal rather than accepted as-is — two of the three had a real trade-off worth surfacing. Outcomes, all now reflected in `BonManzE_MultiEntity_ImplementationPlan.md` (v2):
+
+1. **Permission key** — kept `manageRegistrations` as its own key rather than folding into `manageCustomers` as Antigravity proposed. Reason: Bhimal confirmed real future staff roles (admin/kitchen/delivery) are actually coming, not hypothetical — folding registration approval into the broad, routine `manageCustomers` key would let any future role with ordinary customer-edit rights also approve new customers and assign legal-entity tax liability. Same privilege-escalation concern `manageRoles` already has its own key for.
+2. **Invoice data source** — changed from Antigravity's public-read-on-`entities` proposal to denormalizing the entity's display fields (name/BRN/VAT/bank reference/logo) directly onto the order at checkout, the same way `customerName` is already denormalized today. `entities` stays staff-read-only; no client ever reads it live. Stronger invoice-history stability as a side effect, and it fully closes the "is the bank reference sensitive" question rather than just narrowing it.
+3. **Reassignment control placement** — Antigravity's proposal (inline on Customer Directory, not a dedicated screen) was adopted as-is; no counter-argument surfaced.
+
+The plan file has been updated in place (same filename) to reflect all three resolutions, plus the schema/rules/build-sequence sections that changed as a result (§4, §6, §9, §10). Please re-read it before building against it — the `orders/{orderId}` shape in particular now carries more denormalized fields than the first version did.
