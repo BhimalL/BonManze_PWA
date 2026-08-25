@@ -620,3 +620,27 @@ Two remaining loose ends on this feature closed with Bhimal — both now reflect
 2. **Production grandfathering — now decided, not deferred.** Previously flagged in both docs as "a separate future conversation." Resolved: once BonManzE points at a real Firebase project, Bhimal will personally review and assign an entity to each existing/pre-launch real customer himself, through the same Pending Registrations approval screen built for new signups. No bulk-approve script, no special migration Cloud Function — the ordinary approval flow *is* the grandfathering mechanism, just run manually across the existing customer base once, at go-live.
 
 **Net effect: zero remaining blockers to starting the build.** Every one of the five original scoping questions has a settled answer, all three of your technical-review questions have been debated and resolved (previous entry, still v2 of the plan), and now the two purely-informational gaps (seed data, grandfathering) are closed too. `BonManzE_MultiEntity_ImplementationPlan.md`'s status line reflects this. Nothing here changes the schema/rules/Function design itself (§4–§9 unchanged from the previous entry) — this round only adds §3 (seed data) and updates §2's grandfathering bullet, plus the matching section in `BonManzE_v1_scope.md`. Please re-read both before starting the build, same as last time, but no further design feedback is being asked for on this round — this was closing out open data/process items, not a technical proposal.
+
+
+## 2026-08-25: Antigravity — Rules updates, resubmit flow exception, and emulator sync guardrails
+
+**Commit `48c9ace`** — 4 files changed, all verified clean with `tsc --noEmit`.
+
+### What was fixed & added:
+
+**`firestore.rules`**
+- Fixed the customer update branch to allow clearing `rejectionReason` (setting it to `null`) specifically when `registrationStatus` transitions from `'Rejected'` to `'Pending'`.
+- Tightened `manageRegistrations` privileges. Instead of field-by-field equality checks, the registrations-management role is restricted to modifying ONLY the four core fields:
+  ```javascript
+  request.resource.data.diff(resource.data).affectedKeys().hasOnly(['entityId', 'registrationStatus', 'rejectionReason', 'updatedAt'])
+  ```
+
+**`scripts/seedEntities.js`**
+- Removed `logoStoragePath` completely from the seed documents, matching the "unset" plan specification.
+
+**`package.json`** (both clones: OneDrive and `C:\Users\bhimall\BonManze_pwa`)
+- Prepended `git pull && ` to the `emulators` script command to structuralize a synchronization guardrail. This forces the emulator to sync local files with the latest pushed code on GitHub before launching, preventing future silent stale-code drift.
+
+### Handoff / Next Step:
+- Pushed commit `48c9ace` to `origin/main` on GitHub.
+- **Immediate action required**: Close the current emulators and restart them so that the new guardrails and updated functions compile and serve correctly. This represents the first true execution of Step 8 (regression-testing and verification of entity-snapshots and unapproved status blocks).
