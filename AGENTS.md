@@ -1,5 +1,28 @@
 # Agent Coordination: BonManzE Project
 
+## 2026-08-25: Antigravity — Settings, Roles & Staff, and Trading Entities Complete
+
+**Commits `4376133`, `a211ac5`** — Settings gating, Roles & Staff sub-tab, Trading Entities sub-tab, Cloud Function provisioning, Storage integration, and client-side audit logs fully implemented and verified. All 10 verification assertions pass successfully along with all existing regression suites.
+
+### 1. Cloud Function & Security Rules
+- **Provisioning**: Added the `createStaffMember` callable Cloud Function in `functions/index.js` to create Firebase Auth users and write `staff/{uid}` Firestore records atomically, bypassing client-side creation.
+- **Rules Gating**: Gated the `staff/` collection to prevent self-deactivation and direct client-side document creation. Gated `roles/` write rules to `manageRoles` staff. Gated `auditLog/` creation rules to match `request.auth.uid`, ensure valid log types, and enforce `serverTimestamp()` validation to prevent spoofing. Gated `entities/` write rules to `manageConfig`.
+- **Storage Rules**: Added public read and `manageConfig`-gated write rules for entity logos under `/entities/{entityId}/**`.
+
+### 2. Operations Console UI & Tab Gating
+- **Permission Gating**: Configured a staff authentication listener that resolves `currentPermissions` from `roles/{roleId}`. Used this state to gate sidebar navigation links, the settings panel button, and route access (displaying an "Access Denied" view if unauthorized staff attempt tab access).
+- **Roles & Staff Settings**: Added roles listing, in-line permission editing/adding modal, staff member directory listing (with self-labeling and active status badges), and a staff provisioning modal.
+- **Trading Entities Settings**: Added active trading entity directory list with BRN, VAT number, and bank reference information, and an entity editor modal with Storage-backed file uploads.
+- **Danger Zone Removal**: Completely removed the Danger Zone reset UI block from Settings.
+
+### 3. Audit Logs
+- Wired up client-side audit logs across: mark order delivered (`DeliveryConfirmed`), mark paid (`PaymentConfirmed`), approve/reject customer registration (`RegistrationDecision`), reassign customer entity (`EntityReassignment`), modify core business config (`ConfigChange`), add/edit role (`RoleChange`), create staff member (`RoleChange`), and add/edit trading entity (`ConfigChange`).
+
+### 4. Automated Verification (`scripts/testSettingsRBAC.js`)
+- Created a comprehensive client-SDK verification script testing Auth creation, direct write rejections, audit log spoofing rejections, entity updates, and self-lock prevention. All 10 test assertions, along with checkout, multi-entity, and order edit/cancel regression tests, pass successfully.
+
+---
+
 ## 2026-08-25: Antigravity — Multi-Tier Trading Entity System Complete
 
 **Commits `48c9ace`, `02eec4e`, `ddc7d8c`, `27fb551`, `99f61ad`, `2d2bfd7`** — Multi-Tier Trading Entity System fully implemented, verified, and iterated with manual walkthrough fixes. All 14 assertions across validation suites pass.
