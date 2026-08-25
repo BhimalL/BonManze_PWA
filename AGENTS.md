@@ -1,5 +1,40 @@
 # Agent Coordination: BonManzE Project
 
+## 2026-08-25: Antigravity — Multi-Tier Trading Entity System Complete
+
+**Commits `48c9ace`, `02eec4e`, `ddc7d8c`, `27fb551`** — Multi-Tier Trading Entity System fully implemented, verified, and iterated with manual walkthrough fixes. All 14 assertions across validation suites pass.
+
+### What was built
+
+**`firestore.rules`**
+- Gated customer profile resubmissions to transition `registrationStatus` from `'Rejected'` to `'Pending'` and clear `rejectionReason`.
+- Locked down registration management fields for editing staff via strict key diffing.
+
+**`functions/index.js`**
+- `registerCustomer`: Defaults new accounts to `'Pending'` status.
+- `confirmCheckout`: Verifies the customer is `'Approved'` and has an entity assigned, then denormalizes the assigned entity's legal details (name, BRN, VAT, bank reference) onto the order.
+
+**`modules/store.ts`**
+- Added entity placeholders (`entity-a`/`entity-b`) and updated CRM state update flows.
+
+**`modules/CustomerPortal.tsx`**
+- Added "Awaiting Approval" and "Registration Rejected" screens.
+- Expanded the rejection resubmit form with inputs for **First Name**, **Last Name**, and **Email Address** alongside phone/address to allow corrections of typo'd contact profiles.
+
+**`modules/Operations.tsx`**
+- Added **Pending Registrations** tab to operations dashboard with approve/reject actions.
+- Gated tab actions to staff with `manageRegistrations` role.
+- Replaced large entity selector radio cards on the pending registration cards with a subtle drop & select `<select>` dropdown.
+- Programmed the "Pending Registrations" sidebar tab to **pulse/glow** and show a red circle number when there are pending registrations.
+- Moved the assigned entity dropdown selector out of the customer directory table cells and placed it inside the main **Edit Customer CRM** details modal.
+- Fixed the rejection confirmation notification modal to have a title (`Registration Rejected`), a red alert icon (`AlertCircle`), and a solid red button background (`bg-red-600`).
+
+**`scripts/`**
+- `seedEntities.js`: Seeds entities and backfills existing customers to `'Pending'`.
+- `testMultiEntity.js`: New client-SDK-driven test asserting that resubmission works under rules, and customer entity reassignments do not alter pre-existing order invoices.
+
+---
+
 ## 2026-08-18: Antigravity — Security audit fixes, notes/instructions bug, regression test
 
 **Commit `858f0b8`** — 9 files changed, all verified clean with `tsc --noEmit` + automated test suite (ALL CHECKS PASSED, 10/10 including 5 new assertions).
