@@ -265,8 +265,15 @@ export const confirmCheckout = onCall(async (request) => {
   }
   const customer = customerSnap.data();
 
+  if (customer.registrationStatus !== 'Approved') {
+    throw new HttpsError('failed-precondition', 'Your account is pending registration approval.');
+  }
+  if (!customer.entityId) {
+    throw new HttpsError('failed-precondition', 'Your account has not been assigned to a trading entity.');
+  }
+
   // ---- Load current catalogs/config in parallel ----
-  const [configSnap, tiersSnap, groupsSnap, basesSnap, dhalsSnap, saladsSnap, bevSnap, desSnap, defaultsSnap] = await Promise.all([
+  const [configSnap, tiersSnap, groupsSnap, basesSnap, dhalsSnap, saladsSnap, bevSnap, desSnap, defaultsSnap, entitySnap] = await Promise.all([
     db.collection('config').doc('system').get(),
     db.collection('loyaltyTiers').doc('current').get(),
     db.collection('customerGroups').doc('current').get(),
@@ -276,8 +283,13 @@ export const confirmCheckout = onCall(async (request) => {
     db.collection('mealBeverages').doc('current').get(),
     db.collection('mealDesserts').doc('current').get(),
     db.collection('menuDefaults').doc('current').get(),
+    db.collection('entities').doc(customer.entityId).get(),
   ]);
   const config = configSnap.data() || {};
+  const entity = entitySnap.exists ? entitySnap.data() : null;
+  if (!entity) {
+    throw new HttpsError('failed-precondition', 'Assigned trading entity was not found.');
+  }
   
   const systemDateOverride = getOverrideDate(request);
 
@@ -477,6 +489,12 @@ export const confirmCheckout = onCall(async (request) => {
       discountReason: `Standard: ${effectiveStandardRate}%, Birthday: ${birthdayTierRate}%, Bulk: ${bulkDiscount > 0 ? config.bulkDiscountRate : 0}%`,
       vat,
       createdAt: now,
+      entityId: customer.entityId,
+      entityName: entity.name || '',
+      entityBrn: entity.brn || '',
+      entityVatNumber: entity.vatNumber || '',
+      entityBankReference: entity.bankReference || '',
+      entityLogoStoragePath: entity.logoStoragePath || '',
     });
     priced.forEach((p) => {
       const { _weekStart, _service, _weekdayKey, ...itemFields } = p;
