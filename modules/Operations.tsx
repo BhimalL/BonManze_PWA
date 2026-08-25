@@ -42,11 +42,12 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
+  UserCheck,
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc, Timestamp } from 'firebase/firestore';
 import { auth, db } from '../firebaseClient';
-import { Order, OrderItem, Customer, PaymentMethod, LoyaltyTier, CustomerGroup } from '../types';
+import { Order, OrderItem, Customer, PaymentMethod, LoyaltyTier, CustomerGroup, Entity } from '../types';
 import { Portal } from './Portal';
 import { IconPickerButton } from './IconPicker';
 import {
@@ -200,7 +201,7 @@ interface OperationsProps {
   onExit: () => void;
 }
 
-type Tab = 'dashboard' | 'menu' | 'library' | 'orders' | 'delivery' | 'payments' | 'customers' | 'transactions' | 'settings';
+type Tab = 'dashboard' | 'menu' | 'library' | 'orders' | 'delivery' | 'payments' | 'customers' | 'transactions' | 'settings' | 'pendingRegistrations';
 
 // Which offering a curry-menu edit applies to — Dinner is a second,
 // independently toggleable offering that otherwise mirrors Lunch exactly.
@@ -228,6 +229,7 @@ const TABS: { id: Exclude<Tab, 'settings'>; label: string; icon: any }[] = [
   { id: 'delivery', label: 'Delivery List', icon: Truck },
   { id: 'payments', label: 'Payments', icon: Wallet },
   { id: 'customers', label: 'Customer Directory', icon: Users },
+  { id: 'pendingRegistrations', label: 'Pending Registrations', icon: UserCheck },
   { id: 'transactions', label: 'Transactions Ledger', icon: FileSpreadsheet },
 ];
 
@@ -259,6 +261,8 @@ interface DropTask {
   // transfer against a bank/wallet statement before confirming.
   claimedMethod?: string;
   claimedReference?: string;
+  entityId?: string;
+  entityName?: string;
 }
 
 interface OpsWeekDay { key: WeekdayKey; date: string; label: string; short: string; }
@@ -296,6 +300,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [entities, setEntities] = useState<Entity[]>([]);
+  const [entityFilter, setEntityFilter] = useState<'all' | 'entity-a' | 'entity-b'>('all');
+  const [selectedEntities, setSelectedEntities] = useState<Record<string, string>>({});
+  const [rejectionReasons, setRejectionReasons] = useState<Record<string, string>>({});
+  const [showRejectDialog, setShowRejectDialog] = useState<string | null>(null);
 
   // --- Real staff Firebase Auth (new, 2026-08-13) — Operations has never
   // had ANY login concept before this; App.tsx's "Operations" button
@@ -727,6 +736,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           gdprConsent: raw.gdprConsent,
           addresses: raw.addresses || [],
           dietaryPreferences: raw.dietaryPreferences,
+          entityId: raw.entityId,
+          registrationStatus: raw.registrationStatus,
+          rejectionReason: raw.rejectionReason,
         };
       });
       setCustomers(list);
@@ -754,7 +766,25 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setFsItemDocs(grouped);
     }, err => console.error('order items listener failed', err));
 
-    return () => { unsubCustomers(); unsubOrders(); unsubItems(); };
+    const unsubEntities = onSnapshot(collection(db, 'entities'), snap => {
+      const list: Entity[] = snap.docs.map(d => {
+        const raw = d.data();
+        return {
+          id: d.id,
+          name: raw.name || '',
+          brn: raw.brn || '',
+          vatNumber: raw.vatNumber || '',
+          bankReference: raw.bankReference || '',
+          logoStoragePath: raw.logoStoragePath || '',
+          active: !!raw.active,
+          createdAt: raw.createdAt,
+          updatedAt: raw.updatedAt,
+        };
+      });
+      setEntities(list);
+    }, err => console.error('entities listener failed', err));
+
+    return () => { unsubCustomers(); unsubOrders(); unsubItems(); unsubEntities(); };
   }, [staffAuthUser]);
 
   // Reshapes the two raw listeners above into Order[] -- every downstream
@@ -807,6 +837,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         timestamp: createdAtIso,
         discount: o.discount,
         discountReason: o.discountReason,
+        entityId: o.entityId || '',
+        entityName: o.entityName || '',
+        entityBrn: o.entityBrn || '',
+        entityVatNumber: o.entityVatNumber || '',
+        entityBankReference: o.entityBankReference || '',
+        entityLogoStoragePath: o.entityLogoStoragePath || '',
       } as Order;
     });
   }, [fsOrderDocs, fsItemDocs]);
@@ -1114,13 +1150,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const lines = useMemo(() => {
     const out: { order: Order; item: OrderItem }[] = [];
     orders.forEach(o => {
+      if (entityFilter !== 'all' && o.entityId !== entityFilter) return;
       o.items.forEach(item => {
         if (item.status === 'Cancelled') return;
         out.push({ order: o, item });
       });
     });
     return out;
-  }, [orders]);
+  }, [orders, entityFilter]);
 
   // --- Orders by Dish — scoped to the current week only. This tab answers
   // "what do I need to cook," not "show me every order ever placed"; without
@@ -1197,13 +1234,25 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     const map: Record<string, DropTask> = {};
     orders.forEach(o => {
       if (o.type !== 'Meal Plan') return;
+      if (entityFilter !== 'all' && o.entityId !== entityFilter) return;
       o.items.forEach(item => {
         if (item.status === 'Cancelled' || item.status === 'Completed') return;
         const date = item.deliveryDate || '';
         if (!allOrdersDateKeys.has(date)) return;  // covers both weeks
         const key = `${o.id}-${date}-${item.serviceSlot || ''}`;
         if (!map[key]) {
-          map[key] = { key, orderId: o.id, customerName: o.customerName, date, slot: item.serviceSlot, items: [], total: 0, paymentStatus: 'Paid' };
+          map[key] = {
+            key,
+            orderId: o.id,
+            customerName: o.customerName,
+            date,
+            slot: item.serviceSlot,
+            items: [],
+            total: 0,
+            paymentStatus: 'Paid',
+            entityId: o.entityId,
+            entityName: o.entityName
+          };
         }
         map[key].items.push(item);
         map[key].total += item.qty * item.price;
@@ -1211,7 +1260,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       });
     });
     return Object.values(map).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  }, [orders, allOrdersDateKeys]);
+  }, [orders, allOrdersDateKeys, entityFilter]);
 
   // Delivery List active day — follows the selected week's days
   const deliveryDaysForWeek = useMemo(() => deliveryWeekFilter === 'next' ? nextWeekDays : weekDays, [deliveryWeekFilter, weekDays, nextWeekDays]);
@@ -1240,11 +1289,23 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     const map: Record<string, DropTask> = {};
     orders.forEach(o => {
       if (o.type !== 'Meal Plan') return;
+      if (entityFilter !== 'all' && o.entityId !== entityFilter) return;
       o.items.forEach(item => {
         if (item.status === 'Cancelled') return;
         const key = `${o.id}-${item.deliveryDate || ''}-${item.serviceSlot || ''}`;
         if (!map[key]) {
-          map[key] = { key, orderId: o.id, customerName: o.customerName, date: item.deliveryDate, slot: item.serviceSlot, items: [], total: 0, paymentStatus: 'Paid' };
+          map[key] = {
+            key,
+            orderId: o.id,
+            customerName: o.customerName,
+            date: item.deliveryDate,
+            slot: item.serviceSlot,
+            items: [],
+            total: 0,
+            paymentStatus: 'Paid',
+            entityId: o.entityId,
+            entityName: o.entityName
+          };
         }
         map[key].items.push(item);
         map[key].total += item.qty * item.price;
@@ -1256,7 +1317,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       });
     });
     return Object.values(map);
-  }, [orders]);
+  }, [orders, entityFilter]);
 
   // Unpaid grouped by delivery date, oldest (most overdue) first — grouping
   // by date is what actually makes the claimed-reference feature useful: you
@@ -1283,10 +1344,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     return { collected, outstanding };
   }, [lines]);
 
+  const pendingCustomers = useMemo(() => {
+    return customers.filter(c => c.registrationStatus === 'Pending');
+  }, [customers]);
+
   const filteredCustomers = useMemo(() => {
+    let result = customers;
+    if (entityFilter !== 'all') {
+      result = result.filter(c => c.entityId === entityFilter);
+    }
     const q = customerSearch.trim().toLowerCase();
-    if (!q) return customers;
-    return customers.filter(c => 
+    if (!q) return result;
+    return result.filter(c => 
       (c.name || '').toLowerCase().includes(q) ||
       (c.tier || '').toLowerCase().includes(q) ||
       (c.phone || '').includes(q) ||
@@ -1296,7 +1365,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         (a.city || '').toLowerCase().includes(q)
       )
     );
-  }, [customers, customerSearch]);
+  }, [customers, customerSearch, entityFilter]);
 
   const getCustomer = (name: string) => customers.find(c => c.name === name);
 
@@ -4316,6 +4385,239 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     );
   }
 
+  const handleApprove = async (customerId: string) => {
+    const entId = selectedEntities[customerId] || 'entity-a';
+    try {
+      await updateDoc(doc(db, 'customers', customerId), {
+        entityId: entId,
+        registrationStatus: 'Approved',
+        rejectionReason: null,
+        updatedAt: Timestamp.now()
+      });
+      updateCustomerRecord(customerId, {
+        entityId: entId,
+        registrationStatus: 'Approved',
+        rejectionReason: undefined
+      });
+      setNotification({ type: 'success', message: 'Customer registration approved successfully.' });
+    } catch (err: any) {
+      setNotification({ type: 'error', message: `Approval failed: ${err.message}` });
+    }
+  };
+
+  const handleReject = async (customerId: string) => {
+    const reason = rejectionReasons[customerId] || '';
+    if (!reason.trim()) {
+      setNotification({ type: 'error', message: 'Please provide a rejection reason.' });
+      return;
+    }
+    try {
+      await updateDoc(doc(db, 'customers', customerId), {
+        registrationStatus: 'Rejected',
+        rejectionReason: reason.trim(),
+        updatedAt: Timestamp.now()
+      });
+      updateCustomerRecord(customerId, {
+        registrationStatus: 'Rejected',
+        rejectionReason: reason.trim()
+      });
+      setShowRejectDialog(null);
+      setNotification({ type: 'success', message: 'Customer registration rejected.' });
+    } catch (err: any) {
+      setNotification({ type: 'error', message: `Rejection failed: ${err.message}` });
+    }
+  };
+
+  const renderEntityFilterToggle = () => (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Entity:</span>
+      <div className="flex bg-slate-100 rounded-xl p-1 shrink-0">
+        {(['all', 'entity-a', 'entity-b'] as const).map(f => (
+          <button
+            key={f}
+            type="button"
+            onClick={() => setEntityFilter(f)}
+            className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+              entityFilter === f ? 'bg-primary text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'
+            }`}
+          >
+            {f === 'all' ? 'All' : f === 'entity-a' ? 'Entity A' : 'Entity B'}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderPendingRegistrationsTab = () => {
+    if (pendingCustomers.length === 0) {
+      return (
+        <div className="bg-white border border-[#E7E0D0] rounded-3xl p-8 text-center space-y-3">
+          <div className="size-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto text-slate-400">
+            <Users className="size-6" />
+          </div>
+          <h3 className="text-sm font-bold text-slate-900">No pending registrations</h3>
+          <p className="text-xs text-slate-500">All customer registrations have been reviewed and processed.</p>
+        </div>
+      );
+    }
+
+    const displayEntities = entities.length > 0 ? entities : [
+      { id: 'entity-a', name: 'PLACEHOLDER ENTITY A LTD — replace before launch', brn: 'BRN-A', vatNumber: 'VAT-A', bankReference: 'BANK-REF-A' },
+      { id: 'entity-b', name: 'PLACEHOLDER ENTITY B LTD — replace before launch', brn: 'BRN-B', vatNumber: 'VAT-B', bankReference: 'BANK-REF-B' }
+    ];
+
+    return (
+      <div className="space-y-6 animate-fade-in">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900">Pending Registrations</h2>
+          <p className="text-xs text-slate-500">Review new signups and assign their billing/trading entities.</p>
+        </div>
+
+        <div className="grid gap-6 md:grid-cols-2">
+          {pendingCustomers.map(c => {
+            const currentSelectedEntity = selectedEntities[c.id] || 'entity-a';
+            return (
+              <div key={c.id} className="bg-white border border-[#E7E0D0] rounded-3xl p-6 shadow-sm flex flex-col justify-between space-y-4">
+                <div className="space-y-4">
+                  {/* Header: Avatar + Info */}
+                  <div className="flex items-start gap-4">
+                    {c.avatar ? (
+                      <img src={c.avatar} alt={c.name} className="size-12 rounded-2xl object-cover border border-[#E7E0D0]" />
+                    ) : (
+                      <div className="size-12 bg-primary rounded-2xl flex items-center justify-center text-white font-black text-lg">
+                        {c.firstName ? c.firstName.charAt(0).toUpperCase() : 'C'}
+                      </div>
+                    )}
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-bold text-slate-900">{c.name}</h4>
+                      <p className="text-xs text-slate-500 font-mono">@{c.referenceCode || c.id.slice(0, 6)}</p>
+                    </div>
+                  </div>
+
+                  {/* Contact details */}
+                  <div className="grid grid-cols-2 gap-3 text-xs bg-[#FAF9F5] rounded-2xl p-4">
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">Email</p>
+                      <p className="text-slate-700 font-medium break-all">{c.email}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">Phone</p>
+                      <p className="text-slate-700 font-medium">{c.phone || 'None'}</p>
+                    </div>
+                  </div>
+
+                  {/* Addresses */}
+                  {c.addresses && c.addresses.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Addresses</p>
+                      <div className="space-y-2">
+                        {c.addresses.map((a: any) => (
+                          <div key={a.id} className="flex gap-2 items-start bg-[#FAF9F5]/50 border border-[#E7E0D0]/50 rounded-xl p-3 text-xs">
+                            <MapPin className="size-3.5 text-slate-400 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-bold text-slate-700">{a.label}</p>
+                              <p className="text-slate-500">{a.street}, {a.city}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Entity Selection */}
+                  <div className="space-y-2 pt-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Assign Trading Entity</label>
+                    <div className="space-y-2">
+                      {displayEntities.map(e => (
+                        <label
+                          key={e.id}
+                          className={`flex items-start gap-3 p-3 rounded-2xl border transition-all cursor-pointer ${
+                            currentSelectedEntity === e.id
+                              ? 'bg-primary/[0.02] border-primary shadow-sm'
+                              : 'bg-white border-[#E7E0D0] hover:border-slate-300'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name={`entity-${c.id}`}
+                            value={e.id}
+                            checked={currentSelectedEntity === e.id}
+                            onChange={() => setSelectedEntities(prev => ({ ...prev, [c.id]: e.id }))}
+                            className="mt-1 accent-primary cursor-pointer"
+                          />
+                          <div className="space-y-0.5 text-xs">
+                            <p className="font-bold text-slate-900">{e.name}</p>
+                            <p className="text-slate-500 text-[10px]">BRN: {e.brn} | VAT: {e.vatNumber}</p>
+                            <p className="text-slate-400 text-[10px] font-mono">Bank Ref: {e.bankReference}</p>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-3 pt-2 border-t border-slate-100">
+                  <button
+                    onClick={() => setShowRejectDialog(c.id)}
+                    className="flex-1 px-4 py-2.5 bg-error/10 hover:bg-error/15 text-error rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Reject Registration
+                  </button>
+                  <button
+                    onClick={() => handleApprove(c.id)}
+                    className="flex-1 px-4 py-2.5 bg-primary text-white hover:bg-primary/95 rounded-xl text-xs font-bold shadow-md transition-colors cursor-pointer"
+                  >
+                    Approve & Assign
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Rejection Dialog */}
+        {showRejectDialog && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+            <div className="bg-white rounded-3xl border border-[#E7E0D0] max-w-md w-full p-6 shadow-2xl space-y-4 animate-scale-up">
+              <div className="flex justify-between items-start">
+                <h3 className="text-base font-bold text-slate-900">Reject Customer Registration</h3>
+                <button onClick={() => setShowRejectDialog(null)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 cursor-pointer">
+                  <X className="size-4" />
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-xs text-slate-500">Provide a reason for rejection. This will be shown to the customer on their profile so they can correct it and resubmit.</p>
+                <textarea
+                  placeholder="e.g. Please provide a complete delivery address or correct phone number."
+                  value={rejectionReasons[showRejectDialog] || ''}
+                  onChange={(e) => setRejectionReasons(prev => ({ ...prev, [showRejectDialog]: e.target.value }))}
+                  className="w-full h-28 border border-[#E7E0D0] rounded-2xl p-3 text-xs outline-none focus:border-slate-400 bg-slate-50/50 focus:bg-white transition-colors"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  onClick={() => setShowRejectDialog(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleReject(showRejectDialog)}
+                  className="px-5 py-2 bg-error text-white hover:bg-error/95 rounded-xl text-xs font-bold shadow-md transition-colors cursor-pointer"
+                >
+                  Confirm Rejection
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="h-full w-full flex bg-[#FAF6EE] text-slate-800 font-sans overflow-hidden">
       {/* PERSISTENT LEFT SIDEBAR */}
@@ -4368,21 +4670,32 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
           {!sidebarCollapsed && <p className="px-3 text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 mt-2">Operations</p>}
           {sidebarCollapsed && <div className="h-4" />}
-          {TABS.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              title={sidebarCollapsed ? t.label : undefined}
-              className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                tab === t.id
-                  ? `text-primary bg-primary/[0.04] ${sidebarCollapsed ? '' : 'border-l-4 border-primary'} shadow-[0_4px_12px_rgba(62,125,34,0.04)]`
-                  : 'text-slate-500 hover:bg-slate-50'
-              }`}
-            >
-              <t.icon className="size-4 shrink-0" />
-              {!sidebarCollapsed && <span>{t.label}</span>}
-            </button>
-          ))}
+          {TABS.map(t => {
+            const isPendingReg = t.id === 'pendingRegistrations';
+            const count = isPendingReg ? pendingCustomers.length : 0;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                title={sidebarCollapsed ? t.label : undefined}
+                className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2.5 rounded-xl text-xs font-bold transition-all relative ${
+                  tab === t.id
+                    ? `text-primary bg-primary/[0.04] ${sidebarCollapsed ? '' : 'border-l-4 border-primary'} shadow-[0_4px_12px_rgba(62,125,34,0.04)]`
+                    : 'text-slate-500 hover:bg-slate-50'
+                }`}
+              >
+                <t.icon className="size-4 shrink-0" />
+                {!sidebarCollapsed && <span className="flex-1 text-left">{t.label}</span>}
+                {count > 0 && (
+                  <span className={`inline-flex items-center justify-center bg-error text-white font-black text-[9px] rounded-full shrink-0 ${
+                    sidebarCollapsed ? 'absolute -top-1 -right-1 size-4' : 'px-1.5 py-0.5 min-w-5 h-5'
+                  }`}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
 
           <div className="pt-4">
             {!sidebarCollapsed && <p className="px-3 text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Configuration</p>}
@@ -4537,6 +4850,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     ))}
                   </div>
                 )}
+                <div className="pt-2 border-t border-slate-100 mt-2 flex items-center justify-between">
+                  {renderEntityFilterToggle()}
+                </div>
               </div>
 
               {ordersVisibleDays.map(d => {
@@ -4729,6 +5045,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     ))}
                   </div>
                 )}
+                <div className="pt-2 border-t border-slate-100 mt-2 flex items-center justify-between">
+                  {renderEntityFilterToggle()}
+                </div>
               </div>
 
               {(() => {
@@ -4754,6 +5073,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <div className="min-w-0 flex-1 space-y-2">
                         <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="text-base font-black text-slate-900 leading-none">{drop.customerName}</h3>
+                          {drop.entityId && (
+                            <span className="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[8px] font-bold uppercase shrink-0 font-bold">
+                              {drop.entityId === 'entity-a' ? 'Entity A' : 'Entity B'}
+                            </span>
+                          )}
                           <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
                             drop.paymentStatus === 'Paid' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
                           }`}>
@@ -4898,6 +5222,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 </div>
               </div>
 
+              <div className="bg-white border border-[#E7E0D0] rounded-2xl p-4 shadow-sm flex items-center justify-between">
+                {renderEntityFilterToggle()}
+              </div>
+
               {unpaidByDate.length === 0 ? (
                 <EmptyState icon={<Wallet className="size-10" />} label="Nothing outstanding" />
               ) : (
@@ -4911,6 +5239,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             <div className="min-w-0">
                               <div className="flex items-center gap-2 mb-1">
                                 <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
+                                {drop.entityId && (
+                                  <span className="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[8px] font-bold uppercase shrink-0">
+                                    {drop.entityId === 'entity-a' ? 'Entity A' : 'Entity B'}
+                                  </span>
+                                )}
                                 {drop.slot && <span className="text-[10px] font-bold text-slate-400">{drop.slot}</span>}
                               </div>
                               <div className="space-y-1.5 pt-1">
@@ -5005,7 +5338,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           {tab === 'customers' && (
             <div className="space-y-6">
               {/* CRM Search input */}
-              <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex flex-col sm:flex-row gap-4 justify-between items-center">
+              <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex flex-col md:flex-row gap-4 justify-between items-center">
                 <div className="relative w-full sm:max-w-md">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-slate-400" />
                   <input
@@ -5016,7 +5349,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
                   />
                 </div>
-                <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">{filteredCustomers.length} Customer{filteredCustomers.length !== 1 ? 's' : ''}</p>
+                <div className="flex flex-wrap items-center gap-4">
+                  {renderEntityFilterToggle()}
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-widest shrink-0">{filteredCustomers.length} Customer{filteredCustomers.length !== 1 ? 's' : ''}</p>
+                </div>
               </div>
 
               {filteredCustomers.length === 0 ? (
@@ -5035,6 +5371,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           <th className="px-6 py-4 text-right">Points</th>
                           <th className="px-6 py-4 text-right">Credit</th>
                           <th className="px-6 py-4 text-right">LTV</th>
+                          <th className="px-6 py-4">Entity</th>
                           <th className="px-6 py-4 text-center">Actions</th>
                         </tr>
                       </thead>
@@ -5056,7 +5393,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 <div className="flex items-center gap-3">
                                   <img src={c.avatar || `https://picsum.photos/seed/${c.id}/100/100`} alt={c.name} className="size-10 rounded-full border border-slate-100 object-cover shrink-0" />
                                   <div className="min-w-0">
-                                    <p className="font-bold text-slate-900 truncate leading-snug">{c.name}</p>
+                                    <div className="flex items-center gap-2">
+                                      <p className="font-bold text-slate-900 truncate leading-snug">{c.name}</p>
+                                      {c.registrationStatus && c.registrationStatus !== 'Approved' && (
+                                        <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${
+                                          c.registrationStatus === 'Pending'
+                                            ? 'bg-warning/10 text-warning border border-warning/15'
+                                            : 'bg-error/10 text-error border border-error/15'
+                                        }`}>
+                                          {c.registrationStatus}
+                                        </span>
+                                      )}
+                                    </div>
                                     <p className="text-[10px] text-slate-400 font-medium">@{c.referenceCode ? c.referenceCode.toLowerCase() : 'no_username'}</p>
                                   </div>
                                 </div>
@@ -5094,6 +5442,42 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 {formatCurrency(c.ltv || 0)}
                               </td>
                               <td className="px-6 py-4">
+                                <div className="flex items-center gap-1.5">
+                                  {c.entityId ? (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[9px] font-bold uppercase shrink-0">
+                                      {c.entityId === 'entity-a' ? 'Entity A' : 'Entity B'}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 text-[10px]">Unassigned</span>
+                                  )}
+                                  {(!c.registrationStatus || c.registrationStatus === 'Approved') && (
+                                    <select
+                                      value={c.entityId || ''}
+                                      onChange={async (e) => {
+                                        const newEnt = e.target.value;
+                                        if (!newEnt) return;
+                                        try {
+                                          await updateDoc(doc(db, 'customers', c.id), {
+                                            entityId: newEnt,
+                                            updatedAt: Timestamp.now()
+                                          });
+                                          updateCustomerRecord(c.id, { entityId: newEnt });
+                                          setNotification({ type: 'success', message: `Customer entity reassigned to ${newEnt === 'entity-a' ? 'Entity A' : 'Entity B'}.` });
+                                        } catch (err: any) {
+                                          setNotification({ type: 'error', message: `Reassignment failed: ${err.message}` });
+                                        }
+                                      }}
+                                      className="p-1 text-[10px] rounded border border-slate-200 bg-white text-slate-600 outline-none focus:border-slate-400 cursor-pointer"
+                                      title="Change assigned entity"
+                                    >
+                                      <option value="" disabled>Change...</option>
+                                      <option value="entity-a">Entity A</option>
+                                      <option value="entity-b">Entity B</option>
+                                    </select>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-6 py-4">
                                 <div className="flex items-center justify-center">
                                   <button
                                     onClick={() => openEditCustomer(c)}
@@ -5115,6 +5499,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </div>
           )}
 
+          {tab === 'pendingRegistrations' && renderPendingRegistrationsTab()}
           {tab === 'transactions' && renderTransactionsTab()}
           {tab === 'settings' && renderSettingsTab()}
         </div>
