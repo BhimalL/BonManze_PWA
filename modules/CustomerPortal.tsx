@@ -37,7 +37,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc, collection, collectionGroup, query, where, onSnapshot, writeBatch, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, collectionGroup, query, where, onSnapshot, writeBatch, updateDoc, Timestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from '../firebaseClient';
 import { Customer, Order, OrderItem, PaymentMethod } from '../types';
@@ -519,6 +519,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [regFirstName, setRegFirstName] = useState('');
   const [regLastName, setRegLastName] = useState('');
   const [regPhone, setRegPhone] = useState('');
+  const [resubmitPhone, setResubmitPhone] = useState('');
+  const [resubmitStreet, setResubmitStreet] = useState('');
+  const [resubmitCity, setResubmitCity] = useState('');
+  const [resubmitLoading, setResubmitLoading] = useState(false);
+  const [resubmitError, setResubmitError] = useState<string | null>(null);
 
   // --- Real order history (replaces nothing — supplements the existing
   // mock `orders`/myOrders below). A real checkout (see handleCheckout)
@@ -713,8 +718,18 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       gdprConsent: customerDocRaw.gdprConsent,
       addresses: customerDocRaw.addresses || [],
       dietaryPreferences: customerDocRaw.dietaryPreferences,
+      registrationStatus: customerDocRaw.registrationStatus,
+      rejectionReason: customerDocRaw.rejectionReason,
     });
   }, [customerDocRaw, loyaltyTiers, customerGroups]);
+
+  useEffect(() => {
+    if (currentUser && currentUser.registrationStatus === 'Rejected') {
+      setResubmitPhone(currentUser.phone || '');
+      setResubmitStreet(currentUser.addresses?.[0]?.street || '');
+      setResubmitCity(currentUser.addresses?.[0]?.city || '');
+    }
+  }, [currentUser]);
 
   // Live listeners for this customer's REAL Firestore orders — separate
   // from the mock `subscribeToOrders` above, which only ever reflects the
@@ -1808,6 +1823,166 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               </form>
             )}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  const handleResubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    if (!resubmitPhone.trim() || !resubmitStreet.trim() || !resubmitCity.trim()) {
+      setResubmitError('Please fill in all fields.');
+      return;
+    }
+    setResubmitLoading(true);
+    setResubmitError(null);
+    try {
+      const updatedAddresses = [
+        {
+          id: 'default',
+          label: 'Home',
+          street: resubmitStreet.trim(),
+          city: resubmitCity.trim(),
+          zip: '',
+          country: 'Mauritius'
+        }
+      ];
+      await updateDoc(doc(db, 'customers', currentUser.id), {
+        phone: resubmitPhone.trim(),
+        addresses: updatedAddresses,
+        registrationStatus: 'Pending',
+        rejectionReason: null,
+        updatedAt: Timestamp.now()
+      });
+      setCustomerDocRaw(prev => prev ? {
+        ...prev,
+        phone: resubmitPhone.trim(),
+        addresses: updatedAddresses,
+        registrationStatus: 'Pending',
+        rejectionReason: null
+      } : null);
+    } catch (err: any) {
+      setResubmitError(`Resubmission failed: ${err.message}`);
+    } finally {
+      setResubmitLoading(false);
+    }
+  };
+
+  if (currentUser && currentUser.registrationStatus === 'Pending') {
+    return (
+      <div className="h-full w-full bg-[#FDFAF4] flex flex-col items-center justify-center p-6 text-center space-y-6">
+        <div className="max-w-md w-full bg-white border border-[#E7E0D0] rounded-3xl p-8 shadow-sm space-y-6">
+          <div className="size-16 bg-warning/10 text-warning rounded-full flex items-center justify-center mx-auto">
+            <Loader2 className="size-8 animate-spin" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl font-bold text-slate-900">Awaiting Approval</h2>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Your account is currently pending review by our operations team. You will be able to place orders as soon as your account is approved.
+            </p>
+          </div>
+          <div className="bg-[#FAF9F5] rounded-2xl p-4 text-left text-xs space-y-2.5">
+            <p className="font-bold text-slate-700">Registration Details:</p>
+            <p className="text-slate-500"><strong className="text-slate-700 font-bold">Name:</strong> {currentUser.name}</p>
+            <p className="text-slate-500"><strong className="text-slate-700 font-bold">Email:</strong> {currentUser.email}</p>
+            <p className="text-slate-500"><strong className="text-slate-700 font-bold">Phone:</strong> {currentUser.phone || 'Not provided'}</p>
+            {currentUser.addresses && currentUser.addresses.length > 0 && (
+              <div>
+                <strong className="text-slate-700 font-bold">Delivery Address:</strong>
+                <p className="text-slate-500 pl-2 mt-0.5">{currentUser.addresses[0].street}, {currentUser.addresses[0].city}</p>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={async () => {
+              await signOut(auth);
+            }}
+            className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentUser && currentUser.registrationStatus === 'Rejected') {
+    return (
+      <div className="h-full w-full bg-[#FDFAF4] flex flex-col items-center justify-center p-6 overflow-y-auto">
+        <div className="max-w-md w-full bg-white border border-[#E7E0D0] rounded-3xl p-8 shadow-sm space-y-6">
+          <div className="size-12 bg-error/10 text-error rounded-full flex items-center justify-center mx-auto">
+            <AlertCircle className="size-6" />
+          </div>
+          <div className="text-center space-y-2">
+            <h2 className="text-xl font-bold text-slate-900">Registration Rejected</h2>
+            <p className="text-xs text-slate-500">Your registration could not be approved for the following reason:</p>
+          </div>
+
+          <div className="bg-error/[0.03] border border-error/10 rounded-2xl p-4 text-xs font-medium text-error leading-relaxed">
+            <p className="font-bold uppercase tracking-wider text-[10px] text-error/70 mb-1">Reason from Operations</p>
+            {currentUser.rejectionReason || 'No reason provided.'}
+          </div>
+
+          <form onSubmit={handleResubmit} className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">Phone Number</label>
+              <input
+                type="tel"
+                value={resubmitPhone}
+                onChange={e => setResubmitPhone(e.target.value)}
+                placeholder="+230 ..."
+                required
+                className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-xs font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">Street Address</label>
+              <input
+                type="text"
+                value={resubmitStreet}
+                onChange={e => setResubmitStreet(e.target.value)}
+                placeholder="e.g. 12 Rue de la Source"
+                required
+                className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-xs font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">City / Town</label>
+              <input
+                type="text"
+                value={resubmitCity}
+                onChange={e => setResubmitCity(e.target.value)}
+                placeholder="e.g. Port Louis"
+                required
+                className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-xs font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+              />
+            </div>
+
+            {resubmitError && (
+              <p className="text-xs font-bold text-rose-600 flex items-center gap-1.5 animate-pulse">
+                <AlertCircle className="size-3.5 shrink-0" /> {resubmitError}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={resubmitLoading}
+              className="w-full py-3.5 rounded-xl bg-primary hover:bg-primary/95 text-white text-xs font-black uppercase shadow-lg shadow-primary/20 disabled:opacity-40 flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              {resubmitLoading && <Loader2 className="size-4 animate-spin" />}
+              Resubmit Registration
+            </button>
+          </form>
+
+          <button
+            onClick={async () => {
+              await signOut(auth);
+            }}
+            className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+          >
+            Sign Out
+          </button>
         </div>
       </div>
     );
