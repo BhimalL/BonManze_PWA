@@ -619,6 +619,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [editCustGroup, setEditCustGroup] = useState('');
   const [editCustStreet, setEditCustStreet] = useState('');
   const [editCustCity, setEditCustCity] = useState('');
+  const [editCustEntityId, setEditCustEntityId] = useState('');
   const [confirmPaymentId, setConfirmPaymentId] = useState<string | null>(null);
   // Settings → Danger Zone — same arm-then-confirm pattern as payment
   // collection above, since this is destructive and, unlike everything
@@ -1020,6 +1021,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setEditCustBirthday(c.birthday || '');
     setEditCustPhone(c.phone || '');
     setEditCustTier(c.tier || 'Bronze');
+    setEditCustEntityId(c.entityId || '');
     const matchedGroup = customerGroups.find(g => g.id === c.group || g.name === c.group);
     setEditCustGroup(matchedGroup ? matchedGroup.id : '');
     const primaryAddr = c.addresses?.[0];
@@ -1067,6 +1069,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         phone: editCustPhone.trim(),
         tier: editCustTier,
         group,
+        entityId: editCustEntityId || null,
         addresses: updatedAddresses,
       });
 
@@ -1079,6 +1082,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         phone: editCustPhone.trim(),
         tier: editCustTier,
         group: customerGroups.find(g => g.id === editCustGroup)?.name || '',
+        entityId: editCustEntityId || undefined,
         addresses: updatedAddresses,
       });
 
@@ -4578,41 +4582,43 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
         {/* Rejection Dialog */}
         {showRejectDialog && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-            <div className="bg-white rounded-3xl border border-[#E7E0D0] max-w-md w-full p-6 shadow-2xl space-y-4 animate-scale-up">
-              <div className="flex justify-between items-start">
-                <h3 className="text-base font-bold text-slate-900">Reject Customer Registration</h3>
-                <button onClick={() => setShowRejectDialog(null)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 cursor-pointer">
-                  <X className="size-4" />
-                </button>
-              </div>
+          <Portal>
+            <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4 z-[9999] animate-fade-in">
+              <div className="bg-white rounded-3xl border border-[#E7E0D0] max-w-md w-full p-6 shadow-2xl space-y-4 animate-scale-up">
+                <div className="flex justify-between items-start">
+                  <h3 className="text-base font-bold text-slate-900">Reject Customer Registration</h3>
+                  <button onClick={() => setShowRejectDialog(null)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 cursor-pointer">
+                    <X className="size-4" />
+                  </button>
+                </div>
 
-              <div className="space-y-3">
-                <p className="text-xs text-slate-500">Provide a reason for rejection. This will be shown to the customer on their profile so they can correct it and resubmit.</p>
-                <textarea
-                  placeholder="e.g. Please provide a complete delivery address or correct phone number."
-                  value={rejectionReasons[showRejectDialog] || ''}
-                  onChange={(e) => setRejectionReasons(prev => ({ ...prev, [showRejectDialog]: e.target.value }))}
-                  className="w-full h-28 border border-[#E7E0D0] rounded-2xl p-3 text-xs outline-none focus:border-slate-400 bg-slate-50/50 focus:bg-white transition-colors"
-                />
-              </div>
+                <div className="space-y-3">
+                  <p className="text-xs text-slate-500">Provide a reason for rejection. This will be shown to the customer on their profile so they can correct it and resubmit.</p>
+                  <textarea
+                    placeholder="e.g. Please provide a complete delivery address or correct phone number."
+                    value={rejectionReasons[showRejectDialog] || ''}
+                    onChange={(e) => setRejectionReasons(prev => ({ ...prev, [showRejectDialog]: e.target.value }))}
+                    className="w-full h-28 border border-[#E7E0D0] rounded-2xl p-3 text-xs outline-none focus:border-slate-400 bg-slate-50/50 focus:bg-white transition-colors"
+                  />
+                </div>
 
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  onClick={() => setShowRejectDialog(null)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => handleReject(showRejectDialog)}
-                  className="px-5 py-2 bg-error text-white hover:bg-error/95 rounded-xl text-xs font-bold shadow-md transition-colors cursor-pointer"
-                >
-                  Confirm Rejection
-                </button>
+                <div className="flex justify-end gap-3 pt-2">
+                  <button
+                    onClick={() => setShowRejectDialog(null)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleReject(showRejectDialog)}
+                    className="px-5 py-2 bg-red-600 text-white hover:bg-red-700 rounded-xl text-xs font-bold shadow-md transition-colors cursor-pointer"
+                  >
+                    Confirm Rejection
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
+          </Portal>
         )}
       </div>
     );
@@ -5450,31 +5456,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                   ) : (
                                     <span className="text-slate-400 text-[10px]">Unassigned</span>
                                   )}
-                                  {(!c.registrationStatus || c.registrationStatus === 'Approved') && (
-                                    <select
-                                      value={c.entityId || ''}
-                                      onChange={async (e) => {
-                                        const newEnt = e.target.value;
-                                        if (!newEnt) return;
-                                        try {
-                                          await updateDoc(doc(db, 'customers', c.id), {
-                                            entityId: newEnt,
-                                            updatedAt: Timestamp.now()
-                                          });
-                                          updateCustomerRecord(c.id, { entityId: newEnt });
-                                          setNotification({ type: 'success', message: `Customer entity reassigned to ${newEnt === 'entity-a' ? 'Entity A' : 'Entity B'}.` });
-                                        } catch (err: any) {
-                                          setNotification({ type: 'error', message: `Reassignment failed: ${err.message}` });
-                                        }
-                                      }}
-                                      className="p-1 text-[10px] rounded border border-slate-200 bg-white text-slate-600 outline-none focus:border-slate-400 cursor-pointer"
-                                      title="Change assigned entity"
-                                    >
-                                      <option value="" disabled>Change...</option>
-                                      <option value="entity-a">Entity A</option>
-                                      <option value="entity-b">Entity B</option>
-                                    </select>
-                                  )}
                                 </div>
                               </td>
                               <td className="px-6 py-4">
@@ -5717,7 +5698,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           <select
                             value={editCustTier}
                             onChange={e => setEditCustTier(e.target.value)}
-                            className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                            className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all cursor-pointer"
                           >
                             {loyaltyTiers.map(t => (
                               <option key={t.id} value={t.name}>{t.name}</option>
@@ -5730,7 +5711,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           <select
                             value={editCustGroup}
                             onChange={e => setEditCustGroup(e.target.value)}
-                            className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                            className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all cursor-pointer"
                           >
                             <option value="">None (Regular Customer)</option>
                             {customerGroups.map(g => (
@@ -5738,6 +5719,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             ))}
                           </select>
                         </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Assigned Trading Entity</label>
+                        <select
+                          value={editCustEntityId}
+                          onChange={e => setEditCustEntityId(e.target.value)}
+                          className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all cursor-pointer"
+                        >
+                          <option value="">Unassigned</option>
+                          <option value="entity-a">Entity A (PLACEHOLDER ENTITY A LTD)</option>
+                          <option value="entity-b">Entity B (PLACEHOLDER ENTITY B LTD)</option>
+                        </select>
                       </div>
                     </div>
 

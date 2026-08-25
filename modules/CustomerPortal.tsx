@@ -519,6 +519,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [regFirstName, setRegFirstName] = useState('');
   const [regLastName, setRegLastName] = useState('');
   const [regPhone, setRegPhone] = useState('');
+  const [resubmitFirstName, setResubmitFirstName] = useState('');
+  const [resubmitLastName, setResubmitLastName] = useState('');
+  const [resubmitEmail, setResubmitEmail] = useState('');
   const [resubmitPhone, setResubmitPhone] = useState('');
   const [resubmitStreet, setResubmitStreet] = useState('');
   const [resubmitCity, setResubmitCity] = useState('');
@@ -725,6 +728,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
   useEffect(() => {
     if (currentUser && currentUser.registrationStatus === 'Rejected') {
+      setResubmitFirstName(currentUser.firstName || '');
+      setResubmitLastName(currentUser.lastName || '');
+      setResubmitEmail(currentUser.email || '');
       setResubmitPhone(currentUser.phone || '');
       setResubmitStreet(currentUser.addresses?.[0]?.street || '');
       setResubmitCity(currentUser.addresses?.[0]?.city || '');
@@ -1837,7 +1843,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const handleResubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
-    if (!resubmitPhone.trim() || !resubmitStreet.trim() || !resubmitCity.trim()) {
+    if (!resubmitFirstName.trim() || !resubmitLastName.trim() || !resubmitEmail.trim() || !resubmitPhone.trim() || !resubmitStreet.trim() || !resubmitCity.trim()) {
       setResubmitError('Please fill in all fields.');
       return;
     }
@@ -1854,7 +1860,16 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           country: 'Mauritius'
         }
       ];
+      const firstName = resubmitFirstName.trim();
+      const lastName = resubmitLastName.trim();
+      const name = `${firstName} ${lastName}`.trim();
+      const email = resubmitEmail.trim();
+
       await updateDoc(doc(db, 'customers', currentUser.id), {
+        firstName,
+        lastName,
+        name,
+        email,
         phone: resubmitPhone.trim(),
         addresses: updatedAddresses,
         registrationStatus: 'Pending',
@@ -1863,6 +1878,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       });
       setCustomerDocRaw(prev => prev ? {
         ...prev,
+        firstName,
+        lastName,
+        name,
+        email,
         phone: resubmitPhone.trim(),
         addresses: updatedAddresses,
         registrationStatus: 'Pending',
@@ -1931,6 +1950,43 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           </div>
 
           <form onSubmit={handleResubmit} className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">First Name</label>
+                <input
+                  type="text"
+                  value={resubmitFirstName}
+                  onChange={e => setResubmitFirstName(e.target.value)}
+                  placeholder="First Name"
+                  required
+                  className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-xs font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">Last Name</label>
+                <input
+                  type="text"
+                  value={resubmitLastName}
+                  onChange={e => setResubmitLastName(e.target.value)}
+                  placeholder="Last Name"
+                  required
+                  className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-xs font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">Email Address</label>
+              <input
+                type="email"
+                value={resubmitEmail}
+                onChange={e => setResubmitEmail(e.target.value)}
+                placeholder="name@example.com"
+                required
+                className="w-full px-4 py-3 rounded-xl border border-[#E7E0D0] text-xs font-medium outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+              />
+            </div>
+
             <div className="space-y-1">
               <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">Phone Number</label>
               <input
