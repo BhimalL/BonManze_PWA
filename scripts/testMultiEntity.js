@@ -9,7 +9,7 @@
 
 import { initializeApp } from 'firebase/app';
 import { getAuth, connectAuthEmulator, signInWithEmailAndPassword } from 'firebase/auth';
-import { getFirestore, connectFirestoreEmulator, doc, updateDoc } from 'firebase/firestore';
+import { getFirestore, connectFirestoreEmulator, doc, updateDoc, Timestamp } from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'firebase/functions';
 
 import { initializeApp as adminInitializeApp } from 'firebase-admin/app';
@@ -135,6 +135,47 @@ async function main() {
     check('order entityId stays entity-a (not changed to entity-b)', orderDataAfterReassign.entityId === 'entity-a');
     check('order entityBrn stays PLACEHOLDER-BRN-A', orderDataAfterReassign.entityBrn === 'PLACEHOLDER-BRN-A');
     check('order entityName stays PLACEHOLDER ENTITY A LTD', orderDataAfterReassign.entityName === 'PLACEHOLDER ENTITY A LTD — replace before launch');
+  }
+
+  console.log('\n[5] Verify staff customer edit rules (manageCustomers + manageRegistrations split write) —');
+  // Sign in as Owner staff member: bhimalonly@gmail.com / ChangeMe123!
+  try {
+    await signInWithEmailAndPassword(auth, 'bhimalonly@gmail.com', 'ChangeMe123!');
+    check('staff sign-in succeeds', true);
+  } catch (err) {
+    check('staff sign-in succeeds', false, err.message);
+  }
+
+  const clientDocRef = doc(db, 'customers', uid);
+
+  // A. Combined write (profile + entityId together) must fail under rules
+  try {
+    await updateDoc(clientDocRef, {
+      phone: '58888888',
+      entityId: 'entity-a'
+    });
+    check('combined update (profile + entityId) is blocked by rules', false, 'Expected combined update to fail');
+  } catch (err) {
+    const isPermissionDenied = err.code === 'permission-denied';
+    check('combined update (profile + entityId) is blocked by rules', isPermissionDenied, err.message);
+  }
+
+  // B. Split writes (profile-only, then entityId-only) must succeed
+  try {
+    // Write 1: Profile update
+    await updateDoc(clientDocRef, {
+      phone: '58888888'
+    });
+    check('profile-only update succeeds for staff', true);
+
+    // Write 2: Entity update under manageRegistrations subset
+    await updateDoc(clientDocRef, {
+      entityId: 'entity-a',
+      updatedAt: Timestamp.now()
+    });
+    check('entityId-only update succeeds for staff', true);
+  } catch (err) {
+    check('split updates succeed for staff', false, err.message);
   }
 
   // Restore Eleanor's default approved/entity-a state for other scripts

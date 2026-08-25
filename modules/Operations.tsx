@@ -1060,6 +1060,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       const birthday = editCustBirthday.trim();
       const group = editCustGroup;
 
+      const hasEntityChanged = (editCustEntityId || null) !== (editCustomer.entityId || null);
+
+      // 1. Update general customer profile info
       await updateDoc(docRef, {
         firstName,
         lastName,
@@ -1069,9 +1072,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         phone: editCustPhone.trim(),
         tier: editCustTier,
         group,
-        entityId: editCustEntityId || null,
         addresses: updatedAddresses,
       });
+
+      // 2. Update entity assignment separately if it has changed to comply with security rules
+      if (hasEntityChanged) {
+        await updateDoc(docRef, {
+          entityId: editCustEntityId || null,
+          updatedAt: Timestamp.now()
+        });
+      }
 
       updateCustomerRecord(editCustomer.id, {
         firstName,
