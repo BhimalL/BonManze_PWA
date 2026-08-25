@@ -4403,16 +4403,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         registrationStatus: 'Approved',
         rejectionReason: undefined
       });
-      setNotification({ type: 'success', message: 'Customer registration approved successfully.' });
+      setNotification({ type: 'success', title: 'Registration Approved', message: 'Customer registration approved successfully.' });
     } catch (err: any) {
-      setNotification({ type: 'error', message: `Approval failed: ${err.message}` });
+      setNotification({ type: 'error', title: 'Approval Failed', message: `Approval failed: ${err.message}` });
     }
   };
 
   const handleReject = async (customerId: string) => {
     const reason = rejectionReasons[customerId] || '';
     if (!reason.trim()) {
-      setNotification({ type: 'error', message: 'Please provide a rejection reason.' });
+      setNotification({ type: 'error', title: 'Input Required', message: 'Please provide a rejection reason.' });
       return;
     }
     try {
@@ -4426,9 +4426,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         rejectionReason: reason.trim()
       });
       setShowRejectDialog(null);
-      setNotification({ type: 'success', message: 'Customer registration rejected.' });
+      setNotification({ type: 'error', title: 'Registration Rejected', message: 'Customer registration has been rejected.' });
     } catch (err: any) {
-      setNotification({ type: 'error', message: `Rejection failed: ${err.message}` });
+      setNotification({ type: 'error', title: 'Rejection Failed', message: `Rejection failed: ${err.message}` });
     }
   };
 
@@ -4529,34 +4529,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   )}
 
                   {/* Entity Selection */}
-                  <div className="space-y-2 pt-2">
+                  <div className="space-y-1.5 pt-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Assign Trading Entity</label>
-                    <div className="space-y-2">
+                    <select
+                      value={currentSelectedEntity}
+                      onChange={(e) => setSelectedEntities(prev => ({ ...prev, [c.id]: e.target.value }))}
+                      className="w-full text-xs font-bold px-3 py-2.5 rounded-xl border border-[#E7E0D0] outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all cursor-pointer"
+                    >
                       {displayEntities.map(e => (
-                        <label
-                          key={e.id}
-                          className={`flex items-start gap-3 p-3 rounded-2xl border transition-all cursor-pointer ${
-                            currentSelectedEntity === e.id
-                              ? 'bg-primary/[0.02] border-primary shadow-sm'
-                              : 'bg-white border-[#E7E0D0] hover:border-slate-300'
-                          }`}
-                        >
-                          <input
-                            type="radio"
-                            name={`entity-${c.id}`}
-                            value={e.id}
-                            checked={currentSelectedEntity === e.id}
-                            onChange={() => setSelectedEntities(prev => ({ ...prev, [c.id]: e.id }))}
-                            className="mt-1 accent-primary cursor-pointer"
-                          />
-                          <div className="space-y-0.5 text-xs">
-                            <p className="font-bold text-slate-900">{e.name}</p>
-                            <p className="text-slate-500 text-[10px]">BRN: {e.brn} | VAT: {e.vatNumber}</p>
-                            <p className="text-slate-400 text-[10px] font-mono">Bank Ref: {e.bankReference}</p>
-                          </div>
-                        </label>
+                        <option key={e.id} value={e.id}>
+                          {e.name} (BRN: {e.brn})
+                        </option>
                       ))}
-                    </div>
+                    </select>
                   </div>
                 </div>
 
@@ -4564,7 +4549,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 <div className="flex gap-3 pt-2 border-t border-slate-100">
                   <button
                     onClick={() => setShowRejectDialog(c.id)}
-                    className="flex-1 px-4 py-2.5 bg-error/10 hover:bg-error/15 text-error rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                    className="flex-1 px-4 py-2.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-100/50 rounded-xl text-xs font-bold transition-colors cursor-pointer"
                   >
                     Reject Registration
                   </button>
@@ -4687,13 +4672,15 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2.5 rounded-xl text-xs font-bold transition-all relative ${
                   tab === t.id
                     ? `text-primary bg-primary/[0.04] ${sidebarCollapsed ? '' : 'border-l-4 border-primary'} shadow-[0_4px_12px_rgba(62,125,34,0.04)]`
-                    : 'text-slate-500 hover:bg-slate-50'
+                    : isPendingReg && count > 0
+                      ? 'text-red-600 bg-red-50/80 border border-red-200/60 shadow-[0_0_15px_rgba(220,38,38,0.2)] animate-pulse hover:bg-red-100 hover:text-red-700'
+                      : 'text-slate-500 hover:bg-slate-50'
                 }`}
               >
                 <t.icon className="size-4 shrink-0" />
                 {!sidebarCollapsed && <span className="flex-1 text-left">{t.label}</span>}
                 {count > 0 && (
-                  <span className={`inline-flex items-center justify-center bg-error text-white font-black text-[9px] rounded-full shrink-0 ${
+                  <span className={`inline-flex items-center justify-center bg-red-600 text-white font-black text-[9px] rounded-full shrink-0 shadow-[0_0_8px_rgba(220,38,38,0.4)] ${
                     sidebarCollapsed ? 'absolute -top-1 -right-1 size-4' : 'px-1.5 py-0.5 min-w-5 h-5'
                   }`}>
                     {count}
@@ -5404,8 +5391,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                       {c.registrationStatus && c.registrationStatus !== 'Approved' && (
                                         <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${
                                           c.registrationStatus === 'Pending'
-                                            ? 'bg-warning/10 text-warning border border-warning/15'
-                                            : 'bg-error/10 text-error border border-error/15'
+                                            ? 'bg-amber-50 text-amber-700 border border-amber-150'
+                                            : 'bg-red-50 text-red-600 border border-red-100/50'
                                         }`}>
                                           {c.registrationStatus}
                                         </span>

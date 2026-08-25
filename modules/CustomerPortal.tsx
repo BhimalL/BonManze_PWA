@@ -1936,7 +1936,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return (
       <div className="h-full w-full bg-[#FDFAF4] flex flex-col items-center justify-center p-6 overflow-y-auto">
         <div className="max-w-md w-full bg-white border border-[#E7E0D0] rounded-3xl p-8 shadow-sm space-y-6">
-          <div className="size-12 bg-error/10 text-error rounded-full flex items-center justify-center mx-auto">
+          <div className="size-12 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto">
             <AlertCircle className="size-6" />
           </div>
           <div className="text-center space-y-2">
@@ -1944,8 +1944,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
             <p className="text-xs text-slate-500">Your registration could not be approved for the following reason:</p>
           </div>
 
-          <div className="bg-error/[0.03] border border-error/10 rounded-2xl p-4 text-xs font-medium text-error leading-relaxed">
-            <p className="font-bold uppercase tracking-wider text-[10px] text-error/70 mb-1">Reason from Operations</p>
+          <div className="bg-red-50/30 border border-red-100/80 rounded-2xl p-4 text-xs font-medium text-red-700 leading-relaxed">
+            <p className="font-bold uppercase tracking-wider text-[10px] text-red-600 mb-1">Reason from Operations</p>
             {currentUser.rejectionReason || 'No reason provided.'}
           </div>
 
