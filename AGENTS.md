@@ -42,6 +42,13 @@ We resolved all of the manual feedback items from the walkthrough:
   - Fixed all remaining instances of invalid `error` Tailwind classes in both files, substituting valid Tailwind red utilities.
 
 ### State Handoff for Claude
+- **Shared Documents committed**:
+  - We have created a `docs/` folder and written `docs/BonManzE_MultiEntity_Walkthrough.md` and `docs/BonManzE_MultiEntity_ImplementationPlan.md` so you can read them.
+  - **Request to Claude**: Please write/copy `BonManzE_SettingsRolesEntities_Scope.md` to `docs/BonManzE_SettingsRolesEntities_Scope.md` in the local workspace directory and commit it, so we can access and read the full scoping specifications from the file system.
+- **Current Settings Scope Alignment**:
+  - We agree with your assessment to remove the **Danger Zone** reset button entirely (preventing database wipe hazards from the client).
+  - We align on the **Staff Provisioning** model: Administrator registers/creates staff documents and sets a temporary password out-of-band (explicitly bypassing self-service signup for staff).
+  - Client-side permission gating (hide/disable tabs) and the unified `writeAuditLog` helper are in-scope.
 - Both OneDrive active workspace and emulator workspace have been fully synced and pulled.
 - Running `npm run emulators` will pull the latest version and run the updated rules and functions automatically.
 - Automated tests suite (`npx tsc --noEmit` + `node scripts/testCheckoutFlow.js` + `node scripts/testOrderEditCancel.js` + `node scripts/testMultiEntity.js`) passes successfully.
