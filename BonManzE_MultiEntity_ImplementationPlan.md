@@ -1,7 +1,7 @@
 # Multi-Tier Trading Entity System — Implementation Plan (v2, finalized after Antigravity's technical review)
 
 **Date:** 2026-08-25
-**Status:** Design finalized. No schema, `firestore.rules`, or Cloud Function changes exist for this feature yet — this is still the plan to build from, not a record of what's built. Every open design question has now been debated and settled (see §12).
+**Status:** Design finalized, zero remaining blockers to starting the build. No schema, `firestore.rules`, or Cloud Function changes exist for this feature yet — this is still the plan to build from, not a record of what's built. Every open design question has been debated and settled (§12), production grandfathering is decided (§2), and entity seed data has real placeholder values to build against (§3, swap for real legal details before go-live).
 **Grounded in:** the scoping conversation recorded in `BonManzE_v1_scope.md`'s "Multi-Tier Trading Entity System" section (all five of Antigravity's original questions — entity definition, order-to-entity mapping, billing/invoicing, support routing, operator console UX — have real answers from Bhimal), and the existing `BonManzE_Firestore_Schema.md` design this extends.
 
 ---
@@ -15,7 +15,8 @@ Bhimal runs two real, currently-operating legal entities (not a future/anticipat
 - **Entities are a legal/tax construct only.** No customer-facing branding difference in the app itself, no multi-tenant behavior, same menu/ordering flow for everyone.
 - **Two entities exist today.** Not a speculative feature for a future product line — real, current legal businesses.
 - **Assignment happens at staff approval of a new registration**, and can be changed by staff later if needed — not automatically, not derived from order content, not customer-selectable either way.
-- **Existing seed customers stay unassigned on the emulator deliberately**, to be run through the real approval flow as the test path. Production grandfathering (existing real customers, once this points at a real Firebase project) is an explicitly separate, later decision — not covered by this plan.
+- **Existing seed customers stay unassigned on the emulator deliberately**, to be run through the real approval flow as the test path.
+- **Production grandfathering — decided 2026-08-25:** once BonManzE points at a real Firebase project, Bhimal personally reviews and assigns an entity to each existing/pre-launch real customer, using the same Pending Registrations approval screen built for new signups — not a separate bulk-approve script or Cloud Function. No special migration logic needed; the ordinary approval flow *is* the grandfathering mechanism.
 - **Rejection is a state on the account, not a deletion.** Staff-entered reason, customer can edit and resubmit.
 - **Notifications are in-app-only** (a badge/counter on a new Operations tab, live via `onSnapshot`) — no email/push.
 - **Invoices differ by entity in: legal name, BRN/VAT number, bank/payment reference, and branding (logo).** Tax math itself is identical everywhere — VAT rate/rules don't vary by entity, only the printed registration number does.
@@ -25,9 +26,20 @@ Bhimal runs two real, currently-operating legal entities (not a future/anticipat
 - **A customer's entity assignment is not permanent** — staff can correct/change it later.
 - **Real future staff differentiation is coming** — Bhimal confirmed the plan is admin / kitchen / delivery roles, not just himself forever. This directly shaped the permission-key decision in §6.
 
-## 3. Still missing before this can be built (blocking, not this plan's job to answer)
+## 3. Entity seed data — placeholder, 2026-08-25
 
-- The two entities' real legal names, BRN/VAT registration numbers, bank/payment references, and logo/branding assets. The schema below has a placeholder shape; it can't be seeded with real data until Bhimal provides this.
+Nothing is blocking anymore. Bhimal provided placeholder values so build work isn't gated on the real legal/business details, on the explicit understanding these get swapped for the real ones before production go-live — deliberately made obviously fake (not real-looking BRN/VAT formats) so nobody mistakes them for genuine legal data in the meantime:
+
+| Field | Entity A | Entity B |
+|---|---|---|
+| `name` | `PLACEHOLDER ENTITY A LTD — replace before launch` | `PLACEHOLDER ENTITY B LTD — replace before launch` |
+| `brn` | `PLACEHOLDER-BRN-A` | `PLACEHOLDER-BRN-B` |
+| `vatNumber` | `PLACEHOLDER-VAT-A` | `PLACEHOLDER-VAT-B` |
+| `bankReference` | `PLACEHOLDER-BANK-A` | `PLACEHOLDER-BANK-B` |
+| `logoStoragePath` | unset (optional field — no real logo assets yet) | unset |
+| `active` | `true` | `true` |
+
+**Before production go-live**, all four text fields on both documents must be replaced with the real legal name, BRN, VAT number, and bank reference, and `logoStoragePath` populated once real logo assets exist. This is a plain data update (`entities/{entityId}` docs), not a schema or code change — flagging it here so it's a checklist item at go-live time, not something forgotten because the feature already "works" against placeholder data.
 
 ## 4. Schema changes
 
@@ -113,7 +125,7 @@ Wherever an invoice or receipt is currently rendered (client-side, from `order` 
 
 ## 10. Suggested build sequence
 
-1. Seed the two real `entities` documents once Bhimal provides the legal details (§3).
+1. Seed the two `entities` documents with the placeholder values in §3 (swap for real legal details before production go-live — tracked as a go-live checklist item, not a build blocker).
 2. `firestore.rules`: `entities` collection rules (staff-read, `manageConfig`-write), `customers/{uid}` field-lock updates (`entityId`/`registrationStatus`/`rejectionReason`), the narrow customer resubmission transition rule, the new `manageRegistrations` permission key.
 3. `registerCustomer`: add `registrationStatus: 'Pending'`.
 4. `confirmCheckout`: add the `Approved`-only precondition and the full entity-snapshot freeze (`entityId` + display fields).
