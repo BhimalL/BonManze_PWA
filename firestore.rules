@@ -50,24 +50,42 @@ service cloud.firestore {
     // can read/update the directory (e.g. fixing a typo'd address), but the
     // same financial-field lockout applies to them too.
     match /customers/{uid} {
-      allow read: if isCustomer(uid) || isStaffAllowed('manageCustomers');
+      allow read: if isCustomer(uid) || isStaffAllowed('manageCustomers') || isStaffAllowed('manageRegistrations');
       allow create: if isCustomer(uid)
         && !('points' in request.resource.data)
         && !('storeCredit' in request.resource.data)
         && !('tier' in request.resource.data)
         && !('ltv' in request.resource.data)
-        && !('group' in request.resource.data);
+        && !('group' in request.resource.data)
+        && !('entityId' in request.resource.data)
+        && !('registrationStatus' in request.resource.data)
+        && !('rejectionReason' in request.resource.data);
       allow update: if (isCustomer(uid)
           && request.resource.data.points == resource.data.points
           && request.resource.data.storeCredit == resource.data.storeCredit
           && request.resource.data.tier == resource.data.tier
           && request.resource.data.ltv == resource.data.ltv
-          && request.resource.data.group == resource.data.group)
+          && request.resource.data.group == resource.data.group
+          && request.resource.data.get('entityId', null) == resource.data.get('entityId', null)
+          // Customer resubmit transition: Rejected -> Pending
+          && (request.resource.data.get('registrationStatus', null) == resource.data.get('registrationStatus', null)
+              || (resource.data.get('registrationStatus', null) == 'Rejected'
+                  && request.resource.data.registrationStatus == 'Pending'))
+          && request.resource.data.get('rejectionReason', null) == resource.data.get('rejectionReason', null))
         || (isStaffAllowed('manageCustomers')
           && request.resource.data.points == resource.data.points
           && request.resource.data.storeCredit == resource.data.storeCredit
           && request.resource.data.ltv == resource.data.ltv
-          && request.resource.data.tier == resource.data.tier);
+          && request.resource.data.tier == resource.data.tier
+          && request.resource.data.get('entityId', null) == resource.data.get('entityId', null)
+          && request.resource.data.get('registrationStatus', null) == resource.data.get('registrationStatus', null)
+          && request.resource.data.get('rejectionReason', null) == resource.data.get('rejectionReason', null))
+        || (isStaffAllowed('manageRegistrations')
+          && request.resource.data.points == resource.data.points
+          && request.resource.data.storeCredit == resource.data.storeCredit
+          && request.resource.data.ltv == resource.data.ltv
+          && request.resource.data.tier == resource.data.tier
+          && request.resource.data.get('group', null) == resource.data.get('group', null));
       allow delete: if false; // no hard-delete from the client, ever
     }
 
@@ -159,6 +177,10 @@ service cloud.firestore {
     }
     match /customerGroups/{docId} {
       allow read: if isActiveStaff(); // internal segmentation, not customer-facing
+      allow write: if isStaffAllowed('manageConfig');
+    }
+    match /entities/{entityId} {
+      allow read: if isActiveStaff();
       allow write: if isStaffAllowed('manageConfig');
     }
 

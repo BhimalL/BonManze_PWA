@@ -103,6 +103,18 @@ export interface CustomerAddress {
   country: string;
 }
 
+export interface Entity {
+  id: string;
+  name: string;
+  brn: string;
+  vatNumber: string;
+  bankReference: string;
+  logoStoragePath?: string;
+  active: boolean;
+  createdAt: any;
+  updatedAt: any;
+}
+
 export interface Customer {
   id: string;
   firstName: string;
@@ -127,6 +139,9 @@ export interface Customer {
   };
   addresses: CustomerAddress[];
   dietaryPreferences?: string[];
+  entityId?: string;
+  registrationStatus?: 'Pending' | 'Approved' | 'Rejected';
+  rejectionReason?: string;
 }
 
 export interface OrderItem {
@@ -174,4 +189,10 @@ export interface Order {
   discountReason?: string;
   subtotal?: number;   // written by confirmCheckout Cloud Function
   vat?: number;        // written by confirmCheckout Cloud Function
+  entityId?: string;
+  entityName?: string;
+  entityBrn?: string;
+  entityVatNumber?: string;
+  entityBankReference?: string;
+  entityLogoStoragePath?: string;
 }
