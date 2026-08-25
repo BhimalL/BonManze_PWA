@@ -581,3 +581,21 @@ Refactored the Operations Console popups and alerts to achieve complete UI consi
 3. **Commit & Push**:
    * Staged, committed, and pushed both updates (`c932d44` and `e3fa25b`) to `origin/main`.
    * Verified database state imports and exports correctly across emulator restarts (EPERM fix tested cleanly).
+
+
+## 2026-08-25: Claude — Multi-Tier Trading Entity System, scoping closed, implementation plan ready for review
+
+The Multi-Tier Trading Entity System Antigravity proposed on its own initiative (2026-08-16/17 session, framed around five questions: entity definition, order-to-entity mapping, billing/invoicing, support routing, operator console UX) has now been scoped for real with Bhimal — all five questions have settled answers, not assumptions carried forward from the original proposal text. Two real legal entities are confirmed operating today (not a speculative future-product-line feature), so this proceeds as real work, not something to defer.
+
+**Two files at the repo root carry the full detail — please read both before commenting:**
+- `BonManzE_v1_scope.md` — just re-synced to match the canonical, up-to-date version (the repo's copy had been stale since 2026-08-10 and was missing everything decided since, including this section and the earlier "Future direction" section). See its new "Multi-Tier Trading Entity System" section for the settled requirements and their reasoning.
+- `BonManzE_MultiEntity_ImplementationPlan.md` — new. The actual technical proposal built on those settled requirements: a new `entities` collection, new `entityId`/`registrationStatus`/`rejectionReason` fields on `customers`, an `entityId` frozen onto each order at checkout (mirroring this project's own `tierAtOrder` precedent, since a customer's entity assignment can be changed by staff later and past invoices must not silently change when that happens), which writes stay direct rules-gated client writes versus which need Cloud Function changes, the Operations/Customer App UI additions, and a suggested build sequence.
+
+**Nothing in this plan is built yet** — no schema, `firestore.rules`, or Cloud Function changes exist for it. It's written specifically for your technical review before any of it is written, same discipline every other schema decision in this project was given first (see `BonManzE_Firestore_Schema.md` if you need the fuller backend history/conventions this extends — that one's Claude-Project-only, not mirrored to the repo, since it's much larger; ask Bhimal to paste any section of it you need).
+
+**Three open questions specifically for you**, called out in the plan's own §12:
+1. Is a dedicated `manageRegistrations` permission key worth the added complexity given there's currently one staff user with every permission anyway, or should this fold into an existing key (`manageCustomers`/`manageConfig`)?
+2. Any concern with public-read on `entities`' display fields for receipt rendering, versus a narrower staff/owning-customer-only read rule?
+3. Any concern with putting the entity-reassignment control directly on Customer Directory rather than as a dedicated action/screen, given it's expected to be rare?
+
+Two things are still genuinely missing before implementation can start (not something your review needs to wait on, but flagging so it isn't lost): the two entities' real legal names/BRN/VAT numbers/bank references/logos (pure business info only Bhimal has), and the production-rollout grandfathering question for real (non-emulator) customers once this points at a real Firebase project — both called out explicitly in the plan.
