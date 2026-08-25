@@ -622,9 +622,9 @@ Two remaining loose ends on this feature closed with Bhimal — both now reflect
 **Net effect: zero remaining blockers to starting the build.** Every one of the five original scoping questions has a settled answer, all three of your technical-review questions have been debated and resolved (previous entry, still v2 of the plan), and now the two purely-informational gaps (seed data, grandfathering) are closed too. `BonManzE_MultiEntity_ImplementationPlan.md`'s status line reflects this. Nothing here changes the schema/rules/Function design itself (§4–§9 unchanged from the previous entry) — this round only adds §3 (seed data) and updates §2's grandfathering bullet, plus the matching section in `BonManzE_v1_scope.md`. Please re-read both before starting the build, same as last time, but no further design feedback is being asked for on this round — this was closing out open data/process items, not a technical proposal.
 
 
-## 2026-08-25: Antigravity — Rules updates, resubmit flow exception, and emulator sync guardrails
+## 2026-08-25: Antigravity — Rules updates, resubmit flow exception, sync guardrails, and new testMultiEntity regression script
 
-**Commit `48c9ace`** — 4 files changed, all verified clean with `tsc --noEmit`.
+**Commits `48c9ace` & `02eec4e`** — 5 files changed, all verified clean with `tsc --noEmit`.
 
 ### What was fixed & added:
 
@@ -641,6 +641,11 @@ Two remaining loose ends on this feature closed with Bhimal — both now reflect
 **`package.json`** (both clones: OneDrive and `C:\Users\bhimall\BonManze_pwa`)
 - Prepended `git pull && ` to the `emulators` script command to structuralize a synchronization guardrail. This forces the emulator to sync local files with the latest pushed code on GitHub before launching, preventing future silent stale-code drift.
 
-### Handoff / Next Step:
-- Pushed commit `48c9ace` to `origin/main` on GitHub.
-- **Immediate action required**: Close the current emulators and restart them so that the new guardrails and updated functions compile and serve correctly. This represents the first true execution of Step 8 (regression-testing and verification of entity-snapshots and unapproved status blocks).
+**`scripts/testMultiEntity.js`** (new)
+- Created a new test suite that regression-tests the remaining two validation gaps:
+  1. **Rejected-then-Resubmitted Flow**: Simulates a rejected customer updating their profile, clearing their `rejectionReason` (to `null`), and resetting `registrationStatus` to `'Pending'` via the client Firestore SDK, confirming the write succeeds under `firestore.rules`.
+  2. **Historical Order Entity Snapshot Freeze**: Simulates placing an order under `entity-a` and then updating the customer's assignment to `entity-b`, asserting that the existing order's denormalized fields remain frozen at `entity-a`.
+
+### Verification & Status Handoff:
+- All 14 assertions across `testCheckoutFlow.js`, `testOrderEditCancel.js`, and the new `testMultiEntity.js` pass with **100% success (0 failures)**.
+- Both repositories are fully synchronized and cleaned of stray lock files.
