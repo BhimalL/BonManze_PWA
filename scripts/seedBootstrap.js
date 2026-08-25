@@ -51,6 +51,7 @@ const ALL_PERMISSIONS = {
   manageCustomers: true,
   manageConfig: true,
   manageRoles: true,
+  manageRegistrations: true,
 };
 
 async function main() {
