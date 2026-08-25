@@ -59,6 +59,10 @@ async function main() {
   console.log(`Using week starting ${mon}`);
   console.log('\n[1] Sign in as Eleanor and place a fresh order —');
   await signInWithEmailAndPassword(auth, 'eleanor.f@gmail.com', 'BonManzeTest2!');
+  await adb.collection('customers').doc(auth.currentUser.uid).update({
+    registrationStatus: 'Approved',
+    entityId: 'entity-a'
+  });
 
   const cartItems = [
     { curryId: 'veg', baseId: 'brice', beverageId: 'none', dessertId: 'none', deliveryDate: mon, service: 'Lunch', slotIndex: 0 }, // 130 + 15 = 145

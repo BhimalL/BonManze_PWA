@@ -89,7 +89,9 @@ async function main() {
   await adb.collection('customers').doc(auth.currentUser.uid).update({
     points: 300,
     tier: 't1',
-    ltv: 1500
+    ltv: 1500,
+    registrationStatus: 'Approved',
+    entityId: 'entity-a'
   });
 
   // Default-rotation ids/prices, copied from modules/store.ts /
@@ -134,10 +136,34 @@ async function main() {
   const itemsSnap = await adb.collection('orders').doc(orderId).collection('items').get();
   check('order doc exists with the server-computed total (client never sent one)', orderSnap.exists && approx(orderSnap.data().total, expectedTotal));
   check('order.customerId is the real signed-in uid, not client-supplied', orderSnap.data().customerId === auth.currentUser.uid);
+  
+  const orderData = orderSnap.data();
+  check('order denormalized entityId is correct', orderData.entityId === 'entity-a');
+  check('order denormalized entityName is correct', orderData.entityName === 'PLACEHOLDER ENTITY A LTD — replace before launch');
+  check('order denormalized entityBrn is correct', orderData.entityBrn === 'PLACEHOLDER-BRN-A');
+  check('order denormalized entityVatNumber is correct', orderData.entityVatNumber === 'PLACEHOLDER-VAT-A');
+  check('order denormalized entityBankReference is correct', orderData.entityBankReference === 'PLACEHOLDER-BANK-A');
+
   check(`items subcollection has ${cartItems.length} docs`, itemsSnap.size === cartItems.length, `got ${itemsSnap.size}`);
   const pricesWritten = itemsSnap.docs.map((d) => d.data().price).sort((a, b) => a - b);
   check('every item price matches server-computed pricing, not something the client submitted',
     JSON.stringify(pricesWritten) === JSON.stringify([...expectedPrices].sort((a, b) => a - b)), JSON.stringify(pricesWritten));
+
+  console.log('\n[2a] Confirm that checkout fails if the customer is not approved —');
+  await adb.collection('customers').doc(auth.currentUser.uid).update({
+    registrationStatus: 'Pending'
+  });
+  try {
+    await confirmCheckout({ items: cartItems.slice(0, 1), type: 'Delivery', paymentScheme: 'Upfront' });
+    check('checkout fails for unapproved customer', false, 'checkout unexpectedly succeeded');
+  } catch (err) {
+    check('checkout fails for unapproved customer', err.code === 'functions/failed-precondition', err.code);
+  }
+
+  // Restore approval for subsequent tests
+  await adb.collection('customers').doc(auth.currentUser.uid).update({
+    registrationStatus: 'Approved'
+  });
 
   console.log('\n[3] Confirm invalid input is rejected (unknown dish for that date) —');
   try {

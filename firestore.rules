@@ -71,7 +71,10 @@ service cloud.firestore {
           && (request.resource.data.get('registrationStatus', null) == resource.data.get('registrationStatus', null)
               || (resource.data.get('registrationStatus', null) == 'Rejected'
                   && request.resource.data.registrationStatus == 'Pending'))
-          && request.resource.data.get('rejectionReason', null) == resource.data.get('rejectionReason', null))
+          && (request.resource.data.get('rejectionReason', null) == resource.data.get('rejectionReason', null)
+              || (resource.data.get('registrationStatus', null) == 'Rejected'
+                  && request.resource.data.registrationStatus == 'Pending'
+                  && request.resource.data.get('rejectionReason', null) == null)))
         || (isStaffAllowed('manageCustomers')
           && request.resource.data.points == resource.data.points
           && request.resource.data.storeCredit == resource.data.storeCredit
@@ -81,11 +84,7 @@ service cloud.firestore {
           && request.resource.data.get('registrationStatus', null) == resource.data.get('registrationStatus', null)
           && request.resource.data.get('rejectionReason', null) == resource.data.get('rejectionReason', null))
         || (isStaffAllowed('manageRegistrations')
-          && request.resource.data.points == resource.data.points
-          && request.resource.data.storeCredit == resource.data.storeCredit
-          && request.resource.data.ltv == resource.data.ltv
-          && request.resource.data.tier == resource.data.tier
-          && request.resource.data.get('group', null) == resource.data.get('group', null));
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['entityId', 'registrationStatus', 'rejectionReason', 'updatedAt']));
       allow delete: if false; // no hard-delete from the client, ever
     }
 

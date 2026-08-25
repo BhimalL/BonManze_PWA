@@ -25,13 +25,11 @@ async function main() {
     brn: 'PLACEHOLDER-BRN-A',
     vatNumber: 'PLACEHOLDER-VAT-A',
     bankReference: 'PLACEHOLDER-BANK-A',
-    logoStoragePath: '',
     active: true,
     createdAt: now,
     updatedAt: now,
   });
   console.log('Seeded Entity A (entity-a)');
-
   // 2. Seed Entity B
   const entityBRef = db.collection('entities').doc('entity-b');
   await entityBRef.set({
@@ -39,7 +37,6 @@ async function main() {
     brn: 'PLACEHOLDER-BRN-B',
     vatNumber: 'PLACEHOLDER-VAT-B',
     bankReference: 'PLACEHOLDER-BANK-B',
-    logoStoragePath: '',
     active: true,
     createdAt: now,
     updatedAt: now,
