@@ -824,6 +824,12 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         timestamp: createdAtIso,
         discount: o.discount,
         discountReason: o.discountReason,
+        entityId: o.entityId || '',
+        entityName: o.entityName || '',
+        entityBrn: o.entityBrn || '',
+        entityVatNumber: o.entityVatNumber || '',
+        entityBankReference: o.entityBankReference || '',
+        entityLogoStoragePath: o.entityLogoStoragePath || '',
       } as Order;
     });
   }, [fsOrderDocs, fsItemDocs, currentUser]);
@@ -3367,15 +3373,24 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       <img src={SYSTEM_CONFIG.businessLogoUrl} alt={SYSTEM_CONFIG.businessName} className="size-9 rounded-lg object-cover shrink-0" />
                     )}
                     <div>
-                      <p className="text-lg font-black text-slate-900">{SYSTEM_CONFIG.businessName}</p>
+                      <p className="text-lg font-black text-slate-900">{receiptTarget.order.entityName || SYSTEM_CONFIG.businessName}</p>
                       <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{SYSTEM_CONFIG.businessTagline}</p>
                     </div>
                   </div>
                   <button onClick={() => setReceiptTarget(null)} className="bmz-no-print p-1.5 text-slate-400 hover:text-danger"><X className="size-5" /></button>
                 </div>
                 <p className="text-[10px] font-black uppercase text-primary tracking-widest mt-3">{vatOn ? 'Tax invoice' : 'Receipt'}</p>
-                {vatOn && SYSTEM_CONFIG.vatNumber && (
-                  <p className="text-[10px] text-slate-400 mt-0.5">VRN {SYSTEM_CONFIG.vatNumber}</p>
+                {receiptTarget.order.entityId ? (
+                  <div className="text-[10px] text-slate-400 mt-1 space-y-0.5">
+                    {receiptTarget.order.entityBrn && <p>BRN: {receiptTarget.order.entityBrn}</p>}
+                    {receiptTarget.order.entityVatNumber && <p>VRN: {receiptTarget.order.entityVatNumber}</p>}
+                  </div>
+                ) : (
+                  <>
+                    {vatOn && SYSTEM_CONFIG.vatNumber && (
+                      <p className="text-[10px] text-slate-400 mt-0.5">VRN {SYSTEM_CONFIG.vatNumber}</p>
+                    )}
+                  </>
                 )}
 
                 <div className="border-t border-dashed border-slate-300 mt-3 pt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
@@ -3471,6 +3486,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     <span className="text-lg font-black text-success">Rs {displayTotal.toFixed(0)}</span>
                   </div>
                 </div>
+
+                {receiptTarget.order.entityId && receiptTarget.order.entityBankReference && (
+                  <div className="border-t border-dashed border-slate-300 mt-4 pt-3 space-y-1 text-[10px] text-slate-500 font-mono text-left">
+                    <p className="font-bold text-slate-700 uppercase tracking-widest text-[9px] font-sans">Payment Instructions:</p>
+                    <p>Bank Transfer to: {receiptTarget.order.entityName}</p>
+                    <p>{receiptTarget.order.entityBankReference}</p>
+                    <p>Quote Ref: {orderIds.join(', ')}</p>
+                  </div>
+                )}
 
                 <p className="text-center text-[10px] text-slate-400 mt-5">Thank you for ordering with {SYSTEM_CONFIG.businessName} 🌿</p>
 
