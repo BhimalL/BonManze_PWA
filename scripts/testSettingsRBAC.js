@@ -1,11 +1,11 @@
-﻿// scripts/testSettingsRBAC.js
+// scripts/testSettingsRBAC.js
 // ESM verification for Settings/Roles/Entities round
 
 process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
 process.env.FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9099';
 
 import { initializeApp } from 'firebase/app';
-import { getFirestore, connectFirestoreEmulator, doc, setDoc, getDoc, updateDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, connectFirestoreEmulator, doc, setDoc, getDoc, updateDoc, deleteDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { getAuth, connectAuthEmulator, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'firebase/functions';
 
@@ -129,6 +129,17 @@ async function run() {
     if (!blocked) throw new Error('Self-deactivation was not blocked');
   });
 
+  // 3b. Self-lock: cannot change your own roleId
+  await assert('[3b] staff cannot change their own roleId', async () => {
+    let blocked = false;
+    try {
+      await updateDoc(doc(db, 'staff', ownerId), { roleId: 'role-some-other' });
+    } catch (e) {
+      if (e.code === 'permission-denied' || e.message.includes('PERMISSION_DENIED')) blocked = true;
+    }
+    if (!blocked) throw new Error('Self-roleId-change was not blocked');
+  });
+
   // 4. Cross-staff creation via createStaffMember Cloud Function and verify
   let staffBId;
   const staffBEmail = "staffb_" + Date.now() + "@bonmanze.com";
@@ -216,6 +227,12 @@ async function run() {
     // sign in as the noConfig user
     await signInAs(noConfigEmail, 'TempPass123!');
 
+    // 2b. Role read by low-privilege staff member
+    await assert('[2b] low-privilege active staff can read their own role document', async () => {
+      const snap = await getDoc(newRoleRef);
+      if (!snap.exists()) throw new Error('Role doc missing');
+    });
+
     await assertDenied('[9] non-manageConfig staff cannot write entities', async () => {
       await setDoc(doc(db, 'entities', 'entity-hack'), {
         name: 'Hacked',
@@ -235,8 +252,26 @@ async function run() {
       });
     }
 
+    // 11a. Role delete by non-manageRoles staff (noConfig user)
+    await assertDenied('[11a] non-manageRoles staff cannot delete roles', async () => {
+      await deleteDoc(newRoleRef);
+    });
+
+    // 11b. Role delete by manageRoles staff (Owner)
+    await signInAs(OWNER_EMAIL, OWNER_PASS);
+    await assert('[11b] manageRoles staff can delete unassigned role', async () => {
+      const tempRoleRef = doc(collection(db, 'roles'));
+      await setDoc(tempRoleRef, {
+        name: 'Temp Role to Delete',
+        permissions: { manageMenu: false, manageOrders: false, manageCustomers: false, manageConfig: false, manageRoles: false, manageRegistrations: false },
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      await deleteDoc(tempRoleRef);
+    });
+
   } catch (e) {
-    console.error("  FAIL  [9,10] fixture setup or tests failed: " + e.message);
+    console.error("  FAIL  [2b,9,10,11] fixture setup or tests failed: " + e.message);
   }
 
   // clean up signout

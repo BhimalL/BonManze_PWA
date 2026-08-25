@@ -45,7 +45,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc, Timestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc, Timestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { auth, db, functions, storage } from '../firebaseClient';
@@ -671,20 +671,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [editCustCity, setEditCustCity] = useState('');
   const [editCustEntityId, setEditCustEntityId] = useState('');
   const [confirmPaymentId, setConfirmPaymentId] = useState<string | null>(null);
-  // Settings → Danger Zone — same arm-then-confirm pattern as payment
-  // collection above, since this is destructive and, unlike everything
-  // else in this file, never happens automatically.
-  const [dangerConfirm, setDangerConfirm] = useState<'reset' | null>(null);
-  const [dangerResetDone, setDangerResetDone] = useState(false);
-  const handleDangerReset = () => {
-    clearAllOrders();
-    resetCustomerLoyalty();
-    setDangerConfirm(null);
-    setDangerResetDone(true);
-  };
-  void dangerConfirm; void dangerResetDone; void handleDangerReset; // retained for type-safety; UI removed
-
   // --- Roles & Staff sub-tab state ---
+  const [showEditStaffModal, setShowEditStaffModal] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
+  const [editStaffForm, setEditStaffForm] = useState({ roleId: '', active: true });
+  const [editStaffError, setEditStaffError] = useState<string | null>(null);
+  const [editStaffLoading, setEditStaffLoading] = useState(false);
   const [rolesRaw, setRolesRaw] = useState<Role[]>([]);
   const [staffListRaw, setStaffListRaw] = useState<Staff[]>([]);
   const [showAddStaffModal, setShowAddStaffModal] = useState(false);
@@ -4434,16 +4426,60 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         {Object.entries(role.permissions || {}).filter(([, v]) => v).map(([k]) => k).join(' · ') || 'No permissions'}
                       </p>
                     </div>
-                    <button
-                      onClick={() => {
-                        setEditingRoleId(role.id);
-                        setRoleForm({ name: role.name, ...role.permissions });
-                        setShowAddRoleModal(true);
-                      }}
-                      className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors"
-                    >
-                      <Edit3 className="size-4" />
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => {
+                          setEditingRoleId(role.id);
+                          setRoleForm({ name: role.name, ...role.permissions });
+                          setShowAddRoleModal(true);
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors"
+                      >
+                        <Edit3 className="size-4" />
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (role.permissions?.manageRoles) {
+                            const adminRolesCount = rolesRaw.filter(r => r.permissions?.manageRoles).length;
+                            if (adminRolesCount <= 1) {
+                              setNotification({
+                                title: 'Deletion Blocked',
+                                message: 'Cannot delete this role because it is the last remaining role with admin permissions.',
+                                type: 'error'
+                              });
+                              return;
+                            }
+                          }
+                          const isAssigned = staffListRaw.some(s => s.active && s.roleId === role.id);
+                          if (isAssigned) {
+                            setNotification({
+                              title: 'Deletion Blocked',
+                              message: 'Cannot delete this role because it is currently assigned to active staff members.',
+                              type: 'error'
+                            });
+                            return;
+                          }
+                          try {
+                            await deleteDoc(doc(db, 'roles', role.id));
+                            writeAuditLog('RoleChange', `Deleted role "${role.name}" (${role.id})`);
+                            setNotification({
+                              title: 'Role Deleted',
+                              message: `Role "${role.name}" was deleted successfully.`,
+                              type: 'success'
+                            });
+                          } catch (err: any) {
+                            setNotification({
+                              title: 'Delete Failed',
+                              message: err.message || 'Failed to delete role.',
+                              type: 'error'
+                            });
+                          }
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    </div>
                   </div>
                 ))}
                 {rolesRaw.length === 0 && (
@@ -4476,9 +4512,22 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         <p className="text-sm font-black text-slate-900">{staff.name} {isSelf && <span className="text-[10px] text-primary font-bold">(You)</span>}</p>
                         <p className="text-xs text-slate-400 font-medium">{staff.email} · {role?.name || staff.roleId}</p>
                       </div>
-                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${staff.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
-                        {staff.active ? 'Active' : 'Inactive'}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${staff.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
+                          {staff.active ? 'Active' : 'Inactive'}
+                        </span>
+                        <button
+                          onClick={() => {
+                            setEditingStaff(staff);
+                            setEditStaffForm({ roleId: staff.roleId, active: staff.active });
+                            setEditStaffError(null);
+                            setShowEditStaffModal(true);
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors"
+                        >
+                          <Edit3 className="size-4" />
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -4598,6 +4647,75 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         className="px-5 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors disabled:opacity-50"
                       >
                         {addStaffLoading ? 'Creating…' : 'Create Account'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </Portal>
+            )}
+
+            {/* Edit Staff Modal */}
+            {showEditStaffModal && editingStaff && (
+              <Portal>
+                <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
+                  <div className="bg-white rounded-[32px] w-full max-w-md shadow-2xl overflow-hidden">
+                    <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                      <h2 className="text-lg font-black text-slate-900">Edit Staff Member</h2>
+                      <button onClick={() => { setShowEditStaffModal(false); setEditingStaff(null); setEditStaffError(null); }} className="p-2 text-slate-400 hover:text-red-500"><X className="size-4" /></button>
+                    </div>
+                    <div className="p-6 space-y-4">
+                      <div>
+                        <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Name</p>
+                        <p className="text-sm font-bold text-slate-800 mt-1">{editingStaff.name}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Email</p>
+                        <p className="text-sm font-bold text-slate-800 mt-1">{editingStaff.email}</p>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Role</label>
+                        <select value={editStaffForm.roleId} onChange={e => setEditStaffForm(prev => ({ ...prev, roleId: e.target.value }))} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30">
+                          {rolesRaw.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                        </select>
+                      </div>
+                      <label className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer">
+                        <input type="checkbox" checked={editStaffForm.active} onChange={e => setEditStaffForm(prev => ({ ...prev, active: e.target.checked }))} className="accent-primary size-4" />
+                        <span className="text-xs font-bold text-slate-700">Active Status</span>
+                      </label>
+                      {editStaffError && <p className="text-xs text-red-600 font-bold">{editStaffError}</p>}
+                    </div>
+                    <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
+                      <button onClick={() => { setShowEditStaffModal(false); setEditingStaff(null); setEditStaffError(null); }} className="px-4 py-2 text-xs font-black text-slate-500 hover:bg-slate-50 rounded-xl transition-colors">Cancel</button>
+                      <button
+                        disabled={editStaffLoading}
+                        onClick={async () => {
+                          const isSelf = staffAuthUser?.uid === editingStaff.id;
+                          if (isSelf) {
+                            if (!editStaffForm.active || editStaffForm.roleId !== editingStaff.roleId) {
+                              setEditStaffError('You cannot deactivate yourself or change your own role to prevent self-lockout.');
+                              return;
+                            }
+                          }
+                          setEditStaffLoading(true);
+                          setEditStaffError(null);
+                          try {
+                            await updateDoc(doc(db, 'staff', editingStaff.id), {
+                              roleId: editStaffForm.roleId,
+                              active: editStaffForm.active,
+                              updatedAt: Timestamp.now()
+                            });
+                            writeAuditLog('RoleChange', `Updated staff member ${editingStaff.name} (${editingStaff.id}) - active: ${editStaffForm.active}, role: ${editStaffForm.roleId}`);
+                            setShowEditStaffModal(false);
+                            setEditingStaff(null);
+                          } catch (e: any) {
+                            setEditStaffError(e.message || 'Failed to save staff changes.');
+                          } finally {
+                            setEditStaffLoading(false);
+                          }
+                        }}
+                        className="px-5 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors disabled:opacity-50"
+                      >
+                        {editStaffLoading ? 'Saving…' : 'Save Changes'}
                       </button>
                     </div>
                   </div>
