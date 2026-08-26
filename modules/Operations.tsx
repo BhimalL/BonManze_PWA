@@ -298,6 +298,39 @@ const addDays = (dateStr: string, days: number): string => {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 };
 
+// Maps each settings sub-tab key to the permission group whose .view flag controls
+// whether that button/panel is accessible. Used by allowedSettingsSubTabs memo,
+// the redirect useEffect, hasTabPermission('settings'), and the sub-tab button render.
+const SETTINGS_SUB_TABS = [
+  { key: 'identity'        as const, permGroup: 'generalConfig'    },
+  { key: 'delivery'        as const, permGroup: 'generalConfig'    },
+  { key: 'tax'             as const, permGroup: 'generalConfig'    },
+  { key: 'loyalty'         as const, permGroup: 'loyaltyTiers'     },
+  { key: 'groups'          as const, permGroup: 'customerGroups'   },
+  { key: 'icons'           as const, permGroup: 'iconLibrary'      },
+  { key: 'rolesAndStaff'   as const, permGroup: 'rolesAndStaff'    },
+  { key: 'tradingEntities' as const, permGroup: 'tradingEntities'  },
+];
+type SettingsSubTab = typeof SETTINGS_SUB_TABS[number]['key'];
+
+// 14-row permission group manifest used by the role editor View/Edit table and save handler.
+const PERM_GROUPS = [
+  { key: 'menuPlanner'          as const, label: 'Menu Planner',          hasEdit: true  },
+  { key: 'mealLibrary'          as const, label: 'Meal Library',          hasEdit: true  },
+  { key: 'ordersByDish'         as const, label: 'Orders by Dish',        hasEdit: true  },
+  { key: 'deliveryList'         as const, label: 'Delivery List',         hasEdit: true  },
+  { key: 'payments'             as const, label: 'Payments',              hasEdit: true  },
+  { key: 'customerDirectory'    as const, label: 'Customer Directory',    hasEdit: true  },
+  { key: 'pendingRegistrations' as const, label: 'Pending Registrations', hasEdit: true  },
+  { key: 'transactionsLedger'   as const, label: 'Transactions Ledger',   hasEdit: false },
+  { key: 'generalConfig'        as const, label: 'General Config',        hasEdit: true  },
+  { key: 'loyaltyTiers'         as const, label: 'Loyalty Tiers',         hasEdit: true  },
+  { key: 'customerGroups'       as const, label: 'Customer Groups',       hasEdit: true  },
+  { key: 'iconLibrary'          as const, label: 'Icon Library',          hasEdit: true  },
+  { key: 'rolesAndStaff'        as const, label: 'Roles & Staff',         hasEdit: true  },
+  { key: 'tradingEntities'      as const, label: 'Trading Entities',      hasEdit: true  },
+];
+
 const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [tab, setTab] = useState<Tab>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -321,14 +354,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // describes.
   const [staffAuthUser, setStaffAuthUser] = useState<any | null>(null);
   const [staffDocRaw, setStaffDocRaw] = useState<any | null>(null);
-  const [currentPermissions, setCurrentPermissions] = useState<{
-    manageMenu: boolean;
-    manageOrders: boolean;
-    manageCustomers: boolean;
-    manageConfig: boolean;
-    manageRoles: boolean;
-    manageRegistrations: boolean;
-  } | null>(null);
+  const [currentPermissions, setCurrentPermissions] = useState<Record<
+    string,
+    { view?: boolean; edit?: boolean }
+  > | null>(null);
   const [staffAuthChecking, setStaffAuthChecking] = useState(true);
   const [staffLoginEmail, setStaffLoginEmail] = useState('');
   const [staffLoginPassword, setStaffLoginPassword] = useState('');
@@ -529,9 +558,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Settings has its own General/Icons sub-tabs now that it manages the
   // Icon Library too — everything that used to be the whole Settings page
   // lives under "General".
-  const [settingsSubTab, setSettingsSubTab] = useState<'identity' | 'delivery' | 'tax' | 'loyalty' | 'groups' | 'icons' | 'rolesAndStaff' | 'tradingEntities'>('identity');
+  const [settingsSubTab, setSettingsSubTab] = useState<SettingsSubTab>('identity');
   const [loyaltyTiers, setLoyaltyTiers] = useState<LoyaltyTier[]>([]);
   const [customerGroups, setCustomerGroups] = useState<CustomerGroup[]>([]);
+
+  // Derived from currentPermissions — the ordered list of settings sub-tabs
+  // this staff member is allowed to see. Shared by hasTabPermission('settings'),
+  // the redirect useEffect, and the sub-tab button render so they are always
+  // consistent. Identity/Delivery/Tax share 'generalConfig' as their permGroup.
+  const allowedSettingsSubTabs = useMemo<SettingsSubTab[]>(
+    () => SETTINGS_SUB_TABS
+      .filter(t => currentPermissions?.[t.permGroup]?.view === true)
+      .map(t => t.key),
+    [currentPermissions]
+  );
 
   const hasTabPermission = (tabId: Tab): boolean => {
     if (staffAuthChecking) return true;
@@ -541,36 +581,41 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       case 'dashboard':
         return true;
       case 'menu':
+        return currentPermissions.menuPlanner?.view === true;
       case 'library':
-        return currentPermissions.manageMenu === true;
+        return currentPermissions.mealLibrary?.view === true;
       case 'orders':
+        return currentPermissions.ordersByDish?.view === true;
       case 'delivery':
+        return currentPermissions.deliveryList?.view === true;
       case 'payments':
-        return currentPermissions.manageOrders === true;
+        return currentPermissions.payments?.view === true;
       case 'customers':
-        return currentPermissions.manageCustomers === true;
+        return currentPermissions.customerDirectory?.view === true;
       case 'pendingRegistrations':
-        return currentPermissions.manageRegistrations === true;
+        return currentPermissions.pendingRegistrations?.view === true;
       case 'transactions':
-        return currentPermissions.manageOrders === true || currentPermissions.manageConfig === true;
+        return currentPermissions.transactionsLedger?.view === true;
       case 'settings':
-        return currentPermissions.manageConfig === true || currentPermissions.manageRoles === true;
+        return allowedSettingsSubTabs.length > 0;
       default:
         return false;
     }
   };
 
+  // If the current settings sub-tab is not in the user's allowed list (e.g.
+  // they load Settings while defaulted to 'identity' but only have
+  // tradingEntities.view), jump to the first allowed sub-tab. This is a
+  // generalized redirect that handles any combination of granted permissions
+  // without hardcoding specific sub-tab names as fallbacks.
   useEffect(() => {
-    if (tab === 'settings' && currentPermissions) {
-      if (settingsSubTab === 'rolesAndStaff' && !currentPermissions.manageRoles) {
-        setSettingsSubTab('identity');
-      } else if (settingsSubTab !== 'rolesAndStaff' && !currentPermissions.manageConfig) {
-        if (currentPermissions.manageRoles) {
-          setSettingsSubTab('rolesAndStaff');
-        }
+    if (tab === 'settings' && currentPermissions && allowedSettingsSubTabs.length > 0) {
+      if (!allowedSettingsSubTabs.includes(settingsSubTab)) {
+        setSettingsSubTab(allowedSettingsSubTabs[0]);
       }
     }
-  }, [tab, currentPermissions, settingsSubTab]);
+  }, [tab, currentPermissions, settingsSubTab, allowedSettingsSubTabs]);
+
 
   // Which existing add-on catalog entry is being edited inline, and its
   // draft form — mirrors editingCurry/editForm's shape for the five add-on
@@ -712,10 +757,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [addStaffError, setAddStaffError] = useState<string | null>(null);
   const [addStaffLoading, setAddStaffLoading] = useState(false);
   const [showAddRoleModal, setShowAddRoleModal] = useState(false);
-  const [roleForm, setRoleForm] = useState({
+  const [roleForm, setRoleForm] = useState<{
+    name: string;
+    perms: Record<string, { view: boolean; edit: boolean }>;
+  }>({
     name: '',
-    manageMenu: false, manageOrders: false, manageCustomers: false,
-    manageConfig: false, manageRoles: false, manageRegistrations: false,
+    perms: Object.fromEntries(PERM_GROUPS.map(g => [g.key, { view: false, edit: false }])),
   });
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [roleActionError, setRoleActionError] = useState<string | null>(null);
@@ -4027,44 +4074,30 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const renderSettingsTab = () => {
-    const canConfig = currentPermissions?.manageConfig === true;
-    const canRoles  = currentPermissions?.manageRoles  === true;
+    const labels: Record<SettingsSubTab, string> = {
+      identity: 'Identity',
+      delivery: 'Delivery & Cut-offs',
+      tax: 'Tax & Offerings',
+      loyalty: 'Loyalty Tiers',
+      groups: 'Customer Groups',
+      icons: 'Icon Library',
+      rolesAndStaff: 'Roles & Staff',
+      tradingEntities: 'Trading Entities',
+    };
     return (
       <div className="space-y-8 animate-fade-in pb-24">
-        {/* Sub-tabs Selector Row */}
+        {/* Sub-tabs Selector Row — driven by allowedSettingsSubTabs so buttons
+            always match what the redirect effect will land the user on. */}
         <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 rounded-2xl p-1.5 w-fit">
-          {(
-            [
-              canConfig && 'identity',
-              canConfig && 'delivery',
-              canConfig && 'tax',
-              canConfig && 'loyalty',
-              canConfig && 'groups',
-              canConfig && 'icons',
-              canRoles  && 'rolesAndStaff',
-              canConfig && 'tradingEntities',
-            ].filter(Boolean) as ('identity' | 'delivery' | 'tax' | 'loyalty' | 'groups' | 'icons' | 'rolesAndStaff' | 'tradingEntities')[]
-          ).map(t => {
-            const labels: Record<typeof t, string> = {
-              identity: 'Identity',
-              delivery: 'Delivery & Cut-offs',
-              tax: 'Tax & Offerings',
-              loyalty: 'Loyalty Tiers',
-              groups: 'Customer Groups',
-              icons: 'Icon Library',
-              rolesAndStaff: 'Roles & Staff',
-              tradingEntities: 'Trading Entities',
-            };
-            return (
-              <button
-                key={t}
-                onClick={() => setSettingsSubTab(t)}
-                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${settingsSubTab === t ? 'bg-primary text-white shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-              >
-                {labels[t]}
-              </button>
-            );
-          })}
+          {allowedSettingsSubTabs.map(t => (
+            <button
+              key={t}
+              onClick={() => setSettingsSubTab(t)}
+              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${settingsSubTab === t ? 'bg-primary text-white shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              {labels[t]}
+            </button>
+          ))}
         </div>
 
         {settingsSubTab === 'icons' && (
@@ -4529,7 +4562,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <p className="text-xs text-slate-400 font-medium mt-0.5">Define permission sets that staff members are assigned to.</p>
                 </div>
                 <button
-                  onClick={() => { setEditingRoleId(null); setRoleForm({ name: '', manageMenu: false, manageOrders: false, manageCustomers: false, manageConfig: false, manageRoles: false, manageRegistrations: false }); setShowAddRoleModal(true); }}
+                  onClick={() => { setEditingRoleId(null); setRoleForm({ name: '', perms: Object.fromEntries(PERM_GROUPS.map(g => [g.key, { view: false, edit: false }])) }); setShowAddRoleModal(true); }}
                   className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors"
                 >
                   <Plus className="size-3.5" /> Add Role
@@ -4541,14 +4574,27 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     <div>
                       <p className="text-sm font-black text-slate-900">{role.name}</p>
                       <p className="text-[10px] text-slate-400 font-medium mt-0.5">
-                        {Object.entries(role.permissions || {}).filter(([, v]) => v).map(([k]) => k).join(' · ') || 'No permissions'}
+                        {PERM_GROUPS.filter(g => role.permissions?.[g.key]?.view).map(g =>
+                          role.permissions?.[g.key]?.edit ? g.label : `${g.label} (view)`
+                        ).join(' · ') || 'No permissions'}
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <button
                         onClick={() => {
                           setEditingRoleId(role.id);
-                          setRoleForm({ name: role.name, ...role.permissions });
+                          setRoleForm({
+                            name: role.name,
+                            perms: Object.fromEntries(
+                              PERM_GROUPS.map(g => [
+                                g.key,
+                                {
+                                  view: role.permissions?.[g.key]?.view === true,
+                                  edit: role.permissions?.[g.key]?.edit === true,
+                                }
+                              ])
+                            ),
+                          });
                           setShowAddRoleModal(true);
                         }}
                         className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors"
@@ -4557,8 +4603,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       </button>
                       <button
                         onClick={async () => {
-                          if (role.permissions?.manageRoles) {
-                            const adminRolesCount = rolesRaw.filter(r => r.permissions?.manageRoles).length;
+                          if (role.permissions?.rolesAndStaff?.edit === true) {
+                            const adminRolesCount = rolesRaw.filter(r => r.permissions?.rolesAndStaff?.edit === true).length;
                             if (adminRolesCount <= 1) {
                               setNotification({
                                 title: 'Deletion Blocked',
@@ -4670,13 +4716,60 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         <input value={roleForm.name} onChange={e => setRoleForm(f => ({ ...f, name: e.target.value }))} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30" placeholder="e.g. Kitchen Staff" />
                       </div>
                       <div className="space-y-2">
-                        <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Permissions</p>
-                        {(['manageMenu', 'manageOrders', 'manageCustomers', 'manageRegistrations', 'manageConfig', 'manageRoles'] as const).map(perm => (
-                          <label key={perm} className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer">
-                            <input type="checkbox" checked={roleForm[perm]} onChange={e => setRoleForm(f => ({ ...f, [perm]: e.target.checked }))} className="accent-primary size-4" />
-                            <span className="text-xs font-bold text-slate-700">{perm}</span>
-                          </label>
-                        ))}
+                        <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
+                          <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Permission</p>
+                          <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest w-10 text-center">View</p>
+                          <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest w-10 text-center">Edit</p>
+                        </div>
+                        <div className="max-h-72 overflow-y-auto space-y-1 pr-1">
+                          {PERM_GROUPS.map(g => {
+                            const v = roleForm.perms[g.key]?.view ?? false;
+                            const e = roleForm.perms[g.key]?.edit ?? false;
+                            return (
+                              <div key={g.key} className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center p-2.5 rounded-xl border border-slate-100 hover:bg-slate-50">
+                                <span className="text-xs font-bold text-slate-700">{g.label}</span>
+                                <div className="w-10 flex justify-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={v}
+                                    onChange={ev => {
+                                      const newView = ev.target.checked;
+                                      setRoleForm(f => ({
+                                        ...f,
+                                        perms: {
+                                          ...f.perms,
+                                          [g.key]: { view: newView, edit: newView ? f.perms[g.key]?.edit ?? false : false },
+                                        },
+                                      }));
+                                    }}
+                                    className="accent-primary size-4"
+                                  />
+                                </div>
+                                <div className="w-10 flex justify-center">
+                                  {g.hasEdit ? (
+                                    <input
+                                      type="checkbox"
+                                      checked={e}
+                                      onChange={ev => {
+                                        const newEdit = ev.target.checked;
+                                        setRoleForm(f => ({
+                                          ...f,
+                                          perms: {
+                                            ...f.perms,
+                                            [g.key]: { view: newEdit ? true : f.perms[g.key]?.view ?? false, edit: newEdit },
+                                          },
+                                        }));
+                                      }}
+                                      className="accent-primary size-4"
+                                    />
+                                  ) : (
+                                    <span className="text-slate-200 text-xs select-none">—</span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                       {roleActionError && <p className="text-xs text-red-600 font-bold">{roleActionError}</p>}
                     </div>
@@ -4688,7 +4781,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           if (!roleForm.name.trim()) { setRoleActionError('Role name is required.'); return; }
                           setRoleActionLoading(true); setRoleActionError(null);
                           try {
-                            const perms = { manageMenu: roleForm.manageMenu, manageOrders: roleForm.manageOrders, manageCustomers: roleForm.manageCustomers, manageRegistrations: roleForm.manageRegistrations, manageConfig: roleForm.manageConfig, manageRoles: roleForm.manageRoles };
+                            const perms = Object.fromEntries(
+                              PERM_GROUPS.map(g => [g.key, {
+                                view: roleForm.perms[g.key]?.view ?? false,
+                                ...(g.hasEdit ? { edit: roleForm.perms[g.key]?.edit ?? false } : {}),
+                              }])
+                            );
                             if (editingRoleId) {
                               await updateDoc(doc(db, 'roles', editingRoleId), { name: roleForm.name.trim(), permissions: perms, updatedAt: Timestamp.now() });
                               writeAuditLog('RoleChange', `Updated role "${roleForm.name.trim()}" (${editingRoleId})`);
