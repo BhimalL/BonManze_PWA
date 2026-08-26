@@ -88,10 +88,28 @@ async function run() {
     ownerId = user.uid;
   }
 
+  const ownerPermissions = {
+    dashboard: { view: true },
+    menuPlanner: { view: true, edit: true },
+    mealLibrary: { view: true, edit: true },
+    ordersByDish: { view: true, edit: true },
+    deliveryList: { view: true, edit: true },
+    payments: { view: true, edit: true },
+    customerDirectory: { view: true, edit: true },
+    pendingRegistrations: { view: true, edit: true },
+    transactions: { view: true },
+    generalConfig: { view: true, edit: true },
+    loyaltyTiers: { view: true, edit: true },
+    customerGroups: { view: true, edit: true },
+    iconLibrary: { view: true, edit: true },
+    rolesAndStaff: { view: true, edit: true },
+    tradingEntities: { view: true, edit: true }
+  };
+
   // Ensure owner staff doc and owner role exist
   await adb.collection('roles').doc('role-owner').set({
     name: 'Owner',
-    permissions: { manageMenu: true, manageOrders: true, manageCustomers: true, manageConfig: true, manageRoles: true, manageRegistrations: true },
+    permissions: ownerPermissions,
     createdAt: new Date(), updatedAt: new Date(),
   }, { merge: true });
 
@@ -107,7 +125,9 @@ async function run() {
   await assert('[1] manageRoles staff can create a role', async () => {
     await setDoc(testRoleRef, {
       name: 'Test Role',
-      permissions: { manageMenu: true, manageOrders: false, manageCustomers: false, manageConfig: false, manageRoles: false, manageRegistrations: false },
+      permissions: {
+        menuPlanner: { view: true, edit: true }
+      },
       createdAt: serverTimestamp(), updatedAt: serverTimestamp()
     });
   });
@@ -212,7 +232,11 @@ async function run() {
     const newRoleRef = doc(collection(db, 'roles'));
     await setDoc(newRoleRef, {
       name: 'Orders Only',
-      permissions: { manageMenu: false, manageOrders: true, manageCustomers: false, manageConfig: false, manageRoles: false, manageRegistrations: false },
+      permissions: {
+        ordersByDish: { view: true, edit: true },
+        deliveryList: { view: true, edit: true },
+        payments: { view: true, edit: true }
+      },
       createdAt: serverTimestamp(), updatedAt: serverTimestamp()
     });
     
@@ -263,11 +287,115 @@ async function run() {
       const tempRoleRef = doc(collection(db, 'roles'));
       await setDoc(tempRoleRef, {
         name: 'Temp Role to Delete',
-        permissions: { manageMenu: false, manageOrders: false, manageCustomers: false, manageConfig: false, manageRoles: false, manageRegistrations: false },
+        permissions: {},
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
       await deleteDoc(tempRoleRef);
+    });
+
+    // 12. Granular order items updates checks (ordersByDish vs payments edit split)
+    console.log('\n[12] Seeding test order items & low-privilege roles to test split writes...');
+    const testOrderId = 'rbac-test-order-' + Date.now();
+    const testItemId = 'rbac-test-item-' + Date.now();
+    const adminOrderRef = adb.collection('orders').doc(testOrderId);
+    await adminOrderRef.set({
+      customerId: 'eleanor-uid',
+      customerName: 'Eleanor',
+      createdAt: new Date(),
+      entityId: 'entity-a'
+    });
+    const adminItemRef = adminOrderRef.collection('items').doc(testItemId);
+    await adminItemRef.set({
+      customerId: 'eleanor-uid',
+      customerName: 'Eleanor',
+      price: 150,
+      qty: 1,
+      name: 'Veg Curry',
+      status: 'Active',
+      paymentStatus: 'Pending',
+      paymentMethodName: '',
+      paymentReference: '',
+      deliveryDate: '2026-11-23',
+      serviceSlot: 'Lunch'
+    });
+
+    const ordersOnlyRoleRef = doc(collection(db, 'roles'));
+    const paymentsOnlyRoleRef = doc(collection(db, 'roles'));
+
+    await adb.collection('roles').doc(ordersOnlyRoleRef.id).set({
+      name: 'Orders Only Low Priv',
+      permissions: {
+        ordersByDish: { view: true, edit: true }
+      },
+      createdAt: new Date(), updatedAt: new Date()
+    });
+
+    await adb.collection('roles').doc(paymentsOnlyRoleRef.id).set({
+      name: 'Payments Only Low Priv',
+      permissions: {
+        payments: { view: true, edit: true }
+      },
+      createdAt: new Date(), updatedAt: new Date()
+    });
+
+    const ordersOnlyEmail = 'orders-only-' + Date.now() + '@bonmanze.com';
+    const paymentsOnlyEmail = 'payments-only-' + Date.now() + '@bonmanze.com';
+    const fnCreate = httpsCallable(functions, 'createStaffMember');
+
+    // Create staff members under Owner authority
+    await signInAs(OWNER_EMAIL, OWNER_PASS);
+    await fnCreate({
+      name: 'Orders Low',
+      email: ordersOnlyEmail,
+      password: 'TempPass123!',
+      roleId: ordersOnlyRoleRef.id
+    });
+    await fnCreate({
+      name: 'Payments Low',
+      email: paymentsOnlyEmail,
+      password: 'TempPass123!',
+      roleId: paymentsOnlyRoleRef.id
+    });
+
+    const clientItemRef = doc(db, 'orders', testOrderId, 'items', testItemId);
+
+    // 12a. Sign in as orders-only low-privilege user
+    await signInAs(ordersOnlyEmail, 'TempPass123!');
+    await assert('[12a] orders-only staff can update item status to Preparing', async () => {
+      await updateDoc(clientItemRef, {
+        status: 'Preparing'
+      });
+    });
+
+    // Reset status back to Active via admin SDK
+    await adminItemRef.update({ status: 'Active' });
+
+    // - Try to update paymentStatus -> Paid (fails)
+    await assertDenied('[12b] orders-only staff cannot update item paymentStatus to Paid', async () => {
+      await updateDoc(clientItemRef, {
+        paymentStatus: 'Paid'
+      });
+    });
+
+    // 13a. Sign in as payments-only low-privilege user
+    await signInAs(paymentsOnlyEmail, 'TempPass123!');
+    await assert('[13a] payments-only staff can update item paymentStatus to Paid', async () => {
+      await updateDoc(clientItemRef, {
+        paymentStatus: 'Paid',
+        paymentMethodName: 'MauCAS',
+        paymentReference: '12345'
+      });
+    });
+
+    // Reset paymentStatus back to Pending via admin SDK
+    await adminItemRef.update({ paymentStatus: 'Pending', paymentMethodName: '', paymentReference: '' });
+
+    // - Try to update status -> Preparing (fails)
+    await assertDenied('[13b] payments-only staff cannot update item status to Preparing', async () => {
+      await updateDoc(clientItemRef, {
+        status: 'Preparing'
+      });
     });
 
   } catch (e) {

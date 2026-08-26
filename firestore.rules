@@ -35,22 +35,25 @@ service cloud.firestore {
 
     // Resolves the signed-in staff member's role live (never trust a copy —
     // see the schema doc's note on why roleId stays a pointer, not a
-    // denormalized permission snapshot) and checks a single permission key.
-    function isStaffAllowed(permissionKey) {
+    // denormalized permission snapshot) and checks a granular permission.
+    function isStaffAllowed(groupName, permissionType) {
       return isActiveStaff()
-        && get(/databases/$(database)/documents/roles/$(staffDoc().data.roleId))
-             .data.permissions.get(permissionKey, false) == true;
+        && exists(/databases/$(database)/documents/roles/$(staffDoc().data.roleId))
+        && 'permissions' in get(/databases/$(database)/documents/roles/$(staffDoc().data.roleId)).data
+        && groupName in get(/databases/$(database)/documents/roles/$(staffDoc().data.roleId)).data.permissions
+        && permissionType in get(/databases/$(database)/documents/roles/$(staffDoc().data.roleId)).data.permissions[groupName]
+        && get(/databases/$(database)/documents/roles/$(staffDoc().data.roleId)).data.permissions[groupName][permissionType] == true;
     }
 
     // ---- customers/{uid} ----
     // A customer reads/writes only their own doc. Financial/loyalty fields
     // (points, storeCredit, tier, ltv) are NOT directly writable by anyone
     // here — those only ever change via a Cloud Function using the Admin
-    // SDK, which bypasses these rules entirely. Staff with manageCustomers
+    // SDK, which bypasses these rules entirely. Staff with customerDirectory edit
     // can read/update the directory (e.g. fixing a typo'd address), but the
     // same financial-field lockout applies to them too.
     match /customers/{uid} {
-      allow read: if isCustomer(uid) || isStaffAllowed('manageCustomers') || isStaffAllowed('manageRegistrations');
+      allow read: if isCustomer(uid) || isStaffAllowed('customerDirectory', 'view') || isStaffAllowed('pendingRegistrations', 'view');
       allow create: if isCustomer(uid)
         && !('points' in request.resource.data)
         && !('storeCredit' in request.resource.data)
@@ -75,7 +78,7 @@ service cloud.firestore {
               || (resource.data.get('registrationStatus', null) == 'Rejected'
                   && request.resource.data.registrationStatus == 'Pending'
                   && request.resource.data.get('rejectionReason', null) == null)))
-        || (isStaffAllowed('manageCustomers')
+        || (isStaffAllowed('customerDirectory', 'edit')
           && request.resource.data.points == resource.data.points
           && request.resource.data.storeCredit == resource.data.storeCredit
           && request.resource.data.ltv == resource.data.ltv
@@ -83,7 +86,7 @@ service cloud.firestore {
           && request.resource.data.get('entityId', null) == resource.data.get('entityId', null)
           && request.resource.data.get('registrationStatus', null) == resource.data.get('registrationStatus', null)
           && request.resource.data.get('rejectionReason', null) == resource.data.get('rejectionReason', null))
-        || (isStaffAllowed('manageRegistrations')
+        || (isStaffAllowed('pendingRegistrations', 'edit')
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['entityId', 'registrationStatus', 'rejectionReason', 'updatedAt']));
       allow delete: if false; // no hard-delete from the client, ever
     }
@@ -101,13 +104,13 @@ service cloud.firestore {
     }
 
     // ---- staff/{uid} ----
-    // Only manageRoles can create/edit staff records or reassign roles —
+    // Only rolesAndStaff edit can create/edit staff records or reassign roles —
     // this is the one place a privilege-escalation path would open up if
     // it were folded into a broader permission instead of its own key.
     match /staff/{uid} {
       allow read: if isActiveStaff();
       allow create: if false; // strictly created via createStaffMember Cloud Function
-      allow update: if isStaffAllowed('manageRoles')
+      allow update: if isStaffAllowed('rolesAndStaff', 'edit')
         && (request.auth.uid != uid
             || (request.resource.data.active == true
                 && request.resource.data.roleId == resource.data.roleId));
@@ -117,7 +120,7 @@ service cloud.firestore {
     // ---- roles/{roleId} ----
     match /roles/{roleId} {
       allow read: if isActiveStaff();
-      allow write: if isStaffAllowed('manageRoles');
+      allow write: if isStaffAllowed('rolesAndStaff', 'edit');
     }
 
     // ---- auditLog/{id} ----
@@ -127,7 +130,7 @@ service cloud.firestore {
     // changes made straight from the client. Never editable or deletable
     // once written — that's the point of an audit log.
     match /auditLog/{id} {
-      allow read: if isStaffAllowed('manageRoles');
+      allow read: if isStaffAllowed('rolesAndStaff', 'view');
       allow create: if isActiveStaff()
         && request.resource.data.staffUid == request.auth.uid
         && request.resource.data.timestamp == request.time
@@ -137,60 +140,60 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // ---- Meal Library / Menu Planner (manageMenu) ----
+    // ---- Meal Library / Menu Planner ----
     match /mains/{mainId} {
       allow read: if true; // public menu content
-      allow write: if isStaffAllowed('manageMenu');
+      allow write: if isStaffAllowed('mealLibrary', 'edit');
     }
     match /menuWeeks/{weekStart} {
       allow read: if true;
-      allow write: if isStaffAllowed('manageMenu');
+      allow write: if isStaffAllowed('menuPlanner', 'edit');
     }
     match /menuDefaults/{docId} {
       allow read: if true;
-      allow write: if isStaffAllowed('manageMenu');
+      allow write: if isStaffAllowed('menuPlanner', 'edit');
     }
     match /mealBases/{docId} {
       allow read: if true;
-      allow write: if isStaffAllowed('manageMenu');
+      allow write: if isStaffAllowed('mealLibrary', 'edit');
     }
     match /mealDhals/{docId} {
       allow read: if true;
-      allow write: if isStaffAllowed('manageMenu');
+      allow write: if isStaffAllowed('mealLibrary', 'edit');
     }
     match /mealSalads/{docId} {
       allow read: if true;
-      allow write: if isStaffAllowed('manageMenu');
+      allow write: if isStaffAllowed('mealLibrary', 'edit');
     }
     match /mealBeverages/{docId} {
       allow read: if true;
-      allow write: if isStaffAllowed('manageMenu');
+      allow write: if isStaffAllowed('mealLibrary', 'edit');
     }
     match /mealDesserts/{docId} {
       allow read: if true;
-      allow write: if isStaffAllowed('manageMenu');
+      allow write: if isStaffAllowed('mealLibrary', 'edit');
     }
     match /iconLibrary/{docId} {
       allow read: if isActiveStaff(); // admin-only picker content, not customer-facing
-      allow write: if isStaffAllowed('manageMenu');
+      allow write: if isStaffAllowed('iconLibrary', 'edit');
     }
 
-    // ---- Config (manageConfig) ----
+    // ---- Config ----
     match /config/{docId} {
       allow read: if true; // customers need cutoff/delivery-window/branding copy
-      allow write: if isStaffAllowed('manageConfig');
+      allow write: if isStaffAllowed('generalConfig', 'edit');
     }
     match /loyaltyTiers/{docId} {
       allow read: if true; // Customer App shows tier perks
-      allow write: if isStaffAllowed('manageConfig');
+      allow write: if isStaffAllowed('loyaltyTiers', 'edit');
     }
     match /customerGroups/{docId} {
       allow read: if isActiveStaff(); // internal segmentation, not customer-facing
-      allow write: if isStaffAllowed('manageConfig');
+      allow write: if isStaffAllowed('customerGroups', 'edit');
     }
     match /entities/{entityId} {
       allow read: if isActiveStaff();
-      allow write: if isStaffAllowed('manageConfig');
+      allow write: if isStaffAllowed('tradingEntities', 'edit');
     }
 
     // ---- orders/{orderId} and its items subcollection (manageOrders) ----
@@ -202,49 +205,53 @@ service cloud.firestore {
     // (a client could submit any total/price it wanted) — closed 2026-08-13
     // once confirmCheckout existed to do that job properly instead.
     match /orders/{orderId} {
-      allow read: if isCustomer(resource.data.customerId) || isStaffAllowed('manageOrders');
+      allow read: if isCustomer(resource.data.customerId)
+        || isStaffAllowed('ordersByDish', 'view')
+        || isStaffAllowed('deliveryList', 'view')
+        || isStaffAllowed('payments', 'view');
       allow create: if false; // Cloud Function only — see confirmCheckout
       allow update, delete: if false;
     }
 
     // items lives as a subcollection of orders/{orderId}, but is matched
     // here at the TOP LEVEL with {path=**} rather than nested inside the
-    // orders/{orderId} match above. Found live 2026-08-13: a nested rule
-    // (match /orders/{orderId} { match /items/{itemId} {...} } }) only
-    // covers direct, single-document access where orderId is already
-    // known — it does NOT apply to a COLLECTION GROUP query (the Customer
-    // App's real order-history listener queries every order's items at
-    // once via collectionGroup('items'), without knowing orderIds up
-    // front, precisely so a new order's items show up without a
-    // per-order listener). A collection-group `list` request instead fell
-    // through to the deny-everything catch-all at the bottom of this file
-    // — the real error was "FirebaseError: false for 'list' @ [the
-    // catch-all's line]", even though this exact rule (just nested) looked
-    // correct on paper. Writing it with {path=**} at the top level covers
-    // BOTH the collection-group query and ordinary direct get/update
-    // access to a single item — this is Firestore's documented pattern
-    // for rules meant to apply across a whole collection group.
+    // orders/{orderId} match above.
     match /{path=**}/items/{itemId} {
-      allow read: if isCustomer(resource.data.customerId) || isStaffAllowed('manageOrders');
+      allow read: if isCustomer(resource.data.customerId)
+        || isStaffAllowed('ordersByDish', 'view')
+        || isStaffAllowed('deliveryList', 'view')
+        || isStaffAllowed('payments', 'view');
       allow create: if false; // Cloud Function only — see confirmCheckout
-      // Staff may update status/paymentStatus fields (mark delivered /
-      // mark paid) — never price/qty/name, and never from the customer.
-      //
-      // A customer may ALSO update their own still-unpaid item, but only to
-      // claim how they intend to pay — the Customer App's "Pay"/"Pay
-      // order"/"Pay balance" buttons (2026-08-13), which set ONLY
-      // paymentMethodName/paymentReference. paymentStatus itself, and every
-      // other field, must stay exactly as it was: a claim is never a
-      // confirmation — only Operations' own Mark Paid (the isStaffAllowed
-      // clause above) can ever flip paymentStatus to 'Paid'. The
-      // `resource.data.paymentStatus != 'Paid'` guard additionally blocks a
-      // customer from touching an item Operations has already confirmed.
-      allow update: if (isStaffAllowed('manageOrders')
+      allow update: if (
+          // 1. Staff update
+          (
+            (
+              // Payment edit
+              (request.resource.data.paymentStatus != resource.data.paymentStatus
+               || request.resource.data.get('paymentMethodName', null) != resource.data.get('paymentMethodName', null)
+               || request.resource.data.get('paymentReference', null) != resource.data.get('paymentReference', null))
+              && isStaffAllowed('payments', 'edit')
+              && request.resource.data.status == resource.data.status
+            ) || (
+              // Status edit: Cooking/Dispatch/Deliver
+              request.resource.data.status != resource.data.status
+              && (
+                (request.resource.data.status == 'Preparing' || request.resource.data.status == 'Active')
+                  ? isStaffAllowed('ordersByDish', 'edit')
+                  : isStaffAllowed('deliveryList', 'edit')
+              )
+              && request.resource.data.paymentStatus == resource.data.paymentStatus
+              && request.resource.data.get('paymentMethodName', null) == resource.data.get('paymentMethodName', null)
+              && request.resource.data.get('paymentReference', null) == resource.data.get('paymentReference', null)
+            )
+          )
           && request.resource.data.price == resource.data.price
           && request.resource.data.qty == resource.data.qty
           && request.resource.data.name == resource.data.name
-          && request.resource.data.customerId == resource.data.customerId)
-        || (isCustomer(resource.data.customerId)
+          && request.resource.data.customerId == resource.data.customerId
+        ) || (
+          // 2. Customer update (pay claim)
+          isCustomer(resource.data.customerId)
           && request.resource.data.paymentStatus == resource.data.paymentStatus
           && request.resource.data.price == resource.data.price
           && request.resource.data.qty == resource.data.qty
@@ -258,7 +265,8 @@ service cloud.firestore {
           && request.resource.data.get('notes', null) == resource.data.get('notes', null)
           && (resource.data.paymentStatus != 'Paid'
               || (request.resource.data.get('paymentMethodName', null) == resource.data.get('paymentMethodName', null)
-                  && request.resource.data.get('paymentReference', null) == resource.data.get('paymentReference', null))));
+                  && request.resource.data.get('paymentReference', null) == resource.data.get('paymentReference', null)))
+        );
       allow delete: if false;
     }
 

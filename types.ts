@@ -197,17 +197,32 @@ export interface Order {
   entityLogoStoragePath?: string;
 }
 
+export interface PermissionPair {
+  view: boolean;
+  edit: boolean;
+}
+
+export interface RolePermissions {
+  menuPlanner: PermissionPair;
+  mealLibrary: PermissionPair;
+  ordersByDish: PermissionPair;
+  deliveryList: PermissionPair;
+  payments: PermissionPair;
+  customerDirectory: PermissionPair;
+  pendingRegistrations: PermissionPair;
+  transactionsLedger: { view: boolean };
+  generalConfig: PermissionPair;
+  loyaltyTiers: PermissionPair;
+  customerGroups: PermissionPair;
+  iconLibrary: PermissionPair;
+  rolesAndStaff: PermissionPair;
+  tradingEntities: PermissionPair;
+}
+
 export interface Role {
   id: string;
   name: string;
-  permissions: {
-    manageMenu: boolean;
-    manageOrders: boolean;
-    manageCustomers: boolean;
-    manageConfig: boolean;
-    manageRoles: boolean;
-    manageRegistrations: boolean;
-  };
+  permissions: Partial<RolePermissions>;
   createdAt: any;
   updatedAt: any;
 }

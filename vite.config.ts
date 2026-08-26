@@ -24,7 +24,17 @@ export default defineConfig(({ mode }) => {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
       },
+      optimizeDeps: {
+        include: [
+          'firebase/app',
+          'firebase/auth',
+          'firebase/firestore',
+          'firebase/functions',
+          'firebase/storage'
+        ]
+      },
       resolve: {
+        dedupe: ['firebase'],
         alias: {
           '@': path.resolve(__dirname, '.'),
         }

@@ -407,6 +407,34 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // e.g. saveMainEditor closes the modal immediately) — a failure surfaces
   // via the banner a moment later instead of blocking the UI on the write.
   const runMenuWrite = (write: Promise<unknown>) => {
+    let allowed = false;
+    if (tab === 'menu') {
+      allowed = currentPermissions?.menuPlanner?.edit === true;
+    } else if (tab === 'library') {
+      allowed = currentPermissions?.mealLibrary?.edit === true;
+    } else if (tab === 'settings') {
+      if (settingsSubTab === 'identity' || settingsSubTab === 'delivery' || settingsSubTab === 'tax') {
+        allowed = currentPermissions?.generalConfig?.edit === true;
+      } else if (settingsSubTab === 'loyalty') {
+        allowed = currentPermissions?.loyaltyTiers?.edit === true;
+      } else if (settingsSubTab === 'groups') {
+        allowed = currentPermissions?.customerGroups?.edit === true;
+      } else if (settingsSubTab === 'icons') {
+        allowed = currentPermissions?.iconLibrary?.edit === true;
+      } else if (settingsSubTab === 'rolesAndStaff') {
+        allowed = currentPermissions?.rolesAndStaff?.edit === true;
+      } else if (settingsSubTab === 'tradingEntities') {
+        allowed = currentPermissions?.tradingEntities?.edit === true;
+      }
+    } else {
+      allowed = true;
+    }
+
+    if (!allowed) {
+      setOpsActionError('Access Denied: You do not have permission to modify this data.');
+      return;
+    }
+
     setOpsActionError(null);
     write.catch(err => {
       setOpsActionError(err instanceof Error ? err.message : 'That change failed to save — please try again.');
@@ -1119,6 +1147,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const handleSaveCustomer = async () => {
     if (!editCustomer) return;
+    if (currentPermissions?.customerDirectory?.edit !== true) {
+      setNotification({
+        title: 'Access Denied',
+        message: 'You do not have permission to modify customer records.',
+        type: 'error'
+      });
+      return;
+    }
     try {
       const docRef = doc(db, 'customers', editCustomer.id);
       
@@ -1484,6 +1520,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // needed (unlike checkout, nothing about "was this delivered" needs
   // server-computed integrity).
   const handleMarkDelivered = async (drop: DropTask) => {
+    if (currentPermissions?.deliveryList?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to mark orders delivered.');
+      return;
+    }
     const targets = drop.items.filter(i => !!i._fsItemId);
     if (targets.length === 0) {
       setOpsActionError('Could not mark this delivered — no Firestore item ids found on this order. Try refreshing.');
@@ -1507,6 +1547,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const handleStartCooking = async (dateStr: string, serviceSlot: 'Lunch' | 'Dinner') => {
+    if (currentPermissions?.ordersByDish?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to start cooking.');
+      return;
+    }
     const targets: { orderId: string; itemId: string }[] = [];
     lines.forEach(({ order, item }) => {
       if (item.deliveryDate === dateStr) {
@@ -1537,6 +1581,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const handleDispatchDrop = async (drop: DropTask) => {
+    if (currentPermissions?.ordersByDish?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to dispatch orders.');
+      return;
+    }
     const targets = drop.items.filter(i => !!i._fsItemId && (i.status === 'Active' || i.status === 'Preparing' || !i.status));
     if (targets.length === 0) {
       setOpsActionError('Could not dispatch — no eligible items found to dispatch. Try refreshing.');
@@ -1568,6 +1616,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // fires, so once these item writes land, the derived order flips to Paid
   // on its own.
   const markPaid = async (drop: DropTask, method: PaymentMethod) => {
+    if (currentPermissions?.payments?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to mark payments paid.');
+      setPaymentDrop(null);
+      return;
+    }
     const targets = drop.items.filter(i => !!i._fsItemId);
     if (targets.length === 0) {
       setOpsActionError('Could not mark this paid — no Firestore item ids found on this order. Try refreshing.');
@@ -2349,32 +2402,38 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
             <h2 className="text-base font-black text-slate-900">{weekLabel}'s Curry Menu — {service}</h2>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => { setReusePickerFor(reusePickerFor === service ? null : service); setReuseWeekIndex(0); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
-              >
-                <History className="size-3.5" /> Reuse a previous week
-              </button>
-              <button
-                type="button"
-                onClick={() => syncWeekWithLibrary(service)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
-              >
-                <RefreshCw className="size-3.5" /> Sync with Library
-              </button>
+              {currentPermissions?.menuPlanner?.edit === true && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => { setReusePickerFor(reusePickerFor === service ? null : service); setReuseWeekIndex(0); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    <History className="size-3.5" /> Reuse a previous week
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => syncWeekWithLibrary(service)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className="size-3.5" /> Sync with Library
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => exportMenuCSV(service, activeMenuWeekStart)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
               >
                 <Download className="size-3.5" /> Export CSV
               </button>
-              <button
-                onClick={() => { setCsvImportTarget(service); setCsvError(''); csvFileInputRef.current?.click(); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
-              >
-                <Upload className="size-3.5" /> Import CSV
-              </button>
+              {currentPermissions?.menuPlanner?.edit === true && (
+                <button
+                  onClick={() => { setCsvImportTarget(service); setCsvError(''); csvFileInputRef.current?.click(); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
+                >
+                  <Upload className="size-3.5" /> Import CSV
+                </button>
+              )}
             </div>
           </div>
 
@@ -2553,22 +2612,28 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           )}
                         </div>
                         <span className="text-[10px] font-black text-slate-400 shrink-0">{formatCurrency(c.price)}</span>
-                        <button onClick={() => startEditDaySlot(d.key, service, activeMenuWeekStart, c)} className="p-1 text-slate-300 hover:text-primary shrink-0">
-                          <Edit3 className="size-3.5" />
-                        </button>
-                        <button onClick={() => handleRemoveDish(d.key, service, activeMenuWeekStart, c.id)} className="p-1 text-slate-300 hover:text-red-500 shrink-0">
-                          <Trash2 className="size-3.5" />
-                        </button>
+                        {currentPermissions?.menuPlanner?.edit === true && (
+                          <>
+                            <button onClick={() => startEditDaySlot(d.key, service, activeMenuWeekStart, c)} className="p-1 text-slate-300 hover:text-primary shrink-0">
+                              <Edit3 className="size-3.5" />
+                            </button>
+                            <button onClick={() => handleRemoveDish(d.key, service, activeMenuWeekStart, c.id)} className="p-1 text-slate-300 hover:text-red-500 shrink-0">
+                              <Trash2 className="size-3.5" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     );
                   })}
 
-                  <button
-                    onClick={() => openMainPicker(d.key, service, activeMenuWeekStart)}
-                    className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border-2 border-dashed border-slate-200 text-slate-400 hover:border-primary/40 hover:text-primary text-[11px] font-bold transition-colors"
-                  >
-                    <Plus className="size-3.5" /> Add dish
-                  </button>
+                  {currentPermissions?.menuPlanner?.edit === true && (
+                    <button
+                      onClick={() => openMainPicker(d.key, service, activeMenuWeekStart)}
+                      className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border-2 border-dashed border-slate-200 text-slate-400 hover:border-primary/40 hover:text-primary text-[11px] font-bold transition-colors"
+                    >
+                      <Plus className="size-3.5" /> Add dish
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -2801,7 +2866,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             <th className="px-6 py-3">Option Name</th>
                             {meta.hasGroup && <th className="px-6 py-3 w-28">Group</th>}
                             {meta.hasPrice && <th className="px-6 py-3 text-right w-28">Upcharge (Rs)</th>}
-                            <th className="px-6 py-3 text-center w-28">Actions</th>
+                            {currentPermissions?.mealLibrary?.edit === true && (
+                              <th className="px-6 py-3 text-center w-28">Actions</th>
+                            )}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[#E7E0D0] font-semibold text-slate-700">
@@ -2866,12 +2933,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                     {formatCurrency(item.price ?? item.up ?? 0)}
                                   </td>
                                 )}
-                                <td className="px-6 py-4 text-center">
-                                  <div className="flex items-center justify-center gap-1.5 font-normal">
-                                    <button onClick={() => startEditAddOn(key, item)} className="p-1.5 text-primary hover:bg-[#FAF9F5] rounded-lg transition-all cursor-pointer"><Edit3 className="size-3.5" /></button>
-                                    <button onClick={() => runMenuWrite(meta.remove(item.id))} className="p-1.5 text-danger hover:bg-danger/5 rounded-lg transition-all cursor-pointer"><Trash2 className="size-3.5" /></button>
-                                  </div>
-                                </td>
+                                {currentPermissions?.mealLibrary?.edit === true && (
+                                  <td className="px-6 py-4 text-center">
+                                    <div className="flex items-center justify-center gap-1.5 font-normal">
+                                      <button onClick={() => startEditAddOn(key, item)} className="p-1.5 text-primary hover:bg-[#FAF9F5] rounded-lg transition-all cursor-pointer"><Edit3 className="size-3.5" /></button>
+                                      <button onClick={() => runMenuWrite(meta.remove(item.id))} className="p-1.5 text-danger hover:bg-danger/5 rounded-lg transition-all cursor-pointer"><Trash2 className="size-3.5" /></button>
+                                    </div>
+                                  </td>
+                                )}
                               </tr>
                             );
                           })}
@@ -2883,46 +2952,48 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   )}
 
                   {/* Add New Option Form Row */}
-                  <div className="p-4 bg-[#FAF9F5] rounded-2xl border border-[#E7E0D0] space-y-3">
-                    <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest pb-1 border-b border-[#E7E0D0]">Add New {meta.label}</p>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <IconPickerButton
-                        value={draft.emoji}
-                        onChange={emoji => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], emoji } }))}
-                        className="w-10 h-9 flex items-center justify-center text-sm rounded-lg border border-slate-200 bg-white hover:border-primary/40 transition-colors cursor-pointer shrink-0"
-                      />
-                      <input
-                        value={draft.name}
-                        onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], name: e.target.value } }))}
-                        placeholder={`New ${meta.label.toLowerCase()} name`}
-                        className="flex-1 min-w-[150px] text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
-                      />
-                      {meta.hasGroup && (
-                        <input
-                          value={draft.group}
-                          onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], group: e.target.value } }))}
-                          placeholder="Group (e.g. Rice)"
-                          className="w-24 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                  {currentPermissions?.mealLibrary?.edit === true && (
+                    <div className="p-4 bg-[#FAF9F5] rounded-2xl border border-[#E7E0D0] space-y-3">
+                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest pb-1 border-b border-[#E7E0D0]">Add New {meta.label}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <IconPickerButton
+                          value={draft.emoji}
+                          onChange={emoji => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], emoji } }))}
+                          className="w-10 h-9 flex items-center justify-center text-sm rounded-lg border border-slate-200 bg-white hover:border-primary/40 transition-colors cursor-pointer shrink-0"
                         />
-                      )}
-                      {meta.hasPrice && (
                         <input
-                          type="number"
-                          value={draft.price}
-                          onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], price: e.target.value } }))}
-                          placeholder="Upcharge"
-                          className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                          value={draft.name}
+                          onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], name: e.target.value } }))}
+                          placeholder={`New ${meta.label.toLowerCase()} name`}
+                          className="flex-1 min-w-[150px] text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
                         />
-                      )}
-                      <button
-                        onClick={() => saveNewAddOn(key)}
-                        disabled={!draft.name.trim()}
-                        className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white hover:bg-primary/95 disabled:opacity-40 rounded-xl text-xs font-black uppercase tracking-widest transition-colors cursor-pointer shrink-0"
-                      >
-                        <Plus className="size-4 shrink-0" /> Add {meta.label}
-                      </button>
+                        {meta.hasGroup && (
+                          <input
+                            value={draft.group}
+                            onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], group: e.target.value } }))}
+                            placeholder="Group (e.g. Rice)"
+                            className="w-24 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                          />
+                        )}
+                        {meta.hasPrice && (
+                          <input
+                            type="number"
+                            value={draft.price}
+                            onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], price: e.target.value } }))}
+                            placeholder="Upcharge"
+                            className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                          />
+                        )}
+                        <button
+                          onClick={() => saveNewAddOn(key)}
+                          disabled={!draft.name.trim()}
+                          className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white hover:bg-primary/95 disabled:opacity-40 rounded-xl text-xs font-black uppercase tracking-widest transition-colors cursor-pointer shrink-0"
+                        >
+                          <Plus className="size-4 shrink-0" /> Add {meta.label}
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               );
             })}
@@ -2946,14 +3017,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 Define each Main once — its base, dhal, salad, beverage & dessert options, general selling price, and cost. The Menu Planner picks Mains from here into each day.
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={startAddMain}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black bg-primary text-white hover:bg-primary/90 transition-colors shadow-sm"
-              >
-                <Plus className="size-4" /> Add Main
-              </button>
-            </div>
+            {currentPermissions?.mealLibrary?.edit === true && (
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={startAddMain}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black bg-primary text-white hover:bg-primary/90 transition-colors shadow-sm"
+                >
+                  <Plus className="size-4" /> Add Main
+                </button>
+              </div>
+            )}
           </div>
 
           {mainDishes.length === 0 ? (
@@ -2978,10 +3051,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         <p className="text-sm font-bold text-slate-800 truncate">{m.emoji} {m.name}</p>
                         <p className="text-[11px] text-slate-400 truncate">{m.desc}</p>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button onClick={() => startEditMain(m)} className="p-1.5 text-slate-300 hover:text-primary"><Edit3 className="size-3.5" /></button>
-                        <button onClick={() => runMenuWrite(removeMainDish(m.id))} className="p-1.5 text-slate-300 hover:text-red-500"><Trash2 className="size-3.5" /></button>
-                      </div>
+                      {currentPermissions?.mealLibrary?.edit === true && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button onClick={() => startEditMain(m)} className="p-1.5 text-slate-300 hover:text-primary"><Edit3 className="size-3.5" /></button>
+                          <button onClick={() => runMenuWrite(removeMainDish(m.id))} className="p-1.5 text-slate-300 hover:text-red-500"><Trash2 className="size-3.5" /></button>
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 mt-3 flex-wrap">
                       <span className="text-xs font-black text-slate-700">{formatCurrency(m.price)}</span>
@@ -3187,6 +3262,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const handleSaveLoyaltyTiers = async () => {
+    if (currentPermissions?.loyaltyTiers?.edit !== true) {
+      setNotification({
+        title: 'Access Denied',
+        message: 'You do not have permission to modify loyalty tiers.',
+        type: 'error'
+      });
+      return;
+    }
     try {
       await updateLoyaltyTiers(loyaltyTiersForm);
       setNotification({
@@ -3211,10 +3294,23 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const saveGroupEdit = async () => {
     if (!groupForm.name.trim()) return;
+    if (currentPermissions?.customerGroups?.edit !== true) {
+      setNotification({
+        title: 'Access Denied',
+        message: 'You do not have permission to modify customer groups.',
+        type: 'error'
+      });
+      return;
+    }
     try {
       const updated = customerGroups.map(g => g.id === editingGroupId ? { ...g, ...groupForm } : g);
       await updateCustomerGroups(updated);
       setEditingGroupId(null);
+      setNotification({
+        title: 'Group Saved',
+        message: 'Customer group updated successfully.',
+        type: 'success'
+      });
     } catch (err) {
       console.error('Failed to update group', err);
       setNotification({
@@ -3227,9 +3323,23 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const executeDeleteGroup = async () => {
     if (!deleteGroupConfirmId) return;
+    if (currentPermissions?.customerGroups?.edit !== true) {
+      setNotification({
+        title: 'Access Denied',
+        message: 'You do not have permission to modify customer groups.',
+        type: 'error'
+      });
+      setDeleteGroupConfirmId(null);
+      return;
+    }
     try {
       await deleteCustomerGroup(deleteGroupConfirmId);
       setDeleteGroupConfirmId(null);
+      setNotification({
+        title: 'Group Deleted',
+        message: 'Customer group was deleted successfully.',
+        type: 'success'
+      });
     } catch (err) {
       console.error('Failed to delete group', err);
       setDeleteGroupConfirmId(null);
@@ -3243,6 +3353,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const handleAddNewGroup = async () => {
     if (!newGroupForm.name.trim()) return;
+    if (currentPermissions?.customerGroups?.edit !== true) {
+      setNotification({
+        title: 'Access Denied',
+        message: 'You do not have permission to modify customer groups.',
+        type: 'error'
+      });
+      return;
+    }
     try {
       const newGroup: CustomerGroup = {
         id: `g-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
@@ -4739,12 +4857,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <h3 className="text-base font-black text-slate-900">Trading Entities</h3>
                   <p className="text-xs text-slate-400 font-medium mt-0.5">Legal trading entities. Each entity's name/BRN/VAT/bank reference is snapshotted onto orders at checkout.</p>
                 </div>
-                <button
-                  onClick={() => { setEditingEntityId(null); setEntityForm({ name: '', brn: '', vatNumber: '', bankReference: '' }); setEntityLogoFile(null); setShowAddEntityModal(true); }}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors"
-                >
-                  <Plus className="size-3.5" /> Add Entity
-                </button>
+                {currentPermissions?.tradingEntities?.edit === true && (
+                  <button
+                    onClick={() => { setEditingEntityId(null); setEntityForm({ name: '', brn: '', vatNumber: '', bankReference: '' }); setEntityLogoFile(null); setShowAddEntityModal(true); }}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors"
+                  >
+                    <Plus className="size-3.5" /> Add Entity
+                  </button>
+                )}
               </div>
               <div className="space-y-3">
                 {entities.map(entity => (
@@ -4754,17 +4874,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <p className="text-xs text-slate-400 font-medium">BRN: {entity.brn} · VAT: {entity.vatNumber}</p>
                       <p className="text-[10px] text-slate-300 font-medium">Bank ref: {entity.bankReference}</p>
                     </div>
-                    <button
-                      onClick={() => {
-                        setEditingEntityId(entity.id);
-                        setEntityForm({ name: entity.name, brn: entity.brn, vatNumber: entity.vatNumber, bankReference: entity.bankReference });
-                        setEntityLogoFile(null);
-                        setShowAddEntityModal(true);
-                      }}
-                      className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors"
-                    >
-                      <Edit3 className="size-4" />
-                    </button>
+                    {currentPermissions?.tradingEntities?.edit === true && (
+                      <button
+                        onClick={() => {
+                          setEditingEntityId(entity.id);
+                          setEntityForm({ name: entity.name, brn: entity.brn, vatNumber: entity.vatNumber, bankReference: entity.bankReference });
+                          setEntityLogoFile(null);
+                          setShowAddEntityModal(true);
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors"
+                      >
+                        <Edit3 className="size-4" />
+                      </button>
+                    )}
                   </div>
                 ))}
                 {entities.length === 0 && (
@@ -4926,6 +5048,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   }
 
   const handleApprove = async (customerId: string) => {
+    if (currentPermissions?.pendingRegistrations?.edit !== true) {
+      setNotification({ type: 'error', title: 'Access Denied', message: 'You do not have permission to approve registrations.' });
+      return;
+    }
     const entId = selectedEntities[customerId] || 'entity-a';
     const cust = customers.find(c => c.id === customerId);
     try {
@@ -4948,6 +5074,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const handleReject = async (customerId: string) => {
+    if (currentPermissions?.pendingRegistrations?.edit !== true) {
+      setNotification({ type: 'error', title: 'Access Denied', message: 'You do not have permission to reject registrations.' });
+      return;
+    }
     const reason = rejectionReasons[customerId] || '';
     if (!reason.trim()) {
       setNotification({ type: 'error', title: 'Input Required', message: 'Please provide a rejection reason.' });
@@ -5443,7 +5573,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 <button
                                   type="button"
                                   onClick={() => handleStartCooking(d.date, 'Lunch')}
-                                  disabled={isLunchCookingPending}
+                                  disabled={isLunchCookingPending || currentPermissions?.ordersByDish?.edit !== true}
                                   className="px-3 py-1 bg-primary text-white rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1 hover:bg-primary/95 active:scale-95 transition-all disabled:opacity-60 cursor-pointer"
                                 >
                                   {isLunchCookingPending ? <Loader2 className="size-3 animate-spin" /> : <ChefHat className="size-3" />}
@@ -5491,7 +5621,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 <button
                                   type="button"
                                   onClick={() => handleStartCooking(d.date, 'Dinner')}
-                                  disabled={isDinnerCookingPending}
+                                  disabled={isDinnerCookingPending || currentPermissions?.ordersByDish?.edit !== true}
                                   className="px-3 py-1 bg-accent text-white rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1 hover:bg-accent/95 active:scale-95 transition-all disabled:opacity-60 cursor-pointer"
                                 >
                                   {isDinnerCookingPending ? <Loader2 className="size-3 animate-spin" /> : <ChefHat className="size-3" />}
@@ -5680,7 +5810,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             >
                               <Printer className="size-4" /> Print
                             </button>
-                            {canDispatch && (
+                            {canDispatch && currentPermissions?.ordersByDish?.edit === true && (
                               <button
                                 type="button"
                                 onClick={() => handleDispatchDrop(drop)}
@@ -5699,7 +5829,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             <button
                               type="button"
                               onClick={() => handleMarkDelivered(drop)}
-                              disabled={pendingDeliveryKey === drop.key}
+                              disabled={pendingDeliveryKey === drop.key || currentPermissions?.deliveryList?.edit !== true}
                               className="px-6 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
                             >
                               {pendingDeliveryKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
@@ -6030,7 +6160,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       </main>
 
       {/* Dirty state floating save/discard bar */}
-      {isSettingsDirty && (
+      {isSettingsDirty && currentPermissions?.generalConfig?.edit === true && (
         <div className="fixed bottom-6 right-6 left-72 bg-slate-900/95 backdrop-blur text-white px-6 py-4 rounded-2xl flex items-center justify-between shadow-2xl z-30 border border-slate-800 animate-slide-up">
           <div className="flex items-center gap-2 text-xs font-medium text-slate-300">
             <span className="inline-block size-2 rounded-full bg-yellow-500 animate-pulse shrink-0" />
@@ -6083,7 +6213,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   return (
                     <button
                       key={m.id}
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || currentPermissions?.payments?.edit !== true}
                       onClick={() => {
                         if (isConfirming) {
                           markPaid(paymentDrop, m);

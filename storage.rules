@@ -39,27 +39,24 @@ service firebase.storage {
         && staffDoc().data.active == true;
     }
 
-    function isStaffAllowed(permissionKey) {
+    function isStaffAllowed(groupName, permissionType) {
       return isActiveStaff()
         && firestore.get(/databases/(default)/documents/roles/$(staffDoc().data.roleId))
-             .data.permissions.get(permissionKey, false) == true;
+             .data.get('permissions', {}).get(groupName, {}).get(permissionType, false) == true;
     }
 
     // Dish/Main photos — public read (the Customer App needs to display
-    // them), manageMenu-gated write, same access shape as mains/{mainId} in
-    // Firestore. Path convention: dishPhotos/mains/{mainId} for a Meal
-    // Library Main's photo, dishPhotos/days/{dishId} for a day-slot dish's
-    // own photo when it isn't just inheriting its linked Main's.
+    // them), mealLibrary edit-gated write.
     match /dishPhotos/{allPaths=**} {
       allow read: if true;
-      allow write: if isStaffAllowed('manageMenu');
+      allow write: if isStaffAllowed('mealLibrary', 'edit');
     }
 
     // Entity logos — public read (the receipt page needs to render them),
-    // manageConfig-gated write.
+    // tradingEntities edit-gated write.
     match /entities/{entityId}/{allPaths=**} {
       allow read: if true;
-      allow write: if isStaffAllowed('manageConfig');
+      allow write: if isStaffAllowed('tradingEntities', 'edit');
     }
 
     // Everything else stays locked down by default.

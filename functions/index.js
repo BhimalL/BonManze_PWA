@@ -997,7 +997,8 @@ export const createStaffMember = onCall(async (request) => {
   }
 
   const roleSnap = await db.collection('roles').doc(roleId).get();
-  if (!roleSnap.exists || roleSnap.data().permissions.manageRoles !== true) {
+  const permissions = roleSnap.exists ? (roleSnap.data().permissions || {}) : {};
+  if (!roleSnap.exists || !permissions.rolesAndStaff || permissions.rolesAndStaff.edit !== true) {
     throw new HttpsError('permission-denied', 'You do not have permission to manage staff.');
   }
 
