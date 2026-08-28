@@ -99,7 +99,6 @@ async function run() {
   }
 
   const ownerPermissions = {
-    dashboard: { view: true },
     menuPlanner: { view: true, edit: true },
     mealLibrary: { view: true, edit: true },
     ordersByDish: { view: true, edit: true },
@@ -107,7 +106,7 @@ async function run() {
     payments: { view: true, edit: true },
     customerDirectory: { view: true, edit: true },
     pendingRegistrations: { view: true, edit: true },
-    transactions: { view: true },
+    transactionsLedger: { view: true },
     generalConfig: { view: true, edit: true },
     loyaltyTiers: { view: true, edit: true },
     customerGroups: { view: true, edit: true },
