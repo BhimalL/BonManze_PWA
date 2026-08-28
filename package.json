@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "emulators": "git pull && firebase emulators:start --export-on-exit=\"%LOCALAPPDATA%\\BonManzE\\emulator-data\" --import=\"%LOCALAPPDATA%\\BonManzE\\emulator-data\"",
+    "emulators": "git pull && firebase emulators:start --export-on-exit=\"firebase-export-178774160237069AG6N\" --import=\"firebase-export-178774160237069AG6N\"",
     "emulators:reseed": "firebase emulators:start --export-on-exit=emulator-data --import=\"%INIT_CWD%\\firebase-export-1786692159683vA0G8H\""
   },
   "dependencies": {
@@ -19,6 +19,7 @@
     "recharts": "^3.6.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "firebase-admin": "^14.2.0",
