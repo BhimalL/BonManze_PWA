@@ -973,4 +973,5 @@ Antigravity as of this write-up.
 - **Persistent Emulator Path** — Corrected both workspaces `package.json` emulators run scripts to import/export directly from the local `firebase-export-178774160237069AG6N` directory (which holds all seeded Owner, CRM, and customer data) instead of using a non-existent `%LOCALAPPDATA%` path.
 - **Storage Rules Null-Safety** — Ported `exists` and `in` operator guards to `storage.rules`' `isStaffAllowed()` function to prevent CEL engine crashes when looking up absent keys on highly restricted roles.
 - **Documentation Guide** — Extracted walkthrough steps into a dedicated manual QA checklist in `docs/BonManzE_SettingsRolesEntities_Scope.md` and deleted the untracked Playwright browser automation script.
+- **Idempotency & Layout Fixes** — Fixed `testSettingsRBAC.js` role and entity fixtures to use fixed, deterministic document IDs and pre-test teardown queries to prevent database document clutter. Moved the permission list header inside the scrollable container and added horizontal padding to align with checkboxes.
 

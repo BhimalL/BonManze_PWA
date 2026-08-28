@@ -220,7 +220,7 @@ async function run() {
   });
 
   // 8. Entity write by manageConfig staff
-  const testEntityRef = doc(collection(db, 'entities'));
+  const testEntityRef = doc(db, 'entities', 'test-entity-rbac');
   await assert('[8] manageConfig staff can write entities', async () => {
     await setDoc(testEntityRef, {
       name: 'RBAC Test Entity',
