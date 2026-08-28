@@ -33,6 +33,16 @@ adminInitializeApp({ projectId: 'demo-bonmanze' });
 const aauth = adminGetAuth();
 const adb = adminGetFirestore();
 
+async function teardownUserByEmail(email) {
+  try {
+    const user = await aauth.getUserByEmail(email);
+    await adb.collection('staff').doc(user.uid).delete();
+    await aauth.deleteUser(user.uid);
+  } catch (e) {
+    // Not found, ignore
+  }
+}
+
 let passed = 0;
 let failed = 0;
 
@@ -121,7 +131,7 @@ async function run() {
   await signInAs(OWNER_EMAIL, OWNER_PASS);
 
   // 1. Role create
-  const testRoleRef = doc(collection(db, 'roles'));
+  const testRoleRef = doc(db, 'roles', 'test-role-rbac');
   await assert('[1] manageRoles staff can create a role', async () => {
     await setDoc(testRoleRef, {
       name: 'Test Role',
@@ -162,7 +172,8 @@ async function run() {
 
   // 4. Cross-staff creation via createStaffMember Cloud Function and verify
   let staffBId;
-  const staffBEmail = "staffb_" + Date.now() + "@bonmanze.com";
+  const staffBEmail = "staffb@bonmanze.com";
+  await teardownUserByEmail(staffBEmail);
   await assert('[4] manageRoles can create another staff via Cloud Function', async () => {
     const fn = httpsCallable(functions, 'createStaffMember');
     const res = await fn({
@@ -224,12 +235,13 @@ async function run() {
   });
 
   // 9. Entity write by non-manageConfig staff
-  let noConfigEmail = "noconfig_" + Date.now() + "@bonmanze.com";
+  let noConfigEmail = "noconfig@bonmanze.com";
+  await teardownUserByEmail(noConfigEmail);
   let noConfigUid;
   try {
     // create a non-admin role & staff
     const fn = httpsCallable(functions, 'createStaffMember');
-    const newRoleRef = doc(collection(db, 'roles'));
+    const newRoleRef = doc(db, 'roles', 'test-role-orders-only');
     await setDoc(newRoleRef, {
       name: 'Orders Only',
       permissions: {
@@ -320,8 +332,8 @@ async function run() {
       serviceSlot: 'Lunch'
     });
 
-    const ordersOnlyRoleRef = doc(collection(db, 'roles'));
-    const paymentsOnlyRoleRef = doc(collection(db, 'roles'));
+    const ordersOnlyRoleRef = doc(db, 'roles', 'test-role-orders-low');
+    const paymentsOnlyRoleRef = doc(db, 'roles', 'test-role-payments-low');
 
     await adb.collection('roles').doc(ordersOnlyRoleRef.id).set({
       name: 'Orders Only Low Priv',
@@ -339,8 +351,10 @@ async function run() {
       createdAt: new Date(), updatedAt: new Date()
     });
 
-    const ordersOnlyEmail = 'orders-only-' + Date.now() + '@bonmanze.com';
-    const paymentsOnlyEmail = 'payments-only-' + Date.now() + '@bonmanze.com';
+    const ordersOnlyEmail = 'orders-only-low@bonmanze.com';
+    const paymentsOnlyEmail = 'payments-only-low@bonmanze.com';
+    await teardownUserByEmail(ordersOnlyEmail);
+    await teardownUserByEmail(paymentsOnlyEmail);
     const fnCreate = httpsCallable(functions, 'createStaffMember');
 
     // Create staff members under Owner authority
