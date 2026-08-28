@@ -41,8 +41,11 @@ service firebase.storage {
 
     function isStaffAllowed(groupName, permissionType) {
       return isActiveStaff()
-        && firestore.get(/databases/(default)/documents/roles/$(staffDoc().data.roleId))
-             .data.get('permissions', {}).get(groupName, {}).get(permissionType, false) == true;
+        && firestore.exists(/databases/(default)/documents/roles/$(staffDoc().data.roleId))
+        && 'permissions' in firestore.get(/databases/(default)/documents/roles/$(staffDoc().data.roleId)).data
+        && groupName in firestore.get(/databases/(default)/documents/roles/$(staffDoc().data.roleId)).data.permissions
+        && permissionType in firestore.get(/databases/(default)/documents/roles/$(staffDoc().data.roleId)).data.permissions[groupName]
+        && firestore.get(/databases/(default)/documents/roles/$(staffDoc().data.roleId)).data.permissions[groupName][permissionType] == true;
     }
 
     // Dish/Main photos — public read (the Customer App needs to display
