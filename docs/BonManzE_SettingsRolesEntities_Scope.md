@@ -84,3 +84,41 @@ Antigravity reviewed §1-§4 and agreed with the assessment and the Roles & Staf
 - No self-serve staff signup — provisioning stays Bhimal-driven, consistent with Backend Requirements' existing "~10 known people" framing.
 - No change to how `staff/{uid}.roleId` resolves (already a live reference, not a copy — correct as designed, see the Meal Library Mains precedent cited in the schema doc for why).
 - No entity-awareness changes anywhere in checkout/pricing — out of scope, already settled by the Multi-Entity plan.
+
+## 8. Phase 7 — Granular Permissions UI Walkthrough Checklist
+
+Below is the manual test walkthrough checklist for verifying the UI permissions gating and Settings sub-tab redirect system:
+
+1. **Owner Sidebar Verification**:
+   - Log in as the `Owner` staff user (e.g., `bhimalonly@gmail.com`).
+   - Verify that all 10 sidebar navigation items are visible: Dashboard, Menu Planner, Meal Library, Orders by Dish, Delivery List, Payments, Customer Directory, Pending Registrations, Transactions Ledger, and Settings.
+
+2. **Owner Settings Sub-tabs Verification**:
+   - Navigate to the **Settings** tab.
+   - Verify that all 8 settings sub-tab buttons are visible at the top: Identity, Delivery & Cut-offs, Tax & Offerings, Loyalty Tiers, Customer Groups, Icon Library, Roles & Staff, and Trading Entities.
+
+3. **Gated Role Creation**:
+   - Go to Settings → **Roles & Staff**.
+   - Click **Add Role** and name it `Trading Only Test`.
+   - In the View/Edit permissions grid, check **View** for **Trading Entities** (ensure all other View and Edit checkboxes are unchecked). Save the role.
+
+4. **Gated Staff Provisioning**:
+   - In the Staff Members list, click **Add Staff Member**.
+   - Set Name to `Trading Test User`, Email to `tradingtest@bonmanze.test`, and set a temporary password.
+   - Select `Trading Only Test` from the Assign Role dropdown and create the account.
+
+5. **Gated Role Login Verification**:
+   - Log out, then log back in as the newly created `tradingtest@bonmanze.test` user.
+   - Verify that only the **Dashboard** and **Settings** sidebar navigation links are visible. All other feature tabs (Menu Planner, Meal Library, Orders, Payments, etc.) must be hidden.
+
+6. **Settings Redirect & Isolation Verification**:
+   - Click the **Settings** sidebar link.
+   - Verify that **only** the "Trading Entities" sub-tab button is visible at the top.
+   - Verify that the page lands directly on the **Trading Entities** panel content (showing the Bank Reference, BRN, VAT number, and active entity list) rather than displaying a blank Identity panel or access-denied screen.
+
+7. **Last-Admin Role Protection**:
+   - Log out and log back in as the `Owner` staff user.
+   - Go to Settings → **Roles & Staff**.
+   - Locate the `Owner` role (or any role with `Roles & Staff > Edit` enabled) and click its delete button.
+   - Verify that a **"Deletion Blocked"** notification appears and that the role is not deleted (protecting the system from locking out all admin staff).
+
