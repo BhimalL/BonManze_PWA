@@ -4717,7 +4717,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       </div>
                       <div className="space-y-2">
                         <div className="max-h-72 overflow-y-auto space-y-1 pr-1 relative">
-                          <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center sticky top-0 bg-white z-10 pb-1.5 border-b border-slate-100 mb-1">
+                          <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center sticky top-0 bg-white z-10 px-2.5 pb-1.5 border-b border-slate-100 mb-1">
                             <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Permission</p>
                             <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest w-10 text-center">View</p>
                             <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest w-10 text-center">Edit</p>
