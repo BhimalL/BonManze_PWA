@@ -934,3 +934,43 @@ Antigravity as of this write-up.
 - **CSV Alphanumeric Export Fix** — Resolved a regex character range bug inside the emoji stripper (`removeEmojis`) which stripped alphanumeric characters from the exported CSV files. Replaced it with a safe surrogate pair filter to isolate emojis from raw text.
 - **Menu Planner Sync with master Meal Library** — Implemented a `"Sync with Library"` action button on the Lunch and Dinner weekly menu schedules, which matches planned items to their Meal Library source dishes and updates changed presentation attributes (`name`, `price`, `description`, `emoji`, `photoUrl`).
 - **Styled Modals Consistency** — Completely replaced native browser `alert()` and `confirm()` popup boxes with sleek, custom-designed overlay portals (like the menu planner warning modal, global notification modal, and customer group delete warning modal) to unify application styling with the Customer App overlays.
+
+---
+
+## 2026-08-25 — Settings, Roles & Staff, Trading Entities, and Multi-Tier Entity System (Antigravity)
+
+**Commit:** [`4376133`](https://github.com/BhimalL/BonManze_PWA/commit/4376133), [`a211ac5`](https://github.com/BhimalL/BonManze_PWA/commit/a211ac5), [`48c9ace`](https://github.com/BhimalL/BonManze_PWA/commit/48c9ace), and associated multi-entity commits.
+**Verified:** `npx tsc --noEmit` clean, `testSettingsRBAC.js` and `testMultiEntity.js` test suites fully pass.
+
+**Changes:**
+- **Roles & Staff UI** — Added listing, inline permission checkboxes, staff member directory, and a staff provisioning flow. Provisioning utilizes the `createStaffMember` callable Cloud Function to safely create Firebase Auth users and staff records.
+- **Trading Entities UI** — Added active trading entity directory list with BRN, VAT number, bank reference, and logo Storage file uploads.
+- **Danger Zone Removal** — Fully removed the broken Danger Zone reset UI block from the Settings page.
+- **Multi-Tier Entity System** — Allowed customer profile resubmission (transition status back to Pending and clear rejectionReason). Gated CRM assignment checks so combined edits (profile + entityId) are blocked by security rules while split writes succeed, safeguarding historical orders from entity-change drift.
+- **Visual Improvements** — Replaced Reject Customer modal backdrop with full-screen fixed blur portal, fixed theme color classes, and added pulse animations on Pending registrations.
+
+---
+
+## 2026-08-26 — Granular View/Edit Permissions & UI Rewiring (Antigravity)
+
+**Commit:** [`1f5cd73`](https://github.com/BhimalL/BonManze_PWA/commit/1f5cd735fe4497a79d65c9f076ce3ebef47b55a3) "feat: implement staff editing, role deletion, lockout checks, and rbac test expansion", [`f9c72d9`](https://github.com/BhimalL/BonManze_PWA/commit/f9c72d938ff2df61234a71133346761a7da0a9c2) "Implement safe nested permissions check in firestore.rules...", and [`2c0972f`](https://github.com/BhimalL/BonManze_PWA/commit/2c0972f183a426021e1ca1603e31640d2944f8b0) "Fix section 5: UI permissions fully rewired to new nested schema...".
+**Verified:** `npx tsc --noEmit` clean, 4 automated test suites pass, `migratePermissions.js` executed on local emulator.
+
+**Changes:**
+- **Granular Security Rules Schema** — Replaced flat boolean permissions schema with a nested 14-group `{view, edit}` permissions configuration (e.g. `menuPlanner`, `customerDirectory`, etc.). Rewrote `firestore.rules` checking nested paths. Gated the 5 add-on catalogs in `Operations.tsx` behind `mealLibrary.edit`.
+- **UI Tab Permissions** — Rewrote `hasTabPermission()` to enforce nested checks. Created a single `useMemo` for `allowedSettingsSubTabs` shared by the sidebar link, sub-tabs buttons, and redirect `useEffect` (preventing users from getting stranded on a blank default 'identity' panel).
+- **Role Creator View/Edit Grid** — Replaced flat checkboxes in Roles modal with a 14-row View/Edit table. Toggling Edit ON forces View ON, and toggling View OFF forces Edit OFF.
+- **Admin Lockout Guard** — Gated role deletion to check for the last remaining staff role with `rolesAndStaff.edit` to prevent lockout.
+
+---
+
+## 2026-08-28 — Persistent Emulator Path, Storage Rules Null-Safety, & Documentation (Antigravity)
+
+**Commit:** [`13da6fc`](https://github.com/BhimalL/BonManze_PWA/commit/13da6fc48a4ff6637c34b58a00e298dd8573ab8c), [`1ff527d`](https://github.com/BhimalL/BonManze_PWA/commit/1ff527d), and current session changes.
+**Verified:** `npx tsc --noEmit` clean, emulators successfully load full Phase 1-3 seed data.
+
+**Changes:**
+- **Persistent Emulator Path** — Corrected both workspaces `package.json` emulators run scripts to import/export directly from the local `firebase-export-178774160237069AG6N` directory (which holds all seeded Owner, CRM, and customer data) instead of using a non-existent `%LOCALAPPDATA%` path.
+- **Storage Rules Null-Safety** — Ported `exists` and `in` operator guards to `storage.rules`' `isStaffAllowed()` function to prevent CEL engine crashes when looking up absent keys on highly restricted roles.
+- **Documentation Guide** — Extracted walkthrough steps into a dedicated manual QA checklist in `docs/BonManzE_SettingsRolesEntities_Scope.md` and deleted the untracked Playwright browser automation script.
+

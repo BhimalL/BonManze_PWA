@@ -1,8 +1,39 @@
 # Agent Coordination: BonManzE Project
 
+## 2026-08-28: Antigravity — Emulator Persisted Path, Storage Rules Null-Safety, and Walkthrough Documentation
+
+**Commits `13da6fc`, `1ff527d`, `7138c10`, `0a0a1eb`** — Configured the relative August 26 database export path in both workspaces to resolve empty/stale emulator startup, ported CEL null-safety exists/in checks to `storage.rules` to prevent crashes on narrow role requests, and converted the Playwright automation checklist into a manual browser walkthrough guide under `docs/`.
+
+### 1. Emulator Path persistence
+- **Root Cause**: The package.json `emulators` script pointed `--import` to a `%LOCALAPPDATA%\BonManzE\emulator-data` directory that did not exist on this machine. Consequently, every emulator run initialized empty instead of loading Phase 1-3 assets.
+- **Path Correction**: Changed `--import` and `--export-on-exit` targets in both clone repositories to the relative `firebase-export-178774160237069AG6N` directory (which holds the exact Aug-26 snapshot containing the Owner, customer, and CRM configurations).
+
+### 2. Storage Rules Null-Safety
+- **Rules Gating**: Ported the `exists` and `in`-guarded checks from `firestore.rules` into `storage.rules`. This shields the storage rules engine from throwing CEL evaluation errors when looking up absent keys or permission groups on highly restricted roles (like test low-privilege accounts).
+
+### 3. Documentation & Verification
+- **walkthroughPermissions Checklist**: Moved the Playwright script logic to a manual test guide inside `docs/BonManzE_SettingsRolesEntities_Scope.md` under a new `Phase 7` section. Deleted the redundant script to prevent tech debt.
+
+---
+
+## 2026-08-26: Antigravity — Nested Permissions Gating & UI Rewiring Complete
+
+**Commits `1f5cd73`, `f9c72d9`, `2c0972f`** — Transitioned roles and rules logic from flat booleans to a nested 14-group `{view, edit}` permissions schema. Rewired the entire UI sidebar tabs, sub-tabs selector redirects, and the Role Creator modal to the new structure.
+
+### 1. Firestore Rules & Gating
+- **Nested Gating**: Refactored `firestore.rules` to map collections to the new `{view, edit}` schema keys. Gated the 5 meal add-on catalogs (Curry, Base, Dhal, Salad, Beverage, Dessert curation forms, buttons, add-row inputs) in `Operations.tsx` behind `mealLibrary.edit`.
+- **RBAC Test Suite**: Added `[12a]/[12b]/[13a]/[13b]` tests in `testSettingsRBAC.js` to assert that order/payment split writes reject/allow correctly.
+
+### 2. UI Rewiring
+- **Tab Gating & useMemo Redirects**: Re-implemented `hasTabPermission()` to use the nested keys. Added a `useMemo` collection `allowedSettingsSubTabs` shared by the sidebar link, sub-tab selector buttons, and redirect `useEffect`. When entering Settings, if a user's role is not authorized for `identity`, they automatically land on the first permitted sub-tab (e.g. `tradingEntities`) instead of getting stranded on a blank panel.
+- **View/Edit Role Grid**: Replaced the 6 flat role checkboxes in the Role Creator modal with a 14-row View/Edit table. Implemented auto-implication logic (checking Edit forces View; unchecking View forces Edit off) and disabled Edit for the view-only Transactions Ledger.
+
+---
+
 ## 2026-08-25: Antigravity — Settings, Roles & Staff, and Trading Entities Complete
 
 **Commits `4376133`, `a211ac5`** — Settings gating, Roles & Staff sub-tab, Trading Entities sub-tab, Cloud Function provisioning, Storage integration, and client-side audit logs fully implemented and verified. All 10 verification assertions pass successfully along with all existing regression suites.
+
 
 ### 1. Cloud Function & Security Rules
 - **Provisioning**: Added the `createStaffMember` callable Cloud Function in `functions/index.js` to create Firebase Auth users and write `staff/{uid}` Firestore records atomically, bypassing client-side creation.
