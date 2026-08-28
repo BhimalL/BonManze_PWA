@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "emulators": "git pull && firebase emulators:start --export-on-exit=\"C:\\BonManzE-emulator-data\" --import=\"C:\\BonManzE-emulator-data\"",
+    "emulators": "git pull && firebase emulators:start --export-on-exit=\"emulator-data\" --import=\"emulator-data\"",
     "emulators:reseed": "firebase emulators:start --export-on-exit=emulator-data --import=\"%INIT_CWD%\\firebase-export-1786692159683vA0G8H\""
   },
   "dependencies": {
