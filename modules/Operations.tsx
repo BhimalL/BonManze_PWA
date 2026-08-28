@@ -4966,24 +4966,98 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
               <div className="space-y-3">
                 {entities.map(entity => (
-                  <div key={entity.id} className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 bg-slate-50">
+                  <div
+                    key={entity.id}
+                    className={`flex items-center justify-between p-4 rounded-2xl border border-slate-100 bg-slate-50 transition-opacity ${
+                      entity.active === false ? 'opacity-60' : ''
+                    }`}
+                  >
                     <div className="space-y-0.5">
-                      <p className="text-sm font-black text-slate-900">{entity.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-black text-slate-900">{entity.name}</p>
+                        {entity.active === false && (
+                          <span className="px-1.5 py-0.5 text-[9px] font-black uppercase bg-red-100 text-red-700 rounded-md tracking-wider">
+                            Retired
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-slate-400 font-medium">BRN: {entity.brn} · VAT: {entity.vatNumber}</p>
                       <p className="text-[10px] text-slate-300 font-medium">Bank ref: {entity.bankReference}</p>
                     </div>
                     {currentPermissions?.tradingEntities?.edit === true && (
-                      <button
-                        onClick={() => {
-                          setEditingEntityId(entity.id);
-                          setEntityForm({ name: entity.name, brn: entity.brn, vatNumber: entity.vatNumber, bankReference: entity.bankReference });
-                          setEntityLogoFile(null);
-                          setShowAddEntityModal(true);
-                        }}
-                        className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors"
-                      >
-                        <Edit3 className="size-4" />
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => {
+                            setEditingEntityId(entity.id);
+                            setEntityForm({ name: entity.name, brn: entity.brn, vatNumber: entity.vatNumber, bankReference: entity.bankReference });
+                            setEntityLogoFile(null);
+                            setShowAddEntityModal(true);
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors"
+                          title="Edit Entity"
+                        >
+                          <Edit3 className="size-4" />
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const newActive = entity.active === false ? true : false;
+                              await updateDoc(doc(db, 'entities', entity.id), {
+                                active: newActive,
+                                updatedAt: Timestamp.now()
+                              });
+                              writeAuditLog('ConfigChange', `Trading entity "${entity.name}" ${newActive ? 'reactivated' : 'retired'}`);
+                              setNotification({
+                                title: newActive ? 'Entity Reactivated' : 'Entity Retired',
+                                message: `Trading entity "${entity.name}" has been successfully ${newActive ? 'reactivated' : 'retired'}.`,
+                                type: 'success'
+                              });
+                            } catch (err: any) {
+                              setNotification({
+                                title: 'Update Failed',
+                                message: err.message || 'Failed to update entity status.',
+                                type: 'error'
+                              });
+                            }
+                          }}
+                          className="px-2.5 py-1 text-[10px] font-black uppercase tracking-wider rounded-lg transition-colors bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer"
+                        >
+                          {entity.active === false ? 'Reactivate' : 'Retire'}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const inUseByCustomer = customers.some(c => c.entityId === entity.id);
+                            const inUseByOrder = orders.some(o => o.entityId === entity.id);
+                            if (inUseByCustomer || inUseByOrder) {
+                              setNotification({
+                                title: 'Deletion Blocked',
+                                message: 'Cannot delete this entity because it is assigned to existing customers or orders. Retire it instead to hide it from future use while keeping historical records intact.',
+                                type: 'error'
+                              });
+                              return;
+                            }
+                            try {
+                              await deleteDoc(doc(db, 'entities', entity.id));
+                              writeAuditLog('ConfigChange', `Deleted trading entity "${entity.name}" (${entity.id})`);
+                              setNotification({
+                                title: 'Entity Deleted',
+                                message: `Trading entity "${entity.name}" was deleted successfully.`,
+                                type: 'success'
+                              });
+                            } catch (err: any) {
+                              setNotification({
+                                title: 'Delete Failed',
+                                message: err.message || 'Failed to delete entity.',
+                                type: 'error'
+                              });
+                            }
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Delete Entity"
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -5233,7 +5307,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       );
     }
 
-    const displayEntities = entities.length > 0 ? entities : [
+    const activeEntities = entities.filter(e => e.active !== false);
+    const displayEntities = activeEntities.length > 0 ? activeEntities : [
       { id: 'entity-a', name: 'PLACEHOLDER ENTITY A LTD — replace before launch', brn: 'BRN-A', vatNumber: 'VAT-A', bankReference: 'BANK-REF-A' },
       { id: 'entity-b', name: 'PLACEHOLDER ENTITY B LTD — replace before launch', brn: 'BRN-B', vatNumber: 'VAT-B', bankReference: 'BANK-REF-B' }
     ];
