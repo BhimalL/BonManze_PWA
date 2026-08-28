@@ -1056,4 +1056,71 @@ export const createStaffMember = onCall(async (request) => {
   return { uid: userRecord.uid };
 });
 
+// deleteStaffMember — callable.
+// Gated to active staff users whose role permissions include rolesAndStaff.edit: true.
+// Permanently removes both the staff/{uid} Firestore doc AND the Firebase Auth
+// account — mirrors createStaffMember's auth/permission-check shape above.
+// Blocked server-side (not just client-side) if the target staff member has
+// any auditLog history, or if the caller targets their own account.
+export const deleteStaffMember = onCall(async (request) => {
+  // 1. Verify caller is authenticated
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'You must be signed in.');
+  }
+
+  // 2. Verify caller is an active staff member with rolesAndStaff.edit permission
+  const callerUid = request.auth.uid;
+  const callerStaffSnap = await db.collection('staff').doc(callerUid).get();
+  if (!callerStaffSnap.exists) {
+    throw new HttpsError('permission-denied', 'Caller is not a registered staff member.');
+  }
+
+  const callerData = callerStaffSnap.data();
+  if (callerData.active !== true) {
+    throw new HttpsError('permission-denied', 'Caller account is deactivated.');
+  }
+
+  const callerRoleId = callerData.roleId;
+  if (!callerRoleId) {
+    throw new HttpsError('permission-denied', 'Caller has no assigned role.');
+  }
+
+  const callerRoleSnap = await db.collection('roles').doc(callerRoleId).get();
+  const callerPermissions = callerRoleSnap.exists ? (callerRoleSnap.data().permissions || {}) : {};
+  if (!callerRoleSnap.exists || !callerPermissions.rolesAndStaff || callerPermissions.rolesAndStaff.edit !== true) {
+    throw new HttpsError('permission-denied', 'You do not have permission to manage staff.');
+  }
+
+  // 3. Validate input
+  const { uid } = request.data || {};
+  if (typeof uid !== 'string' || !uid.trim()) {
+    throw new HttpsError('invalid-argument', 'A target staff uid is required.');
+  }
+
+  // 4. Never allow deleting your own account
+  if (uid === callerUid) {
+    throw new HttpsError('failed-precondition', 'You cannot delete your own account.');
+  }
+
+  // 5. Server-side usage check — re-verify even though the client pre-checks
+  // this too, same principle as every other integrity check in this file.
+  const auditSnap = await db.collection('auditLog').where('staffUid', '==', uid).limit(1).get();
+  if (!auditSnap.empty) {
+    throw new HttpsError('failed-precondition', 'This staff member has audit log history and cannot be deleted. Retire the account instead.');
+  }
+
+  // 6. Delete the Firestore doc, then the Auth account (tolerate the Auth
+  // user already being gone rather than failing the whole operation over it)
+  await db.collection('staff').doc(uid).delete();
+  try {
+    await auth.deleteUser(uid);
+  } catch (err) {
+    if (!err || err.code !== 'auth/user-not-found') {
+      throw err;
+    }
+  }
+
+  return { success: true };
+});
+
 

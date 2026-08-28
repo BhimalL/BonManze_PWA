@@ -45,7 +45,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc, Timestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, onSnapshot, writeBatch, updateDoc, Timestamp, query, where, limit, getDocs } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { auth, db, functions, storage } from '../firebaseClient';
@@ -4688,9 +4688,70 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             setShowEditStaffModal(true);
                           }}
                           className="p-1.5 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors"
+                          title="Edit Staff"
                         >
                           <Edit3 className="size-4" />
                         </button>
+                        {!isSelf && (
+                          <button
+                            onClick={async () => {
+                              try {
+                                const newActive = !staff.active;
+                                await updateDoc(doc(db, 'staff', staff.id), { active: newActive });
+                                writeAuditLog('RoleChange', `Staff member "${staff.name}" ${newActive ? 'reactivated' : 'retired'}`);
+                                setNotification({
+                                  title: newActive ? 'Staff Reactivated' : 'Staff Retired',
+                                  message: `Staff member "${staff.name}" has been successfully ${newActive ? 'reactivated' : 'retired'}.`,
+                                  type: 'success'
+                                });
+                              } catch (err: any) {
+                                setNotification({
+                                  title: 'Update Failed',
+                                  message: err.message || 'Failed to update staff status.',
+                                  type: 'error'
+                                });
+                              }
+                            }}
+                            className="px-2.5 py-1 text-[10px] font-black uppercase tracking-wider rounded-lg transition-colors bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer"
+                          >
+                            {staff.active ? 'Retire' : 'Reactivate'}
+                          </button>
+                        )}
+                        {!isSelf && (
+                          <button
+                            onClick={async () => {
+                              try {
+                                const auditSnap = await getDocs(query(collection(db, 'auditLog'), where('staffUid', '==', staff.id), limit(1)));
+                                if (!auditSnap.empty) {
+                                  setNotification({
+                                    title: 'Deletion Blocked',
+                                    message: 'Cannot delete this staff member because they have audit log history. Retire them instead to preserve the record while revoking access.',
+                                    type: 'error'
+                                  });
+                                  return;
+                                }
+                                const fn = httpsCallable<{ uid: string }, { success: boolean }>(functions, 'deleteStaffMember');
+                                await fn({ uid: staff.id });
+                                writeAuditLog('RoleChange', `Deleted staff member "${staff.name}" (${staff.id})`);
+                                setNotification({
+                                  title: 'Staff Deleted',
+                                  message: `Staff member "${staff.name}" was deleted successfully.`,
+                                  type: 'success'
+                                });
+                              } catch (err: any) {
+                                setNotification({
+                                  title: 'Delete Failed',
+                                  message: err.message || 'Failed to delete staff member.',
+                                  type: 'error'
+                                });
+                              }
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            title="Delete Staff"
+                          >
+                            <Trash2 className="size-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
