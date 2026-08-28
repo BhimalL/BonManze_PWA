@@ -39,3 +39,7 @@ _deleted_modules/
 
 # Seeding / snapshot database export folders
 firebase-export-*/
+
+# Screenshots from manual/automated walkthroughs
+scripts/walkthrough-screenshots/
+
