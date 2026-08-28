@@ -4716,12 +4716,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         <input value={roleForm.name} onChange={e => setRoleForm(f => ({ ...f, name: e.target.value }))} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30" placeholder="e.g. Kitchen Staff" />
                       </div>
                       <div className="space-y-2">
-                        <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
-                          <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Permission</p>
-                          <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest w-10 text-center">View</p>
-                          <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest w-10 text-center">Edit</p>
-                        </div>
-                        <div className="max-h-72 overflow-y-auto space-y-1 pr-1">
+                        <div className="max-h-72 overflow-y-auto space-y-1 pr-1 relative">
+                          <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center sticky top-0 bg-white z-10 pb-1.5 border-b border-slate-100 mb-1">
+                            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Permission</p>
+                            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest w-10 text-center">View</p>
+                            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest w-10 text-center">Edit</p>
+                          </div>
                           {PERM_GROUPS.map(g => {
                             const v = roleForm.perms[g.key]?.view ?? false;
                             const e = roleForm.perms[g.key]?.edit ?? false;
