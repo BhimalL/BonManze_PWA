@@ -1368,6 +1368,22 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     return out;
   }, [orders, entityFilter]);
 
+  // An order's discount/VAT are computed once across the WHOLE order (see
+  // confirmCheckout), not per item — so any view that needs a per-item or
+  // per-drop money figure has to reconstruct that item's fair share the
+  // same way the Transactions Ledger already does below, or it silently
+  // shows the item's raw pre-discount/pre-VAT menu price instead of what
+  // the customer actually owes/paid. Shared by drops, paymentDrops, and
+  // paymentSummary so all three agree with the Ledger and the receipt.
+  const itemNetAmount = (order: Order, item: OrderItem) => {
+    const orderSubtotal = order.subtotal || order.items.reduce((sum, it) => sum + (it.price * it.qty), 0);
+    const itemTotal = item.qty * item.price;
+    const proportion = orderSubtotal > 0 ? (itemTotal / orderSubtotal) : 0;
+    const itemDiscount = (order.discount || 0) * proportion;
+    const itemVat = (order.vat || 0) * proportion;
+    return itemTotal - itemDiscount + itemVat;
+  };
+
   // --- Orders by Dish — scoped to the current week only. This tab answers
   // "what do I need to cook," not "show me every order ever placed"; without
   // this scope it would silently accumulate every past and future week's
@@ -1464,7 +1480,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           };
         }
         map[key].items.push(item);
-        map[key].total += item.qty * item.price;
+        map[key].total += itemNetAmount(o, item);
         if (item.paymentStatus === 'Pending') map[key].paymentStatus = 'Pending';
       });
     });
@@ -1517,7 +1533,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           };
         }
         map[key].items.push(item);
-        map[key].total += item.qty * item.price;
+        map[key].total += itemNetAmount(o, item);
         if (item.paymentStatus === 'Pending') map[key].paymentStatus = 'Pending';
         if (item.paymentStatus !== 'Paid' && item.paymentMethodName && !map[key].claimedMethod) {
           map[key].claimedMethod = item.paymentMethodName;
@@ -1546,8 +1562,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const paymentSummary = useMemo(() => {
     let collected = 0, outstanding = 0;
-    lines.forEach(({ item }) => {
-      const amt = item.qty * item.price;
+    lines.forEach(({ order, item }) => {
+      const amt = itemNetAmount(order, item);
       if (item.paymentStatus === 'Paid') collected += amt; else outstanding += amt;
     });
     return { collected, outstanding };
