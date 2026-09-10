@@ -986,4 +986,5 @@ Antigravity as of this write-up.
 **Changes:**
 - **Dynamic Entity Filter Dropdown** — Replaced hardcoded entity pills with a dynamic `<select>` dropdown selector across Orders by Dish, Delivery List, Payments, and Customer Directory. Loads live entities (including retired entities badged as `(Retired)`).
 - **Dynamic Entity Badging & Legacy Safeguards** — Updated Delivery List, Payments, and Customer Directory cards/tables to render real entity names (`drop.entityName` / live lookup) with null-safe guards for legacy orders (`Unassigned` label for customers without assigned entities).
+- **Rules of Hooks Fix (Commit `bf51908`)** — Moved `filterEntitiesList` `useMemo` to top-level hooks section before authentication early-returns, resolving a React hook order mismatch error on initial page load.
 
