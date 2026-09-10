@@ -1005,3 +1005,17 @@ Antigravity as of this write-up.
 - **Dynamic Entity Badging & Legacy Safeguards** — Updated Delivery List, Payments, and Customer Directory cards/tables to render real entity names (`drop.entityName` / live lookup) with null-safe guards for legacy orders (`Unassigned` label for customers without assigned entities).
 - **Rules of Hooks Fix (Commit `bf51908`)** — Moved `filterEntitiesList` `useMemo` to top-level hooks section before authentication early-returns, resolving a React hook order mismatch error on initial page load.
 
+---
+
+## 2026-09-10 — Entity-Restricted Views UI & Navigation Refinements (Antigravity)
+
+**Commits:** [`86aea5d`](https://github.com/BhimalL/BonManze_PWA/commit/86aea5d) "fix: add max-width and tooltip for entity badges", [`6773cbe`](https://github.com/BhimalL/BonManze_PWA/commit/6773cbe) "fix: harmonize Customer Directory table cell padding", [`d72937f`](https://github.com/BhimalL/BonManze_PWA/commit/d72937f) "fix(operations): harmonize Customer Directory Actions padding to px-3.5 and constrain entity badge width max-w-[180px]", [`dff5dff`](https://github.com/BhimalL/BonManze_PWA/commit/dff5dff) "fix(operations): reset entity filter to all on tab navigation", and [`7755455`](https://github.com/BhimalL/BonManze_PWA/commit/7755455) "docs: record Entity-Restricted Operations Views phase as fully confirmed working" — all pushed to `main`.
+
+**Verified:** Live browser click-through confirmed by Bhimal; `npx tsc --noEmit` clean; 4 automated test suites pass.
+
+**Changes:**
+- **Entity Badge Width Ceiling & Text Wrapping (`86aea5d`, `d72937f`)** — Added `max-w-[180px]`, 2-line `whitespace-normal` text wrapping, and hover `title="..."` tooltips to entity badges in the Customer Directory to prevent layout distortion on extra-long entity names.
+- **Table Cell Padding Harmonization (`6773cbe`, `d72937f`)** — Reduced cell padding across all 10 table columns (including the Actions column `<td>`) to `px-3.5 py-3.5`, saving >200px in horizontal width and eliminating desktop horizontal scrollbars.
+- **Reset-on-Navigation (`dff5dff`)** — Added a `useEffect([tab])` listener in `Operations.tsx` to automatically reset `entityFilter` back to `'all'` whenever navigating between top-level tabs.
+- **Documentation & Walkthrough Scope (`7755455`)** — Created `docs/BonManzE_EntityRestrictedViews_Scope.md` documenting the finalized scope decisions, commit log, and confirmed live browser walkthrough results.
+
