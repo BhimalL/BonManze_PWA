@@ -830,6 +830,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         timestamp: createdAtIso,
         discount: o.discount,
         discountReason: o.discountReason,
+        subtotal: o.subtotal,
+        vat: o.vat,
         entityId: o.entityId || '',
         entityName: o.entityName || '',
         entityBrn: o.entityBrn || '',
