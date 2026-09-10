@@ -922,6 +922,23 @@ Antigravity as of this write-up.
 
 ---
 
+## 2026-08-14 — Persisted Meal Ratings, Customer Comments & Security Rules Updates (Antigravity)
+
+**Commits:** [`053200e`](https://github.com/BhimalL/BonManze_PWA/commit/053200e7fa15d575f4cd71c52a11e4b8d31065e9) "feat: persist meal ratings and comments in Firestore, update security rules, and display reviews in Paid History", [`0aa8f8e`](https://github.com/BhimalL/BonManze_PWA/commit/0aa8f8e) "fix: rules evaluation get() fix", and [`8406f95`](https://github.com/BhimalL/BonManze_PWA/commit/8406f95869f28676e78b28affa55829872078fe2) "fix: map rating and ratingComment from Firestore document data to items arrays in CustomerPortal and Operations memos" — all pushed to `main`.
+
+**Retroactive entry, added 2026-09-10:** this feature shipped and was documented in `AGENTS.md` at the time, but never got a `CHANGELOG.md` entry — the gap only surfaced when Bhimal asked what was left of the original v1 scope's "rating" line item, and Claude's changelog-only search incorrectly concluded it hadn't been built yet. Logged here now, dated to when it actually shipped, so this file stays the reliable source of truth for "what's built" going forward.
+
+**Changes:**
+- **`OrderItem` schema** — extended with optional `rating?: number` and `ratingComment?: string` fields.
+- **Customer App (`CustomerPortal.tsx`)** — once a meal item reaches `Completed` status, a "Rate meal" prompt appears; the existing rating sheet was rewired to perform a real Firestore `updateDoc` on `orders/{orderId}/items/{itemId}` (`rateTarget`/`openRating` extended to carry the Firestore item id), with a graceful fallback to local component state for any order that isn't Firestore-backed. Added an optional comment text area alongside the 1–5 star picker, with a loading state (`ratingSubmitting`) disabling the form during the write. Once a rating is submitted, the "Rate" action is replaced by a static "★ sent" label — there is no edit path back to it, i.e. a rating is locked after submission by construction, not by a separate rule.
+- **`firestore.rules`** — customers are permitted to update `rating`/`ratingComment` on any order item they own, including after `paymentStatus == 'Paid'` (ratings are only ever submitted post-payment/delivery, so the existing "payment fields lock once Paid" rule needed a carve-out specifically for these two fields, not a general re-opening of paid items). `0aa8f8e` followed up same-day fixing a `get()` evaluation issue in that rule.
+- **Operations (`Operations.tsx`)** — customer reviews surface in the Payments tab's Paid History: a completed drop with a rated item renders a styled feedback block underneath the drop description, showing the star count and comment.
+- **Live sync** — because ratings live directly on the `OrderItem` subcollection documents the client already listens to via collection-group `onSnapshot`, a submitted rating appears in Operations without any extra plumbing.
+
+**Also visible today (2026-09-10), not independently dated:** the Transactions Ledger tab (built as part of the later CRM/reporting work — see the 2026-08-26 Granular Permissions entry, which lists `transactionsLedger` as an existing view-only screen by that point) also shows a "Rating & Feedback" column per order, a "Customer Rating" filter (All/Rated/Unrated/5-star/Low Rating), and includes ratings in its CSV export. The specific commit that added rating support to the Ledger view specifically wasn't identified this round — flagging so it isn't assumed to be part of the three commits above.
+
+---
+
 ## 2026-08-16 — Batch Sticker Printing, Birthday Greetings, CSV Alphanumeric Fix, & Styled Modal Dialogs (Antigravity)
 
 **Commit:** [`e3fa25b`](https://github.com/BhimalL/BonManze_PWA/commit/e3fa25be31b017b2b716cf4c43831bfe746a5124) "feat: refactor legacy alerts and confirmation dialogs to styled modals", [`c932d44`](https://github.com/BhimalL/BonManze_PWA/commit/c932d448c40134f71a4f0bcf84b423f101183350) "feat: implement Sync with Library action in Menu Planner tab", and [`b0bf29f`](https://github.com/BhimalL/BonManze_PWA/commit/b0bf29f9df35d1341c305e269415c8c5026dfb77) "chore: update emulator scripts to run from local AppData folder to prevent OneDrive EPERM lockups".
