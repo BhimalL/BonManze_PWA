@@ -977,3 +977,13 @@ Antigravity as of this write-up.
 - **Entity Retire/Reactivate & Guarded Delete** — Added the ability to retire/reactivate entities (updating active status and logging audit trails) and guarded entity delete (checking reference counts in customers and orders before allowing deletion). Filtered retired entities from the pending customer registration picker.
 - **Staff Retire/Reactivate & Guarded Delete** — Added inline Retire/Reactivate toggles for staff members and implemented the `deleteStaffMember` callable Cloud Function to safely remove staff accounts with no audit log history from both Firestore and Firebase Auth (Commit `eb6fc2f`).
 
+---
+
+## 2026-09-10 — Entity-Restricted Operations Views (Antigravity)
+
+**Verified:** `npx tsc --noEmit` clean, 4 automated test suites pass.
+
+**Changes:**
+- **Dynamic Entity Filter Dropdown** — Replaced hardcoded entity pills with a dynamic `<select>` dropdown selector across Orders by Dish, Delivery List, Payments, and Customer Directory. Loads live entities (including retired entities badged as `(Retired)`).
+- **Dynamic Entity Badging & Legacy Safeguards** — Updated Delivery List, Payments, and Customer Directory cards/tables to render real entity names (`drop.entityName` / live lookup) with null-safe guards for legacy orders (`Unassigned` label for customers without assigned entities).
+

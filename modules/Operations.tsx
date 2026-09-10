@@ -337,7 +337,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
-  const [entityFilter, setEntityFilter] = useState<'all' | 'entity-a' | 'entity-b'>('all');
+  const [entityFilter, setEntityFilter] = useState<string>('all');
   const [selectedEntities, setSelectedEntities] = useState<Record<string, string>>({});
   const [rejectionReasons, setRejectionReasons] = useState<Record<string, string>>({});
   const [showRejectDialog, setShowRejectDialog] = useState<string | null>(null);
@@ -5335,23 +5335,34 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     }
   };
 
+  const filterEntitiesList = useMemo(() => {
+    const list = entities.length > 0 ? entities : [
+      { id: 'entity-a', name: 'PLACEHOLDER ENTITY A LTD — replace before launch', brn: 'BRN-A', vatNumber: 'VAT-A', bankReference: 'BANK-REF-A', active: true } as Entity,
+      { id: 'entity-b', name: 'PLACEHOLDER ENTITY B LTD — replace before launch', brn: 'BRN-B', vatNumber: 'VAT-B', bankReference: 'BANK-REF-B', active: true } as Entity
+    ];
+    return [
+      { id: 'all', label: 'All Entities' },
+      ...list.map(e => ({
+        id: e.id,
+        label: `${e.name}${e.active === false ? ' (Retired)' : ''}`
+      }))
+    ];
+  }, [entities]);
+
   const renderEntityFilterToggle = () => (
     <div className="flex items-center gap-2">
-      <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Entity:</span>
-      <div className="flex bg-slate-100 rounded-xl p-1 shrink-0">
-        {(['all', 'entity-a', 'entity-b'] as const).map(f => (
-          <button
-            key={f}
-            type="button"
-            onClick={() => setEntityFilter(f)}
-            className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
-              entityFilter === f ? 'bg-primary text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-          >
-            {f === 'all' ? 'All' : f === 'entity-a' ? 'Entity A' : 'Entity B'}
-          </button>
+      <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider shrink-0">Filter Entity:</span>
+      <select
+        value={entityFilter}
+        onChange={(e) => setEntityFilter(e.target.value)}
+        className="text-xs font-bold px-3 py-1.5 rounded-xl border border-[#E7E0D0] outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all cursor-pointer text-slate-700 max-w-[280px] truncate"
+      >
+        {filterEntitiesList.map(item => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
         ))}
-      </div>
+      </select>
     </div>
   );
 
@@ -5986,7 +5997,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           <h3 className="text-base font-black text-slate-900 leading-none">{drop.customerName}</h3>
                           {drop.entityId && (
                             <span className="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[8px] font-bold uppercase shrink-0 font-bold">
-                              {drop.entityId === 'entity-a' ? 'Entity A' : 'Entity B'}
+                              {drop.entityName || (entities.find(e => e.id === drop.entityId)?.name) || drop.entityId}
                             </span>
                           )}
                           <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
@@ -6152,7 +6163,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
                                 {drop.entityId && (
                                   <span className="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[8px] font-bold uppercase shrink-0">
-                                    {drop.entityId === 'entity-a' ? 'Entity A' : 'Entity B'}
+                                    {drop.entityName || (entities.find(e => e.id === drop.entityId)?.name) || drop.entityId}
                                   </span>
                                 )}
                                 {drop.slot && <span className="text-[10px] font-bold text-slate-400">{drop.slot}</span>}
@@ -6356,7 +6367,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 <div className="flex items-center gap-1.5">
                                   {c.entityId ? (
                                     <span className="inline-flex items-center px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[9px] font-bold uppercase shrink-0">
-                                      {c.entityId === 'entity-a' ? 'Entity A' : 'Entity B'}
+                                      {(entities.find(e => e.id === c.entityId)?.name) || c.entityId}
                                     </span>
                                   ) : (
                                     <span className="text-slate-400 text-[10px]">Unassigned</span>
