@@ -1332,6 +1332,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const todayKey = useMemo(() => weekDays.find(d => d.date === systemDate)?.key ?? null, [weekDays, systemDate]);
   const activeDeliveryDay = deliveryDayOverride ?? todayKey ?? weekDays[0].key;
 
+  const filterEntitiesList = useMemo(() => {
+    const list = entities.length > 0 ? entities : [
+      { id: 'entity-a', name: 'PLACEHOLDER ENTITY A LTD — replace before launch', brn: 'BRN-A', vatNumber: 'VAT-A', bankReference: 'BANK-REF-A', active: true } as Entity,
+      { id: 'entity-b', name: 'PLACEHOLDER ENTITY B LTD — replace before launch', brn: 'BRN-B', vatNumber: 'VAT-B', bankReference: 'BANK-REF-B', active: true } as Entity
+    ];
+    return [
+      { id: 'all', label: 'All Entities' },
+      ...list.map(e => ({
+        id: e.id,
+        label: `${e.name}${e.active === false ? ' (Retired)' : ''}`
+      }))
+    ];
+  }, [entities]);
+
   // Non-cancelled order lines, flattened for aggregation across tabs.
   const lines = useMemo(() => {
     const out: { order: Order; item: OrderItem }[] = [];
@@ -5334,20 +5348,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setNotification({ type: 'error', title: 'Rejection Failed', message: `Rejection failed: ${err.message}` });
     }
   };
-
-  const filterEntitiesList = useMemo(() => {
-    const list = entities.length > 0 ? entities : [
-      { id: 'entity-a', name: 'PLACEHOLDER ENTITY A LTD — replace before launch', brn: 'BRN-A', vatNumber: 'VAT-A', bankReference: 'BANK-REF-A', active: true } as Entity,
-      { id: 'entity-b', name: 'PLACEHOLDER ENTITY B LTD — replace before launch', brn: 'BRN-B', vatNumber: 'VAT-B', bankReference: 'BANK-REF-B', active: true } as Entity
-    ];
-    return [
-      { id: 'all', label: 'All Entities' },
-      ...list.map(e => ({
-        id: e.id,
-        label: `${e.name}${e.active === false ? ' (Retired)' : ''}`
-      }))
-    ];
-  }, [entities]);
 
   const renderEntityFilterToggle = () => (
     <div className="flex items-center gap-2">
