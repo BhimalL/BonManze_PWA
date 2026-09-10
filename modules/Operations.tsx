@@ -616,6 +616,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     }
   }, [tab, currentPermissions, settingsSubTab, allowedSettingsSubTabs]);
 
+  // Reset entity filter to 'all' whenever navigating between main tabs
+  useEffect(() => {
+    setEntityFilter('all');
+  }, [tab]);
+
 
   // Which existing add-on catalog entry is being edited inline, and its
   // draft form — mirrors editingCurry/editForm's shape for the five add-on
