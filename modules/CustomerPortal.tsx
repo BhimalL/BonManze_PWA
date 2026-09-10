@@ -3543,15 +3543,6 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   </div>
                 </div>
 
-                {receiptTarget.order.entityId && receiptTarget.order.entityBankReference && (
-                  <div className="border-t border-dashed border-slate-300 mt-4 pt-3 space-y-1 text-[10px] text-slate-500 font-mono text-left">
-                    <p className="font-bold text-slate-700 uppercase tracking-widest text-[9px] font-sans">Payment Instructions:</p>
-                    <p>Bank Transfer to: {receiptTarget.order.entityName}</p>
-                    <p>{receiptTarget.order.entityBankReference}</p>
-                    <p>Quote Ref: {orderIds.join(', ')}</p>
-                  </div>
-                )}
-
                 <p className="text-center text-[10px] text-slate-400 mt-5">Thank you for ordering with {SYSTEM_CONFIG.businessName} 🌿</p>
 
                 <div className="bmz-no-print flex gap-2 mt-5">
