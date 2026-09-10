@@ -1005,6 +1005,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         timestamp: createdAtIso,
         discount: o.discount,
         discountReason: o.discountReason,
+        discountBreakdown: o.discountBreakdown,
         subtotal: o.subtotal,
         vat: o.vat,
         entityId: o.entityId || '',

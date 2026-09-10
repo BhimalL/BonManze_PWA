@@ -830,6 +830,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         timestamp: createdAtIso,
         discount: o.discount,
         discountReason: o.discountReason,
+        discountBreakdown: o.discountBreakdown,
         subtotal: o.subtotal,
         vat: o.vat,
         entityId: o.entityId || '',
@@ -3412,6 +3413,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         const displayDiscountReason = hasSavedTotals ? savedDiscountReason : '';
         const displayVat = hasSavedTotals ? savedVat : (vatOn ? legacyVatAmount : 0);
         const displayTotal = hasSavedTotals ? savedTotal : receiptTotal;
+        const displayDiscountBreakdown = (hasSavedTotals && receiptGroups.length === 1)
+          ? firstOrder?.discountBreakdown
+          : undefined;
         return (
           <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md overflow-y-auto p-4">
             <style>{`
@@ -3530,18 +3534,41 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
                 <div className="border-t border-dashed border-slate-300 mt-3 pt-3 space-y-1.5">
                   <div className="flex justify-between text-xs text-slate-500 font-bold"><span>Subtotal</span><span>Rs {displaySubtotal.toFixed(2)}</span></div>
-                  {displayDiscount > 0 && (
-                    <div className="flex justify-between text-xs text-primary font-bold">
-                      <span>Discount{displayDiscountReason ? ` (${displayDiscountReason})` : ''}</span>
-                      <span>-Rs {displayDiscount.toFixed(2)}</span>
-                    </div>
+                  {displayDiscountBreakdown ? (
+                    <>
+                      {displayDiscountBreakdown.standard > 0 && (
+                        <div className="flex justify-between text-xs text-primary font-bold">
+                          <span>Standard discount ({displayDiscountBreakdown.standardRate}%)</span>
+                          <span>-Rs {displayDiscountBreakdown.standard.toFixed(2)}</span>
+                        </div>
+                      )}
+                      {displayDiscountBreakdown.birthday > 0 && (
+                        <div className="flex justify-between text-xs text-primary font-bold">
+                          <span>Birthday discount ({displayDiscountBreakdown.birthdayRate}%)</span>
+                          <span>-Rs {displayDiscountBreakdown.birthday.toFixed(2)}</span>
+                        </div>
+                      )}
+                      {displayDiscountBreakdown.bulk > 0 && (
+                        <div className="flex justify-between text-xs text-primary font-bold">
+                          <span>Full-week discount ({displayDiscountBreakdown.bulkRate}%)</span>
+                          <span>-Rs {displayDiscountBreakdown.bulk.toFixed(2)}</span>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    displayDiscount > 0 && (
+                      <div className="flex justify-between text-xs text-primary font-bold">
+                        <span>Discount{displayDiscountReason ? ` (${displayDiscountReason})` : ''}</span>
+                        <span>-Rs {displayDiscount.toFixed(2)}</span>
+                      </div>
+                    )
                   )}
                   {(vatOn || displayVat > 0) && (
                     <div className="flex justify-between text-xs text-slate-500 font-bold"><span>VAT ({vatRate}%)</span><span>Rs {displayVat.toFixed(2)}</span></div>
                   )}
                   <div className="flex justify-between items-baseline pt-1.5 border-t border-[#E7E0D0]">
                     <span className="text-xs font-black uppercase text-slate-400 tracking-widest">Total paid</span>
-                    <span className="text-lg font-black text-success">Rs {displayTotal.toFixed(0)}</span>
+                    <span className="text-lg font-black text-success">Rs {displayTotal.toFixed(2)}</span>
                   </div>
                 </div>
 

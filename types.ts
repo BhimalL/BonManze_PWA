@@ -187,6 +187,14 @@ export interface Order {
   isTerminalClosed?: boolean;
   discount?: number;
   discountReason?: string;
+  discountBreakdown?: {
+    standard: number;
+    standardRate: number;
+    birthday: number;
+    birthdayRate: number;
+    bulk: number;
+    bulkRate: number;
+  };
   subtotal?: number;   // written by confirmCheckout Cloud Function
   vat?: number;        // written by confirmCheckout Cloud Function
   entityId?: string;

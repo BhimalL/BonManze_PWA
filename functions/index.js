@@ -465,12 +465,24 @@ export const confirmCheckout = onCall(async (request) => {
     });
   }
 
-  const subtotal = priced.reduce((t, p) => t + p.price, 0);
-  const totalDiscount = standardDiscount + birthdayDiscount + bulkDiscount;
-  const netTotal = Math.max(0, subtotal - totalDiscount);
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const subtotal = round2(priced.reduce((t, p) => t + p.price, 0));
+  const standardDiscountRounded = round2(standardDiscount);
+  const birthdayDiscountRounded = round2(birthdayDiscount);
+  const bulkDiscountRounded = round2(bulkDiscount);
+  const totalDiscount = round2(standardDiscountRounded + birthdayDiscountRounded + bulkDiscountRounded);
+  const netTotal = round2(Math.max(0, subtotal - totalDiscount));
   const vatRate = config.vatEnabled ? (config.vatRate || 0) / 100 : 0;
-  const vat = netTotal * vatRate;
-  const total = Math.round((netTotal + vat) * 100) / 100;
+  const vat = round2(netTotal * vatRate);
+  const total = round2(netTotal + vat);
+  const discountBreakdown = {
+    standard: standardDiscountRounded,
+    standardRate: effectiveStandardRate,
+    birthday: birthdayDiscountRounded,
+    birthdayRate: birthdayTierRate,
+    bulk: bulkDiscountRounded,
+    bulkRate: bulkDiscountRounded > 0 ? (config.bulkDiscountRate || 0) : 0,
+  };
 
   // ---- Write the order + its items subcollection transactionally ----
   const orderRef = db.collection('orders').doc();
@@ -486,7 +498,8 @@ export const confirmCheckout = onCall(async (request) => {
       total,
       subtotal,
       discount: totalDiscount,
-      discountReason: `Standard: ${effectiveStandardRate}%, Birthday: ${birthdayTierRate}%, Bulk: ${bulkDiscount > 0 ? config.bulkDiscountRate : 0}%`,
+      discountBreakdown,
+      discountReason: `Standard: ${effectiveStandardRate}%, Birthday: ${birthdayTierRate}%, Bulk: ${bulkDiscountRounded > 0 ? config.bulkDiscountRate : 0}%`,
       vat,
       createdAt: now,
       entityId: customer.entityId,
