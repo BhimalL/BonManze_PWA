@@ -6372,7 +6372,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               <td className="px-3.5 py-3.5">
                                 <div className="flex items-center gap-1.5">
                                   {c.entityId ? (
-                                    <span className="inline-flex items-center px-2 py-1 rounded bg-primary/10 text-primary border border-primary/15 text-[9px] font-bold uppercase whitespace-normal text-left leading-tight">
+                                    <span
+                                      title={(entities.find(e => e.id === c.entityId)?.name) || c.entityId}
+                                      className="inline-flex items-center px-2 py-1 rounded bg-primary/10 text-primary border border-primary/15 text-[9px] font-bold uppercase whitespace-normal text-left leading-tight max-w-[180px]"
+                                    >
                                       {(entities.find(e => e.id === c.entityId)?.name) || c.entityId}
                                     </span>
                                   ) : (
@@ -6380,7 +6383,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                   )}
                                 </div>
                               </td>
-                              <td className="px-6 py-4">
+                              <td className="px-3.5 py-3.5">
                                 <div className="flex items-center justify-center">
                                   <button
                                     onClick={() => openEditCustomer(c)}
