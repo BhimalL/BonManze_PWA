@@ -975,4 +975,5 @@ Antigravity as of this write-up.
 - **Documentation Guide** — Extracted walkthrough steps into a dedicated manual QA checklist in `docs/BonManzE_SettingsRolesEntities_Scope.md` and deleted the untracked Playwright browser automation script.
 - **Idempotency & Layout Fixes** — Fixed `testSettingsRBAC.js` role and entity fixtures to use fixed, deterministic document IDs and pre-test teardown queries to prevent database document clutter. Moved the permission list header inside the scrollable container and added horizontal padding to align with checkboxes.
 - **Entity Retire/Reactivate & Guarded Delete** — Added the ability to retire/reactivate entities (updating active status and logging audit trails) and guarded entity delete (checking reference counts in customers and orders before allowing deletion). Filtered retired entities from the pending customer registration picker.
+- **Staff Retire/Reactivate & Guarded Delete** — Added inline Retire/Reactivate toggles for staff members and implemented the `deleteStaffMember` callable Cloud Function to safely remove staff accounts with no audit log history from both Firestore and Firebase Auth (Commit `eb6fc2f`).
 
