@@ -1191,7 +1191,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setEditCustEmail(c.email || '');
     setEditCustBirthday(c.birthday || '');
     setEditCustPhone(c.phone || '');
-    setEditCustTier(c.tier || 'Bronze');
+    const matchedTier = loyaltyTiers.find(t => t.id === c.tier || t.name === c.tier);
+    setEditCustTier(matchedTier ? matchedTier.id : (loyaltyTiers[0]?.id || ''));
     setEditCustEntityId(c.entityId || '');
     const matchedGroup = customerGroups.find(g => g.id === c.group || g.name === c.group);
     setEditCustGroup(matchedGroup ? matchedGroup.id : '');
@@ -1270,7 +1271,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         email,
         birthday,
         phone: editCustPhone.trim(),
-        tier: editCustTier,
+        tier: loyaltyTiers.find(t => t.id === editCustTier)?.name || '',
         group: customerGroups.find(g => g.id === editCustGroup)?.name || '',
         entityId: editCustEntityId || undefined,
         addresses: updatedAddresses,
@@ -6636,7 +6637,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all cursor-pointer"
                           >
                             {loyaltyTiers.map(t => (
-                              <option key={t.id} value={t.name}>{t.name}</option>
+                              <option key={t.id} value={t.id}>{t.name}</option>
                             ))}
                           </select>
                         </div>
