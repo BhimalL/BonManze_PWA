@@ -6291,16 +6291,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="border-b border-[#E7E0D0] bg-[#FAF9F5] text-[10px] font-black uppercase tracking-widest text-slate-400">
-                          <th className="px-6 py-4">Customer</th>
-                          <th className="px-6 py-4">Contact</th>
-                          <th className="px-6 py-4">Tier</th>
-                          <th className="px-6 py-4">Birthday</th>
-                          <th className="px-6 py-4 text-center">Orders</th>
-                          <th className="px-6 py-4 text-right">Points</th>
-                          <th className="px-6 py-4 text-right">Credit</th>
-                          <th className="px-6 py-4 text-right">LTV</th>
-                          <th className="px-6 py-4">Entity</th>
-                          <th className="px-6 py-4 text-center">Actions</th>
+                          <th className="px-3.5 py-3.5">Customer</th>
+                          <th className="px-3.5 py-3.5">Contact</th>
+                          <th className="px-3.5 py-3.5">Tier</th>
+                          <th className="px-3.5 py-3.5">Birthday</th>
+                          <th className="px-3.5 py-3.5 text-center">Orders</th>
+                          <th className="px-3.5 py-3.5 text-right">Points</th>
+                          <th className="px-3.5 py-3.5 text-right">Credit</th>
+                          <th className="px-3.5 py-3.5 text-right">LTV</th>
+                          <th className="px-3.5 py-3.5">Entity</th>
+                          <th className="px-3.5 py-3.5 text-center">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#E7E0D0] text-xs">
@@ -6317,7 +6317,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           }
                           return (
                             <tr key={c.id} className="hover:bg-slate-50/50 transition-colors">
-                              <td className="px-6 py-4">
+                              <td className="px-3.5 py-3.5">
                                 <div className="flex items-center gap-3">
                                   <img src={c.avatar || `https://picsum.photos/seed/${c.id}/100/100`} alt={c.name} className="size-10 rounded-full border border-slate-100 object-cover shrink-0" />
                                   <div className="min-w-0">
@@ -6337,13 +6337,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                   </div>
                                 </div>
                               </td>
-                              <td className="px-6 py-4">
+                              <td className="px-3.5 py-3.5">
                                 <div className="space-y-0.5">
                                   <p className="font-semibold text-slate-700">{c.phone || 'No phone'}</p>
                                   <p className="text-[10px] text-slate-400 font-medium truncate max-w-[150px]">{c.email}</p>
                                 </div>
                               </td>
-                              <td className="px-6 py-4">
+                              <td className="px-3.5 py-3.5">
                                 {c.tier ? (
                                   <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-primary/10 text-primary rounded-full text-[9px] font-black uppercase tracking-wider">
                                     <Star className="size-2.5 fill-primary text-primary" /> {c.tier}
@@ -6352,30 +6352,27 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                   <span className="text-slate-300">-</span>
                                 )}
                               </td>
-                              <td className="px-6 py-4">
+                              <td className="px-3.5 py-3.5">
                                 <span className={`font-semibold ${c.birthday ? 'text-slate-700' : 'text-slate-300 font-normal'}`}>
                                   {formattedBirthday}
                                 </span>
                               </td>
-                              <td className="px-6 py-4 text-center font-bold text-slate-700">
+                              <td className="px-3.5 py-3.5 text-center font-bold text-slate-700">
                                 {orderCount}
                               </td>
-                              <td className="px-6 py-4 text-right font-bold text-slate-900">
+                              <td className="px-3.5 py-3.5 text-right font-bold text-slate-900">
                                 {c.points || 0}
                               </td>
-                              <td className="px-6 py-4 text-right font-bold text-success">
+                              <td className="px-3.5 py-3.5 text-right font-bold text-success">
                                 {formatCurrency(c.storeCredit || 0)}
-</td>
-                              <td className="px-6 py-4 text-right font-bold text-slate-900">
+                              </td>
+                              <td className="px-3.5 py-3.5 text-right font-bold text-slate-900">
                                 {formatCurrency(c.ltv || 0)}
                               </td>
-                              <td className="px-6 py-4 max-w-[200px]">
+                              <td className="px-3.5 py-3.5">
                                 <div className="flex items-center gap-1.5">
                                   {c.entityId ? (
-                                    <span
-                                      title={(entities.find(e => e.id === c.entityId)?.name) || c.entityId}
-                                      className="inline-flex items-center px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[9px] font-bold uppercase truncate max-w-[180px]"
-                                    >
+                                    <span className="inline-flex items-center px-2 py-1 rounded bg-primary/10 text-primary border border-primary/15 text-[9px] font-bold uppercase whitespace-normal text-left leading-tight">
                                       {(entities.find(e => e.id === c.entityId)?.name) || c.entityId}
                                     </span>
                                   ) : (
