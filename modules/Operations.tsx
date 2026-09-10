@@ -5996,7 +5996,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="text-base font-black text-slate-900 leading-none">{drop.customerName}</h3>
                           {drop.entityId && (
-                            <span className="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[8px] font-bold uppercase shrink-0 font-bold">
+                            <span
+                              title={drop.entityName || (entities.find(e => e.id === drop.entityId)?.name) || drop.entityId}
+                              className="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[8px] font-bold uppercase shrink-0 truncate max-w-[180px]"
+                            >
                               {drop.entityName || (entities.find(e => e.id === drop.entityId)?.name) || drop.entityId}
                             </span>
                           )}
@@ -6162,7 +6165,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               <div className="flex items-center gap-2 mb-1">
                                 <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
                                 {drop.entityId && (
-                                  <span className="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[8px] font-bold uppercase shrink-0">
+                                  <span
+                                    title={drop.entityName || (entities.find(e => e.id === drop.entityId)?.name) || drop.entityId}
+                                    className="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[8px] font-bold uppercase shrink-0 truncate max-w-[180px]"
+                                  >
                                     {drop.entityName || (entities.find(e => e.id === drop.entityId)?.name) || drop.entityId}
                                   </span>
                                 )}
@@ -6359,14 +6365,17 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               </td>
                               <td className="px-6 py-4 text-right font-bold text-success">
                                 {formatCurrency(c.storeCredit || 0)}
-                              </td>
+</td>
                               <td className="px-6 py-4 text-right font-bold text-slate-900">
                                 {formatCurrency(c.ltv || 0)}
                               </td>
-                              <td className="px-6 py-4">
+                              <td className="px-6 py-4 max-w-[200px]">
                                 <div className="flex items-center gap-1.5">
                                   {c.entityId ? (
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[9px] font-bold uppercase shrink-0">
+                                    <span
+                                      title={(entities.find(e => e.id === c.entityId)?.name) || c.entityId}
+                                      className="inline-flex items-center px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[9px] font-bold uppercase truncate max-w-[180px]"
+                                    >
                                       {(entities.find(e => e.id === c.entityId)?.name) || c.entityId}
                                     </span>
                                   ) : (
