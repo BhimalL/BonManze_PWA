@@ -3757,6 +3757,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     // 1. Compile all transaction rows from ACTIVE_ORDERS
     const rows: {
       orderId: string;
+      entityId: string;
       entityName: string;
       timestamp: string;
       deliveryDate: string;
@@ -3815,6 +3816,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
         rows.push({
           orderId: o.id,
+          entityId: o.entityId || '',
           entityName,
           timestamp: o.timestamp,
           deliveryDate: item.deliveryDate || item.deliveryDay || '',
@@ -3860,6 +3862,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         const matchItem = r.itemName.toLowerCase().includes(q);
         if (!matchCust && !matchId && !matchItem) return false;
       }
+
+      // Entity filter
+      if (entityFilter !== 'all' && r.entityId !== entityFilter) return false;
 
       // Service slot
       if (txServiceSlot !== 'All' && r.serviceSlot !== txServiceSlot) return false;
@@ -3926,7 +3931,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm space-y-4">
           <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 flex items-center gap-1">Filter Ledger Details</p>
           
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4">
             {/* Search Input */}
             <div className="space-y-1.5">
               <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Search</label>
@@ -3954,6 +3959,22 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 <option value="Today">Today Only</option>
                 <option value="ThisWeek">This Week Only</option>
                 <option value="Custom">Custom Range...</option>
+              </select>
+            </div>
+
+            {/* Entity Filter */}
+            <div className="space-y-1.5">
+              <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Entity</label>
+              <select
+                value={entityFilter}
+                onChange={e => setEntityFilter(e.target.value)}
+                className="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+              >
+                {filterEntitiesList.map(item => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -4052,19 +4073,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           </div>
           <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
             <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Subtotal Sum</p>
-            <h4 className="text-base font-black text-slate-900">Rs {totals.subtotal.toFixed(2)}</h4>
+            <h4 className="text-base font-black text-slate-900">{formatCurrency(totals.subtotal)}</h4>
           </div>
           <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
             <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Discounts Sum</p>
-            <h4 className="text-base font-black text-danger">-{totals.discount.toFixed(2)}</h4>
+            <h4 className="text-base font-black text-danger">-{formatCurrency(totals.discount)}</h4>
           </div>
           <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
             <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">VAT Sum</p>
-            <h4 className="text-base font-black text-slate-500">Rs {totals.vat.toFixed(2)}</h4>
+            <h4 className="text-base font-black text-slate-500">{formatCurrency(totals.vat)}</h4>
           </div>
           <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm col-span-2 md:col-span-1">
             <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Net Total (Revenue)</p>
-            <h4 className="text-base font-black text-success">Rs {totals.net.toFixed(2)}</h4>
+            <h4 className="text-base font-black text-success">{formatCurrency(totals.net)}</h4>
           </div>
         </div>
 
@@ -4078,7 +4099,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 <thead>
                   <tr className="bg-slate-50 border-b border-[#E7E0D0] text-slate-400 font-black uppercase tracking-wider sticky top-0 z-10">
                     <th className="px-5 py-4 min-w-[90px]">Order ID</th>
-                    <th className="px-5 py-4 min-w-[120px]">Invoicing Entity</th>
                     <th className="px-5 py-4 min-w-[100px]">Delivery Date</th>
                     <th className="px-5 py-4 min-w-[70px]">Service</th>
                     <th className="px-5 py-4 min-w-[120px]">Customer</th>
@@ -4095,9 +4115,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-5 py-3 font-mono text-[10px] text-slate-400 uppercase">
                         #{r.orderId.slice(0, 8)}
-                      </td>
-                      <td className="px-5 py-3 font-bold text-slate-700">
-                        {r.entityName || '—'}
                       </td>
                       <td className="px-5 py-3 whitespace-nowrap">
                         {r.deliveryDate ? new Date(r.deliveryDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }) : 'N/A'}
