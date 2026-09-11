@@ -2128,6 +2128,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       'Price (Rs)',
       'Item Total (Rs)',
       'Discount Share (Rs)',
+      'Standard Discount (Rs)',
+      'Standard Rate (%)',
+      'Birthday Discount (Rs)',
+      'Birthday Rate (%)',
+      'Bulk Discount (Rs)',
+      'Bulk Rate (%)',
       'Discount Reason',
       'VAT Share (Rs)',
       'Net Total (Rs)',
@@ -2190,6 +2196,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         r.price.toString(),
         r.itemTotal.toFixed(2),
         r.discount.toFixed(2),
+        r.standardDiscount.toFixed(2),
+        r.standardRate.toString(),
+        r.birthdayDiscount.toFixed(2),
+        r.birthdayRate.toString(),
+        r.bulkDiscount.toFixed(2),
+        r.bulkRate.toString(),
         csvEscape(removeEmojis(r.discountReason)),
         r.vat.toFixed(2),
         r.totalWithTax.toFixed(2),
@@ -3724,6 +3736,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       itemTotal: number;
       discount: number;
       discountReason: string;
+      standardDiscount: number;
+      standardRate: number;
+      birthdayDiscount: number;
+      birthdayRate: number;
+      bulkDiscount: number;
+      bulkRate: number;
       vat: number;
       totalWithTax: number;
       paymentStatus: string;
@@ -3744,6 +3762,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         const orderSubtotal = o.subtotal || o.items.reduce((sum, it) => sum + (it.price * it.qty), 0);
         const proportion = orderSubtotal > 0 ? (itemTotal / orderSubtotal) : 0;
         const itemDiscount = (o.discount || 0) * proportion;
+        // Per-type breakdown — proportionally allocated like itemDiscount
+        // above, straight from the order's discountBreakdown (added in
+        // 8d22d8b). Orders placed before that fix have no discountBreakdown,
+        // so these are 0 for them — the existing combined `discount` column
+        // still shows their real total, we just can't retroactively know
+        // which type it was.
+        const standardDiscount = (o.discountBreakdown?.standard || 0) * proportion;
+        const birthdayDiscount = (o.discountBreakdown?.birthday || 0) * proportion;
+        const bulkDiscount = (o.discountBreakdown?.bulk || 0) * proportion;
+        const standardRate = o.discountBreakdown?.standardRate || 0;
+        const birthdayRate = o.discountBreakdown?.birthdayRate || 0;
+        const bulkRate = o.discountBreakdown?.bulkRate || 0;
         const itemVat = (o.vat || 0) * proportion;
         const itemNetTotal = itemTotal - itemDiscount + itemVat;
 
@@ -3760,6 +3790,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           itemTotal: itemTotal,
           discount: itemDiscount,
           discountReason: o.discountReason || '',
+          standardDiscount,
+          standardRate,
+          birthdayDiscount,
+          birthdayRate,
+          bulkDiscount,
+          bulkRate,
           vat: itemVat,
           totalWithTax: itemNetTotal,
           paymentStatus: item.paymentStatus || o.paymentStatus || 'Pending',
@@ -3823,10 +3859,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       acc.qty += curr.qty;
       acc.subtotal += curr.itemTotal;
       acc.discount += curr.discount;
+      acc.standardDiscount += curr.standardDiscount;
+      acc.birthdayDiscount += curr.birthdayDiscount;
+      acc.bulkDiscount += curr.bulkDiscount;
       acc.vat += curr.vat;
       acc.net += curr.totalWithTax;
       return acc;
-    }, { qty: 0, subtotal: 0, discount: 0, vat: 0, net: 0 });
+    }, { qty: 0, subtotal: 0, discount: 0, standardDiscount: 0, birthdayDiscount: 0, bulkDiscount: 0, vat: 0, net: 0 });
 
     return (
       <div className="space-y-6 animate-fade-in pb-16">
@@ -3980,6 +4019,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
             <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Discounts Sum</p>
             <h4 className="text-base font-black text-danger">-{totals.discount.toFixed(2)}</h4>
+          </div>
+          <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Standard Discounts Sum</p>
+            <h4 className="text-base font-black text-danger">-{totals.standardDiscount.toFixed(2)}</h4>
+          </div>
+          <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Birthday Discounts Sum</p>
+            <h4 className="text-base font-black text-danger">-{totals.birthdayDiscount.toFixed(2)}</h4>
+          </div>
+          <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Bulk Discounts Sum</p>
+            <h4 className="text-base font-black text-danger">-{totals.bulkDiscount.toFixed(2)}</h4>
           </div>
           <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
             <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">VAT Sum</p>
