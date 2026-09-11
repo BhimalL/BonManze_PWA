@@ -629,13 +629,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // catalogs (only within one).
   type CatalogKey = 'base' | 'dhal' | 'salad' | 'beverage' | 'dessert';
   const [editingAddOn, setEditingAddOn] = useState<{ catalog: CatalogKey; id: string } | null>(null);
-  const [addOnForm, setAddOnForm] = useState({ emoji: '', name: '', price: '', group: '' });
-  const [newAddOnForm, setNewAddOnForm] = useState<Record<CatalogKey, { emoji: string; name: string; price: string; group: string }>>({
-    base: { emoji: '🍚', name: '', price: '0', group: 'rice' },
-    dhal: { emoji: '🟡', name: '', price: '', group: '' },
-    salad: { emoji: '🥗', name: '', price: '', group: '' },
-    beverage: { emoji: '🥤', name: '', price: '0', group: '' },
-    dessert: { emoji: '🍡', name: '', price: '0', group: '' },
+  const [addOnForm, setAddOnForm] = useState({ emoji: '', name: '', price: '', group: '', cost: '' });
+  const [newAddOnForm, setNewAddOnForm] = useState<Record<CatalogKey, { emoji: string; name: string; price: string; group: string; cost: string }>>({
+    base: { emoji: '🍚', name: '', price: '0', group: 'rice', cost: '' },
+    dhal: { emoji: '🟡', name: '', price: '', group: '', cost: '' },
+    salad: { emoji: '🥗', name: '', price: '', group: '', cost: '' },
+    beverage: { emoji: '🥤', name: '', price: '0', group: '', cost: '' },
+    dessert: { emoji: '🍡', name: '', price: '0', group: '', cost: '' },
   });
 
   // Group editing states in Settings > Loyalty
@@ -1914,18 +1914,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const startEditAddOn = (catalog: CatalogKey, item: AddOnOption) => {
     setEditingAddOn({ catalog, id: item.id });
-    setAddOnForm({ emoji: item.emoji, name: item.name, price: String(item.price ?? item.up ?? 0), group: '' });
+    setAddOnForm({ emoji: item.emoji, name: item.name, price: String(item.price ?? item.up ?? 0), group: '', cost: item.cost !== undefined ? String(item.cost) : '' });
   };
 
   const saveAddOnEdit = () => {
     if (!editingAddOn) return;
     const meta = CATALOG_META[editingAddOn.catalog];
     const parsedPrice = parseFloat(addOnForm.price);
+    const parsedCost = parseFloat(addOnForm.cost);
     const priceField = editingAddOn.catalog === 'base' ? 'up' : 'price';
     runMenuWrite(meta.update(editingAddOn.id, {
       emoji: addOnForm.emoji.trim() || '•',
       name: addOnForm.name.trim() || 'Untitled',
       [priceField]: isNaN(parsedPrice) ? 0 : parsedPrice,
+      cost: addOnForm.cost.trim() === '' || isNaN(parsedCost) ? undefined : parsedCost,
     } as Partial<AddOnOption>));
     setEditingAddOn(null);
   };
@@ -1935,6 +1937,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     if (!draft.name.trim()) return;
     const meta = CATALOG_META[catalog];
     const parsedPrice = parseFloat(draft.price);
+    const parsedCost = parseFloat(draft.cost);
     const item: AddOnOption = {
       id: `${catalog}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       emoji: draft.emoji.trim() || '•',
@@ -1945,8 +1948,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     } else {
       item.price = isNaN(parsedPrice) ? 0 : parsedPrice;
     }
+    if (draft.cost.trim() !== '' && !isNaN(parsedCost)) {
+      item.cost = parsedCost;
+    }
     runMenuWrite(meta.add(item));
-    setNewAddOnForm(f => ({ ...f, [catalog]: { emoji: draft.emoji, name: '', price: catalog === 'dhal' || catalog === 'salad' ? '' : '0', group: '' } }));
+    setNewAddOnForm(f => ({ ...f, [catalog]: { emoji: draft.emoji, name: '', price: catalog === 'dhal' || catalog === 'salad' ? '' : '0', group: '', cost: '' } }));
   };
 
   // --- Icon Library management (Settings → Icons) ---
@@ -2966,6 +2972,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             <th className="px-6 py-3">Option Name</th>
                             {meta.hasGroup && <th className="px-6 py-3 w-28">Group</th>}
                             {meta.hasPrice && <th className="px-6 py-3 text-right w-28">Upcharge (Rs)</th>}
+                            <th className="px-6 py-3 text-right w-24">Cost (Rs)</th>
                             {currentPermissions?.mealLibrary?.edit === true && (
                               <th className="px-6 py-3 text-center w-28">Actions</th>
                             )}
@@ -3014,6 +3021,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                       </div>
                                     </td>
                                   )}
+                                  <td className="px-6 py-3 text-right">
+                                    <div className="flex justify-end">
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        placeholder="Cost"
+                                        value={addOnForm.cost}
+                                        onChange={e => setAddOnForm(f => ({ ...f, cost: e.target.value }))}
+                                        className="w-20 text-right text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                                      />
+                                    </div>
+                                  </td>
                                   <td className="px-6 py-3 text-center">
                                     <div className="flex items-center justify-center gap-1.5">
                                       <button onClick={saveAddOnEdit} className="p-1 bg-primary text-white rounded-lg cursor-pointer"><Check className="size-3.5" /></button>
@@ -3033,6 +3052,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                     {formatCurrency(item.price ?? item.up ?? 0)}
                                   </td>
                                 )}
+                                <td className="px-6 py-4 text-right font-semibold text-slate-400">
+                                  {item.cost !== undefined ? formatCurrency(item.cost) : '—'}
+                                </td>
                                 {currentPermissions?.mealLibrary?.edit === true && (
                                   <td className="px-6 py-4 text-center">
                                     <div className="flex items-center justify-center gap-1.5 font-normal">
@@ -3084,6 +3106,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
                           />
                         )}
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={draft.cost}
+                          onChange={e => setNewAddOnForm(f => ({ ...f, [key]: { ...f[key], cost: e.target.value } }))}
+                          placeholder="Cost"
+                          className="w-20 text-xs font-black px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none bg-white"
+                        />
                         <button
                           onClick={() => saveNewAddOn(key)}
                           disabled={!draft.name.trim()}

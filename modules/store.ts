@@ -758,6 +758,7 @@ export interface AddOnOption {
   name: string;
   price?: number;
   up?: number;
+  cost?: number;
 }
 
 // Base/Dhal/Salad/Beverage/Dessert used to be plain immutable constants with
