@@ -2350,9 +2350,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const activeWeekFinancials = useMemo(() => {
     let collected = 0;
     let outstanding = 0;
-    lines.forEach(({ item }) => {
+    lines.forEach(({ order, item }) => {
       if (item.deliveryDate && weekDateKeys.has(item.deliveryDate)) {
-        const amt = item.qty * item.price;
+        const amt = itemNetAmount(order, item);
         if (item.paymentStatus === 'Paid') {
           collected += amt;
         } else {
