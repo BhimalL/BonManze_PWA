@@ -2111,6 +2111,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
     const headers = [
       'Order ID',
+      'Invoicing Entity',
       'Order Placed Date',
       'Delivery Date',
       'Service',
@@ -2134,6 +2135,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       'Birthday Rate (%)',
       'Bulk Discount (Rs)',
       'Bulk Rate (%)',
+      'Total before VAT (Rs)',
       'VAT Share (Rs)',
       'Net Total (Rs)',
       'Payment Status',
@@ -2178,6 +2180,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
       const row = [
         csvEscape(r.orderId),
+        csvEscape(removeEmojis(r.entityName)),
         csvEscape(r.timestamp),
         csvEscape(r.deliveryDate),
         csvEscape(r.serviceSlot),
@@ -2201,6 +2204,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         r.birthdayRate.toString(),
         r.bulkDiscount.toFixed(2),
         r.bulkRate.toString(),
+        r.totalBeforeVat.toFixed(2),
         r.vat.toFixed(2),
         r.totalWithTax.toFixed(2),
         csvEscape(r.paymentStatus),
@@ -3723,6 +3727,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     // 1. Compile all transaction rows from ACTIVE_ORDERS
     const rows: {
       orderId: string;
+      entityName: string;
       timestamp: string;
       deliveryDate: string;
       customerName: string;
@@ -3740,6 +3745,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       birthdayRate: number;
       bulkDiscount: number;
       bulkRate: number;
+      totalBeforeVat: number;
       vat: number;
       totalWithTax: number;
       paymentStatus: string;
@@ -3754,6 +3760,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     orders.forEach(o => {
       o.items.forEach(item => {
         const cust = getCustomer(o.customerName);
+        const entityName = o.entityName || (entities.find(e => e.id === o.entityId)?.name) || '';
         const itemTotal = item.price * item.qty;
         
         // Calculate proportional discounts & VAT based on pre-tax subtotal
@@ -3772,11 +3779,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         const standardRate = o.discountBreakdown?.standardRate || 0;
         const birthdayRate = o.discountBreakdown?.birthdayRate || 0;
         const bulkRate = o.discountBreakdown?.bulkRate || 0;
+        const totalBeforeVat = itemTotal - itemDiscount;
         const itemVat = (o.vat || 0) * proportion;
-        const itemNetTotal = itemTotal - itemDiscount + itemVat;
+        const itemNetTotal = totalBeforeVat + itemVat;
 
         rows.push({
           orderId: o.id,
+          entityName,
           timestamp: o.timestamp,
           deliveryDate: item.deliveryDate || item.deliveryDay || '',
           customerName: o.customerName,
@@ -3794,6 +3803,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           birthdayRate,
           bulkDiscount,
           bulkRate,
+          totalBeforeVat,
           vat: itemVat,
           totalWithTax: itemNetTotal,
           paymentStatus: item.paymentStatus || o.paymentStatus || 'Pending',
@@ -4038,6 +4048,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 <thead>
                   <tr className="bg-slate-50 border-b border-[#E7E0D0] text-slate-400 font-black uppercase tracking-wider sticky top-0 z-10">
                     <th className="px-5 py-4 min-w-[90px]">Order ID</th>
+                    <th className="px-5 py-4 min-w-[120px]">Invoicing Entity</th>
                     <th className="px-5 py-4 min-w-[100px]">Delivery Date</th>
                     <th className="px-5 py-4 min-w-[70px]">Service</th>
                     <th className="px-5 py-4 min-w-[120px]">Customer</th>
@@ -4054,6 +4065,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-5 py-3 font-mono text-[10px] text-slate-400 uppercase">
                         #{r.orderId.slice(0, 8)}
+                      </td>
+                      <td className="px-5 py-3 font-bold text-slate-700">
+                        {r.entityName || '—'}
                       </td>
                       <td className="px-5 py-3 whitespace-nowrap">
                         {r.deliveryDate ? new Date(r.deliveryDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }) : 'N/A'}
