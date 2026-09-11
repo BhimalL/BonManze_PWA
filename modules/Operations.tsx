@@ -4148,10 +4148,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         )}
                       </td>
                       <td className="px-5 py-3 text-right">
-                        Rs {r.price}
+                        {formatCurrency(r.price)}
                       </td>
                       <td className="px-5 py-3 text-right font-black text-slate-950">
-                        Rs {r.totalWithTax.toFixed(2)}
+                        {formatCurrency(r.totalWithTax)}
                       </td>
                       <td className="px-5 py-3 text-center">
                         <div className="flex flex-col items-center justify-center gap-0.5">
