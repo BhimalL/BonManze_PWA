@@ -2134,7 +2134,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       'Birthday Rate (%)',
       'Bulk Discount (Rs)',
       'Bulk Rate (%)',
-      'Discount Reason',
       'VAT Share (Rs)',
       'Net Total (Rs)',
       'Payment Status',
@@ -2202,7 +2201,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         r.birthdayRate.toString(),
         r.bulkDiscount.toFixed(2),
         r.bulkRate.toString(),
-        csvEscape(removeEmojis(r.discountReason)),
         r.vat.toFixed(2),
         r.totalWithTax.toFixed(2),
         csvEscape(r.paymentStatus),
@@ -4020,18 +4018,24 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Discounts Sum</p>
             <h4 className="text-base font-black text-danger">-{totals.discount.toFixed(2)}</h4>
           </div>
-          <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
-            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Standard Discounts Sum</p>
-            <h4 className="text-base font-black text-danger">-{totals.standardDiscount.toFixed(2)}</h4>
-          </div>
-          <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
-            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Birthday Discounts Sum</p>
-            <h4 className="text-base font-black text-danger">-{totals.birthdayDiscount.toFixed(2)}</h4>
-          </div>
-          <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
-            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Bulk Discounts Sum</p>
-            <h4 className="text-base font-black text-danger">-{totals.bulkDiscount.toFixed(2)}</h4>
-          </div>
+          {totals.standardDiscount > 0 && (
+            <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
+              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Standard Discounts Sum</p>
+              <h4 className="text-base font-black text-danger">-{totals.standardDiscount.toFixed(2)}</h4>
+            </div>
+          )}
+          {totals.birthdayDiscount > 0 && (
+            <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
+              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Birthday Discounts Sum</p>
+              <h4 className="text-base font-black text-danger">-{totals.birthdayDiscount.toFixed(2)}</h4>
+            </div>
+          )}
+          {totals.bulkDiscount > 0 && (
+            <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
+              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Bulk Discounts Sum</p>
+              <h4 className="text-base font-black text-danger">-{totals.bulkDiscount.toFixed(2)}</h4>
+            </div>
+          )}
           <div className="bg-white rounded-2xl border border-[#E7E0D0] p-4 shadow-sm">
             <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">VAT Sum</p>
             <h4 className="text-base font-black text-slate-500">Rs {totals.vat.toFixed(2)}</h4>
