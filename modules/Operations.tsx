@@ -7080,9 +7080,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           const isForUser = isNoteForCustomer(person, drop.customerName, cust);
                           return (
                             <div key={idx} className="space-y-0.5">
-                              <div className="flex justify-between font-bold text-slate-950">
-                                <span>{item.qty}x {item.name}</span>
-                                <span>Rs {item.price * item.qty}</span>
+                              <div className="font-bold text-slate-950">
+                                {item.qty}x {item.name}
                               </div>
                               {detail && <p className="text-[10px] text-slate-500 leading-tight pl-2">↳ {detail}</p>}
                               {person && !isForUser && <p className="text-[10px] font-bold text-accent pl-2">👤 For {person}</p>}
