@@ -5,7 +5,7 @@ process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
 process.env.FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9099';
 
 import { initializeApp } from 'firebase/app';
-import { getFirestore, connectFirestoreEmulator, doc, getDoc, updateDoc, collection } from 'firebase/firestore';
+import { getFirestore, connectFirestoreEmulator, doc, getDoc, updateDoc, collection, collectionGroup, query, where, getDocs } from 'firebase/firestore';
 import { getAuth, connectAuthEmulator, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'firebase/functions';
 
@@ -210,6 +210,34 @@ async function assertDenied(label, fn) {
     await updateDoc(doc(db, 'orders', orderAId, 'items', itemAId), {
       entityId: 'entity-b'
     });
+  });
+
+  // 8. Assert partner constrained query for assigned entity succeeds and returns assigned records only
+  await assert('[9] Partner constrained orders query for assigned entity-a succeeds', async () => {
+    const q = query(collection(db, 'orders'), where('entityId', 'in', ['entity-a']));
+    const snap = await getDocs(q);
+    if (snap.empty) throw new Error('Constrained orders query returned empty snapshot');
+    const ids = snap.docs.map(d => d.id);
+    if (!ids.includes(orderAId)) throw new Error('Constrained orders query missing assigned orderAId');
+    if (ids.includes(orderBId)) throw new Error('Constrained orders query incorrectly included unassigned orderBId');
+  });
+
+  await assert('[10] Partner constrained items collectionGroup query for assigned entity-a succeeds', async () => {
+    const q = query(collectionGroup(db, 'items'), where('entityId', 'in', ['entity-a']));
+    const snap = await getDocs(q);
+    if (snap.empty) throw new Error('Constrained items query returned empty snapshot');
+    const ids = snap.docs.map(d => d.id);
+    if (!ids.includes(itemAId)) throw new Error('Constrained items query missing assigned itemAId');
+    if (ids.includes(itemBId)) throw new Error('Constrained items query incorrectly included unassigned itemBId');
+  });
+
+  // 9. Assert partner unconstrained queries fail with PERMISSION_DENIED
+  await assertDenied('[11] Partner unconstrained orders query rejected with PERMISSION_DENIED', async () => {
+    await getDocs(collection(db, 'orders'));
+  });
+
+  await assertDenied('[12] Partner unconstrained items collectionGroup query rejected with PERMISSION_DENIED', async () => {
+    await getDocs(collectionGroup(db, 'items'));
   });
 
   // Cleanup & Summary
