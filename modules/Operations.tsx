@@ -501,6 +501,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // logoError/csvError elsewhere rather than a blocking alert().
   const [mainPhotoError, setMainPhotoError] = useState('');
   const mainPhotoFileInputRef = useRef<HTMLInputElement>(null);
+  // The raw picked file, uploaded to Storage only at Save time — mirrors
+  // entityLogoFile's role in the Trading Entities Save handler. null means
+  // "no new photo picked this edit session" (keep whatever's already saved).
+  const [mainPhotoFile, setMainPhotoFile] = useState<File | null>(null);
+  const [mainPhotoUploading, setMainPhotoUploading] = useState(false);
 
   // Meal Library Mains — subscribed the same way the five add-on catalogs
   // are below.
@@ -1747,6 +1752,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const startAddMain = () => {
     setMainEditor({ mode: 'add' });
     setMainPhotoError('');
+    setMainPhotoFile(null);
     setMainForm({
       emoji: '🍽️', name: '', desc: '', price: '', cost: '', photoUrl: '',
       baseApplicable: true, baseOptionIds: null,
@@ -1760,6 +1766,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const startEditMain = (main: MainDish) => {
     setMainEditor({ mode: 'edit', mainId: main.id });
     setMainPhotoError('');
+    setMainPhotoFile(null);
     setMainForm({
       emoji: main.emoji, name: main.name, desc: main.desc, price: String(main.price), cost: main.cost !== undefined ? String(main.cost) : '', photoUrl: main.photoUrl || '',
       baseApplicable: dishBaseApplicable(main), baseOptionIds: dishBaseOptionIds(main, bases) ?? null,
@@ -1772,10 +1779,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const cancelMainEditor = () => setMainEditor(null);
 
-  // Mirrors handleLogoFileChange's pattern (Settings → Brand Identity) —
-  // read into a base64 data URL and store it directly, no backend/file
-  // storage to upload to. dishPhotoFor() prefers this over the built-in
-  // protein-family guess whenever it's set.
   const handleMainPhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -1783,11 +1786,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     if (!file.type.startsWith('image/')) { setMainPhotoError('Please choose an image file.'); return; }
     if (file.size > 1_500_000) { setMainPhotoError('That image is over 1.5MB — pick a smaller file.'); return; }
     setMainPhotoError('');
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') setMainForm(f => ({ ...f, photoUrl: reader.result as string }));
-    };
-    reader.readAsDataURL(file);
+    setMainPhotoFile(file);
+    // Lightweight local preview only (never written to Firestore) — the
+    // actual upload happens in saveMainEditor. Object URL instead of
+    // FileReader/base64 so nothing large ever sits in component state.
+    setMainForm(f => ({ ...f, photoUrl: URL.createObjectURL(file) }));
   };
 
   // Toggles one catalog entry's membership in a *OptionIds field. Starts
@@ -1805,18 +1808,43 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     });
   };
 
-  const saveMainEditor = () => {
+  const saveMainEditor = async () => {
     if (!mainEditor) return;
     if (!mainForm.name.trim()) return;
     const parsedPrice = parseInt(mainForm.price, 10);
     const parsedCost = parseFloat(mainForm.cost);
+
+    const newMainId = mainEditor.mode === 'add'
+      ? `main-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+      : mainEditor.mainId!;
+
+    // Upload the newly-picked photo to Storage now, if there is one — same
+    // pattern as the Trading Entities Save handler's entityLogoFile upload.
+    // If no new file was picked, photoUrl is left exactly as it already was
+    // (the previously-saved download URL, or '' if removed/never set) —
+    // nothing re-uploads on every save, only when a photo actually changed.
+    let photoUrl = mainForm.photoUrl.trim() || undefined;
+    if (mainPhotoFile) {
+      setMainPhotoUploading(true);
+      try {
+        const photoRef = storageRef(storage, `dishPhotos/mains/${newMainId}`);
+        await uploadBytes(photoRef, mainPhotoFile);
+        photoUrl = await getDownloadURL(photoRef);
+      } catch (err) {
+        setMainPhotoError(err instanceof Error ? err.message : 'Failed to upload photo — please try again.');
+        setMainPhotoUploading(false);
+        return;
+      }
+      setMainPhotoUploading(false);
+    }
+
     const patch: Partial<Omit<MainDish, 'id'>> = {
       emoji: mainForm.emoji.trim() || '🍽️',
       name: mainForm.name.trim(),
       desc: mainForm.desc.trim(),
       price: isNaN(parsedPrice) ? 0 : parsedPrice,
       cost: mainForm.cost.trim() === '' || isNaN(parsedCost) ? undefined : parsedCost,
-      photoUrl: mainForm.photoUrl.trim() || undefined,
+      photoUrl,
       baseApplicable: mainForm.baseApplicable,
       baseOptionIds: mainForm.baseOptionIds ?? undefined,
       dhalApplicable: mainForm.dhalApplicable,
@@ -1829,13 +1857,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       dessertOptionIds: mainForm.dessertOptionIds ?? undefined
     };
     if (mainEditor.mode === 'add') {
-      runMenuWrite(addMainDish({
-        id: `main-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-        ...patch
-      } as MainDish));
+      runMenuWrite(addMainDish({ id: newMainId, ...patch } as MainDish));
     } else if (mainEditor.mainId) {
       runMenuWrite(updateMainDish(mainEditor.mainId, patch));
     }
+    setMainPhotoFile(null);
     setMainEditor(null);
   };
 
@@ -3248,7 +3274,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         <ImagePlus className="size-3.5" /> Upload photo
                       </button>
                       {mainForm.photoUrl && (
-                        <button type="button" onClick={() => setMainForm(f => ({ ...f, photoUrl: '' }))} className="text-[11px] font-bold text-slate-400 hover:text-red-500">Remove</button>
+                        <button type="button" onClick={() => { setMainPhotoFile(null); setMainForm(f => ({ ...f, photoUrl: '' })); }} className="text-[11px] font-bold text-slate-400 hover:text-red-500">Remove</button>
                       )}
                     </div>
                     {mainPhotoError && <p className="text-[10px] font-bold text-red-500">{mainPhotoError}</p>}
@@ -3381,7 +3407,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
               <div className="p-4 border-t border-[#E7E0D0] flex items-center justify-end gap-2 shrink-0">
                 <button onClick={cancelMainEditor} className="px-4 py-2 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-50 transition-colors">Cancel</button>
-                <button onClick={saveMainEditor} disabled={!mainForm.name.trim()} className="px-4 py-2 rounded-xl text-xs font-black bg-primary text-white hover:bg-primary/90 disabled:opacity-40 transition-colors">Save Main</button>
+                <button onClick={saveMainEditor} disabled={!mainForm.name.trim() || mainPhotoUploading} className="px-4 py-2 rounded-xl text-xs font-black bg-primary text-white hover:bg-primary/90 disabled:opacity-40 transition-colors">{mainPhotoUploading ? 'Uploading…' : 'Save Main'}</button>
               </div>
             </div>
           </div>
