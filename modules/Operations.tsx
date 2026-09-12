@@ -909,23 +909,35 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setCustomers(list);
     }, err => console.error('customers listener failed', err));
 
-    const unsubOrders = onSnapshot(collection(db, 'orders'), snap => {
+    const isPartner = staffDocRaw?.isPartner === true;
+    const partnerEntityIds: string[] = isPartner && Array.isArray(staffDocRaw?.assignedEntityIds)
+      ? staffDocRaw.assignedEntityIds.filter((id: any) => typeof id === 'string' && id.length > 0)
+      : [];
+
+    const ordersQuery = isPartner
+      ? (partnerEntityIds.length > 0
+          ? query(collection(db, 'orders'), where('entityId', 'in', partnerEntityIds))
+          : query(collection(db, 'orders'), where('entityId', '==', '__NONE__')))
+      : collection(db, 'orders');
+
+    const itemsQuery = isPartner
+      ? (partnerEntityIds.length > 0
+          ? query(collectionGroup(db, 'items'), where('entityId', 'in', partnerEntityIds))
+          : query(collectionGroup(db, 'items'), where('entityId', '==', '__NONE__')))
+      : collectionGroup(db, 'items');
+
+    const unsubOrders = onSnapshot(ordersQuery, snap => {
       const map: Record<string, any> = {};
       snap.forEach(d => { map[d.id] = d.data(); });
       setFsOrderDocs(map);
     }, err => console.error('orders listener failed', err));
 
-    const unsubItems = onSnapshot(collectionGroup(db, 'items'), snap => {
+    const unsubItems = onSnapshot(itemsQuery, snap => {
       const grouped: Record<string, any[]> = {};
       snap.forEach(d => {
         const orderId = d.ref.parent.parent?.id;
         if (!orderId) return;
         if (!grouped[orderId]) grouped[orderId] = [];
-        // _fsItemId carries the item's real Firestore document id (confirmCheckout
-        // writes each item via .doc() with an auto-generated id -- the item's own
-        // "itemId" field is just which dish/curry it is, not a unique row id).
-        // Mark Delivered/Mark Paid need this to build a doc() reference back to
-        // the exact item to update -- without it there's no way to write back.
         grouped[orderId].push({ ...d.data(), _fsItemId: d.id });
       });
       setFsItemDocs(grouped);
@@ -958,7 +970,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     }, err => console.warn('staff listener failed (permission-gated):', err));
 
     return () => { unsubCustomers(); unsubOrders(); unsubItems(); unsubEntities(); unsubRoles(); unsubStaff(); };
-  }, [staffAuthUser]);
+  }, [staffAuthUser, staffDocRaw]);
 
   // Reshapes the two raw listeners above into Order[] -- every downstream
   // memo (lines, dishesByDay, drops, paymentDrops) only ever needed this
