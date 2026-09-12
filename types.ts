@@ -150,6 +150,7 @@ export interface OrderItem {
   name: string;
   qty: number;
   price: number;
+  cost?: number;
   notes?: string;
   deliveryDate?: string;
   deliveryDay?: string;

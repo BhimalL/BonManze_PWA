@@ -2168,6 +2168,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       'Bulk Discount (Rs)',
       'Bulk Rate (%)',
       'Total before VAT (Rs)',
+      'Total Cost (Rs)',
+      'Profit (before VAT) (Rs)',
       'VAT Share (Rs)',
       'Net Total (Rs)',
       'Payment Status',
@@ -2237,6 +2239,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         r.bulkDiscount.toFixed(2),
         r.bulkRate.toString(),
         r.totalBeforeVat.toFixed(2),
+        r.totalCost !== undefined ? r.totalCost.toFixed(2) : '',
+        r.profitBeforeVat !== undefined ? r.profitBeforeVat.toFixed(2) : '',
         r.vat.toFixed(2),
         r.totalWithTax.toFixed(2),
         csvEscape(r.paymentStatus),
@@ -3803,6 +3807,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       bulkDiscount: number;
       bulkRate: number;
       totalBeforeVat: number;
+      totalCost?: number;
+      profitBeforeVat?: number;
       vat: number;
       totalWithTax: number;
       paymentStatus: string;
@@ -3839,6 +3845,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         const totalBeforeVat = itemTotal - itemDiscount;
         const itemVat = (o.vat || 0) * proportion;
         const itemNetTotal = totalBeforeVat + itemVat;
+        // Blank (undefined), not 0, when this item predates the cost-
+        // snapshot fix — 0 would falsely claim "this cost nothing." Cost is
+        // per-unit (same convention as price), so multiply by qty.
+        const totalCost = item.cost !== undefined ? item.cost * item.qty : undefined;
+        const profitBeforeVat = totalCost !== undefined ? totalBeforeVat - totalCost : undefined;
 
         rows.push({
           orderId: o.id,
@@ -3862,6 +3873,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           bulkDiscount,
           bulkRate,
           totalBeforeVat,
+          totalCost,
+          profitBeforeVat,
           vat: itemVat,
           totalWithTax: itemNetTotal,
           paymentStatus: item.paymentStatus || o.paymentStatus || 'Pending',
