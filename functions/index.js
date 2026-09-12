@@ -333,6 +333,23 @@ export const confirmCheckout = onCall(async (request) => {
     return data;
   };
 
+  // Per-dish food cost, resolved from the linked Main and memoized — same
+  // pattern as weekOverrideCache/getWeekOverride above: bounded to the
+  // distinct dishes actually referenced in this cart (typically 1-5), never
+  // a full `mains` collection read. dish.mainId is unset for a freehand
+  // day-slot dish never linked to a Meal Library Main — cost is 0 for the
+  // main-dish portion in that case, consistent with cost being optional
+  // everywhere else in the catalogs.
+  const mainsCostCache = new Map();
+  const getMainCost = async (mainId) => {
+    if (!mainId) return 0;
+    if (mainsCostCache.has(mainId)) return mainsCostCache.get(mainId);
+    const snap = await db.collection('mains').doc(mainId).get();
+    const cost = snap.exists ? (snap.data().cost || 0) : 0;
+    mainsCostCache.set(mainId, cost);
+    return cost;
+  };
+
   const findDish = async (deliveryDate, service, curryId) => {
     const weekStart = weekStartOf(deliveryDate);
     const weekdayKey = weekdayKeyOf(deliveryDate);
@@ -385,6 +402,17 @@ export const confirmCheckout = onCall(async (request) => {
 
     const price = (dish.price || 0) + (base?.up || 0) + (dhal?.price || 0) + (salad?.price || 0) + (beverage?.price || 0) + (dessert?.price || 0);
 
+    // Food cost for this item, snapshotted NOW — same reasoning as
+    // tierAtOrder below: Main/Add-On costs are admin-editable at any time,
+    // so freezing the resolved cost at order time keeps historical profit
+    // figures from silently drifting if a cost figure is corrected later.
+    // Admin-only, never shown to the customer. dish.mainId comes from the
+    // day-slot dish findDish() just resolved server-side above, never from
+    // client input — same trust model as `price`.
+    const mainCost = await getMainCost(dish.mainId);
+    const addOnCost = (base?.cost || 0) + (dhal?.cost || 0) + (salad?.cost || 0) + (beverage?.cost || 0) + (dessert?.cost || 0);
+    const cost = mainCost + addOnCost;
+
     const parsed = splitNotesTag(note);
 
     priced.push({
@@ -392,6 +420,7 @@ export const confirmCheckout = onCall(async (request) => {
       name: `${dish.emoji || ''} ${dish.name || 'Meal'}`.trim(),
       qty: 1,
       price,
+      cost,
       notes: typeof note === 'string' ? note.slice(0, 500) : '',
       baseId: baseId || '',
       dhalId: dhalId || 'none',
@@ -889,6 +918,18 @@ export const editOrderItemSelection = onCall(async (request) => {
 
   const newPrice = (dish.price || 0) + (base?.up || 0) + (dh?.price || 0) + (sl?.price || 0) + (beverage?.price || 0) + (dessert?.price || 0);
 
+  // Re-resolve cost the same way confirmCheckout does, for the same reason:
+  // the customer just changed what's actually in this item, so its frozen
+  // cost from the original selection is now stale and must be re-snapshotted
+  // against the CURRENT catalog costs. dish.mainId comes from the day-slot
+  // dish resolved a few lines above (daySource.find(...)), never from client
+  // input. This function only prices one item per call, so a direct get()
+  // here is simplest — no cache needed the way confirmCheckout's loop does.
+  const mainCostSnap = dish.mainId ? await db.collection('mains').doc(dish.mainId).get() : null;
+  const newMainCost = mainCostSnap && mainCostSnap.exists ? (mainCostSnap.data().cost || 0) : 0;
+  const newAddOnCost = (base?.cost || 0) + (dh?.cost || 0) + (sl?.cost || 0) + (beverage?.cost || 0) + (dessert?.cost || 0);
+  const newCost = newMainCost + newAddOnCost;
+
   // Recalculate notes string:
   const parts = [];
   if (base) parts.push(base.name);
@@ -924,6 +965,7 @@ export const editOrderItemSelection = onCall(async (request) => {
     // 1. Update the item
     tx.update(itemRef, {
       price: newPrice,
+      cost: newCost,
       notes: newNotes,
       name: `${dish.emoji || ''} ${dish.name || 'Meal'}`.trim(),
       baseId: baseId || '',
