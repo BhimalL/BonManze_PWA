@@ -567,6 +567,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [loyaltyTiers, setLoyaltyTiers] = useState<LoyaltyTier[]>([]);
   const [customerGroups, setCustomerGroups] = useState<CustomerGroup[]>([]);
 
+  const isPartner = staffDocRaw?.isPartner === true;
+  const partnerEntityIds = useMemo<string[]>(() => {
+    return isPartner && Array.isArray(staffDocRaw?.assignedEntityIds)
+      ? staffDocRaw.assignedEntityIds.filter((id: any) => typeof id === 'string' && id.length > 0)
+      : [];
+  }, [isPartner, staffDocRaw]);
+
   // Derived from currentPermissions — the ordered list of settings sub-tabs
   // this staff member is allowed to see. Shared by hasTabPermission('settings'),
   // the redirect useEffect, and the sub-tab button render so they are always
@@ -908,11 +915,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       });
       setCustomers(list);
     }, err => console.error('customers listener failed', err));
-
-    const isPartner = staffDocRaw?.isPartner === true;
-    const partnerEntityIds: string[] = isPartner && Array.isArray(staffDocRaw?.assignedEntityIds)
-      ? staffDocRaw.assignedEntityIds.filter((id: any) => typeof id === 'string' && id.length > 0)
-      : [];
 
     const ordersQuery = isPartner
       ? (partnerEntityIds.length > 0
@@ -1364,6 +1366,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       { id: 'entity-a', name: 'PLACEHOLDER ENTITY A LTD — replace before launch', brn: 'BRN-A', vatNumber: 'VAT-A', bankReference: 'BANK-REF-A', active: true } as Entity,
       { id: 'entity-b', name: 'PLACEHOLDER ENTITY B LTD — replace before launch', brn: 'BRN-B', vatNumber: 'VAT-B', bankReference: 'BANK-REF-B', active: true } as Entity
     ];
+    if (isPartner) {
+      const allowed = list.filter(e => partnerEntityIds.includes(e.id));
+      return allowed.map(e => ({
+        id: e.id,
+        label: `${e.name}${e.active === false ? ' (Retired)' : ''}`
+      }));
+    }
     return [
       { id: 'all', label: 'All Entities' },
       ...list.map(e => ({
@@ -1371,7 +1380,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         label: `${e.name}${e.active === false ? ' (Retired)' : ''}`
       }))
     ];
-  }, [entities]);
+  }, [entities, isPartner, partnerEntityIds]);
 
   // Non-cancelled order lines, flattened for aggregation across tabs.
   const lines = useMemo(() => {
@@ -2449,29 +2458,31 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         {/* Welcome Section */}
         <div className="bg-[#FDFAF4] rounded-[24px] border border-[#E7E0D0] p-8 shadow-sm flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="space-y-2 text-center md:text-left">
-            <h2 className="text-xl font-black text-slate-900 leading-none">Welcome back, Bhimal</h2>
+            <h2 className="text-xl font-black text-slate-900 leading-none">Welcome {staffDocRaw?.name ? `back, ${staffDocRaw.name}` : 'back'}</h2>
             <p className="text-xs text-slate-500 font-medium">
               Here is your overview for today, <strong className="text-primary">{formattedDate}</strong>.
             </p>
           </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <button
-              onClick={() => setTab('menu')}
-              className="px-4 py-2.5 bg-primary text-white hover:bg-primary/95 rounded-xl text-xs font-bold shadow-md transition-colors"
-            >
-              Manage Curries
-            </button>
-            <button
-              onClick={() => setTab('delivery')}
-              className="px-4 py-2.5 bg-white border border-[#E7E0D0] hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold shadow-sm transition-colors"
-            >
-              Delivery List
-            </button>
-          </div>
+          {!isPartner && (
+            <div className="flex items-center gap-3 shrink-0">
+              <button
+                onClick={() => setTab('menu')}
+                className="px-4 py-2.5 bg-primary text-white hover:bg-primary/95 rounded-xl text-xs font-bold shadow-md transition-colors"
+              >
+                Manage Curries
+              </button>
+              <button
+                onClick={() => setTab('delivery')}
+                className="px-4 py-2.5 bg-white border border-[#E7E0D0] hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold shadow-sm transition-colors"
+              >
+                Delivery List
+              </button>
+            </div>
+          )}
         </div>
 
         {/* KPI Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className={`grid grid-cols-1 md:grid-cols-2 ${isPartner ? 'lg:grid-cols-3' : 'lg:grid-cols-4'} gap-6`}>
           {/* Today's Cook Count */}
           <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all">
             <div className="size-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
@@ -2509,16 +2520,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           </div>
 
           {/* Revenue & Outstanding */}
-          <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all">
-            <div className="size-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-600">
-              <Banknote className="size-6" />
+          {!isPartner && (
+            <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all">
+              <div className="size-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-600">
+                <Banknote className="size-6" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">This Week's Revenue</p>
+                <h3 className="text-xl font-black text-slate-900 mt-2 truncate">Rs {activeWeekFinancials.collected}</h3>
+                <p className="text-[11px] text-[#B4703A] font-bold mt-1">Rs {activeWeekFinancials.outstanding} outstanding</p>
+              </div>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">This Week's Revenue</p>
-              <h3 className="text-xl font-black text-slate-900 mt-2 truncate">Rs {activeWeekFinancials.collected}</h3>
-              <p className="text-[11px] text-[#B4703A] font-bold mt-1">Rs {activeWeekFinancials.outstanding} outstanding</p>
-            </div>
-          </div>
+          )}
         </div>
 
         {/* Informative Guidance Banner */}
@@ -5645,22 +5658,56 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     }
   };
 
-  const renderEntityFilterToggle = () => (
-    <div className="flex items-center gap-2">
-      <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider shrink-0">Filter Entity:</span>
-      <select
-        value={entityFilter}
-        onChange={(e) => setEntityFilter(e.target.value)}
-        className="text-xs font-bold px-3 py-1.5 rounded-xl border border-[#E7E0D0] outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all cursor-pointer text-slate-700 max-w-[280px] truncate"
-      >
-        {filterEntitiesList.map(item => (
-          <option key={item.id} value={item.id}>
-            {item.label}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
+  const renderEntityFilterToggle = () => {
+    if (isPartner) {
+      if (partnerEntityIds.length <= 1) {
+        const assignedEntity = entities.find(e => partnerEntityIds.includes(e.id)) ||
+          (partnerEntityIds[0] === 'entity-a' ? { name: 'PLACEHOLDER ENTITY A LTD — replace before launch' } : null) ||
+          (partnerEntityIds[0] === 'entity-b' ? { name: 'PLACEHOLDER ENTITY B LTD — replace before launch' } : null);
+        const name = assignedEntity ? assignedEntity.name : (partnerEntityIds[0] || 'Assigned Entity');
+        return (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider shrink-0">Entity:</span>
+            <span className="text-xs font-bold px-3 py-1.5 rounded-xl border border-[#E7E0D0] bg-slate-100 text-slate-700 max-w-[280px] truncate">
+              {name}
+            </span>
+          </div>
+        );
+      }
+      return (
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider shrink-0">Filter Entity:</span>
+          <select
+            value={partnerEntityIds.includes(entityFilter) ? entityFilter : partnerEntityIds[0]}
+            onChange={(e) => setEntityFilter(e.target.value)}
+            className="text-xs font-bold px-3 py-1.5 rounded-xl border border-[#E7E0D0] outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all cursor-pointer text-slate-700 max-w-[280px] truncate"
+          >
+            {filterEntitiesList.map(item => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      );
+    }
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider shrink-0">Filter Entity:</span>
+        <select
+          value={entityFilter}
+          onChange={(e) => setEntityFilter(e.target.value)}
+          className="text-xs font-bold px-3 py-1.5 rounded-xl border border-[#E7E0D0] outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all cursor-pointer text-slate-700 max-w-[280px] truncate"
+        >
+          {filterEntitiesList.map(item => (
+            <option key={item.id} value={item.id}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  };
 
   const renderPendingRegistrationsTab = () => {
     if (pendingCustomers.length === 0) {
