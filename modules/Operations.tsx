@@ -757,13 +757,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // --- Roles & Staff sub-tab state ---
   const [showEditStaffModal, setShowEditStaffModal] = useState(false);
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
-  const [editStaffForm, setEditStaffForm] = useState({ roleId: '', active: true });
+  const [editStaffForm, setEditStaffForm] = useState({ roleId: '', active: true, isPartner: false, assignedEntityIds: [] as string[] });
   const [editStaffError, setEditStaffError] = useState<string | null>(null);
   const [editStaffLoading, setEditStaffLoading] = useState(false);
   const [rolesRaw, setRolesRaw] = useState<Role[]>([]);
   const [staffListRaw, setStaffListRaw] = useState<Staff[]>([]);
   const [showAddStaffModal, setShowAddStaffModal] = useState(false);
-  const [newStaffForm, setNewStaffForm] = useState({ name: '', email: '', password: '', roleId: '' });
+  const [newStaffForm, setNewStaffForm] = useState({ name: '', email: '', password: '', roleId: '', isPartner: false, assignedEntityIds: [] as string[] });
   const [addStaffError, setAddStaffError] = useState<string | null>(null);
   const [addStaffLoading, setAddStaffLoading] = useState(false);
   const [showAddRoleModal, setShowAddRoleModal] = useState(false);
@@ -4837,7 +4837,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <p className="text-xs text-slate-400 font-medium mt-0.5">Staff accounts created here are provisioned with a temporary password you set.</p>
                 </div>
                 <button
-                  onClick={() => { setNewStaffForm({ name: '', email: '', password: '', roleId: rolesRaw[0]?.id || '' }); setAddStaffError(null); setShowAddStaffModal(true); }}
+                  onClick={() => { setNewStaffForm({ name: '', email: '', password: '', roleId: rolesRaw[0]?.id || '', isPartner: false, assignedEntityIds: [] }); setAddStaffError(null); setShowAddStaffModal(true); }}
                   className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors"
                 >
                   <Plus className="size-3.5" /> Add Staff Member
@@ -4851,7 +4851,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     <div key={staff.id} className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 bg-slate-50">
                       <div>
                         <p className="text-sm font-black text-slate-900">{staff.name} {isSelf && <span className="text-[10px] text-primary font-bold">(You)</span>}</p>
-                        <p className="text-xs text-slate-400 font-medium">{staff.email} · {role?.name || staff.roleId}</p>
+                        <p className="text-xs text-slate-400 font-medium">
+                          {staff.email} · {role?.name || staff.roleId}
+                          {staff.isPartner && (
+                            <span className="ml-2 text-[10px] font-black px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                              Partner ({staff.assignedEntityIds?.length || 0} entities)
+                            </span>
+                          )}
+                        </p>
                       </div>
                       <div className="flex items-center gap-3">
                         <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${staff.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
@@ -4860,7 +4867,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         <button
                           onClick={() => {
                             setEditingStaff(staff);
-                            setEditStaffForm({ roleId: staff.roleId, active: staff.active });
+                            setEditStaffForm({ roleId: staff.roleId, active: staff.active, isPartner: staff.isPartner || false, assignedEntityIds: staff.assignedEntityIds || [] });
                             setEditStaffError(null);
                             setShowEditStaffModal(true);
                           }}
@@ -5078,6 +5085,44 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           {rolesRaw.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                         </select>
                       </div>
+                      <label className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={newStaffForm.isPartner}
+                          onChange={e => setNewStaffForm(prev => ({ ...prev, isPartner: e.target.checked }))}
+                          className="accent-primary size-4"
+                        />
+                        <div>
+                          <p className="text-xs font-bold text-slate-700">Partner Account</p>
+                          <p className="text-[10px] text-slate-400 font-medium">Restricts kitchen view to assigned trading entities only.</p>
+                        </div>
+                      </label>
+                      {newStaffForm.isPartner && (
+                        <div className="space-y-1.5 p-3 rounded-xl border border-slate-100 bg-slate-50">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Assigned Trading Entities</label>
+                          <div className="space-y-1.5 mt-1">
+                            {entities.map(ent => (
+                              <label key={ent.id} className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={newStaffForm.assignedEntityIds.includes(ent.id)}
+                                  onChange={e => {
+                                    const checked = e.target.checked;
+                                    setNewStaffForm(prev => ({
+                                      ...prev,
+                                      assignedEntityIds: checked
+                                        ? [...prev.assignedEntityIds, ent.id]
+                                        : prev.assignedEntityIds.filter(id => id !== ent.id)
+                                    }));
+                                  }}
+                                  className="accent-primary size-3.5"
+                                />
+                                <span>{ent.name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {addStaffError && <p className="text-xs text-red-600 font-bold">{addStaffError}</p>}
                     </div>
                     <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
@@ -5086,11 +5131,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         disabled={addStaffLoading}
                         onClick={async () => {
                           if (!newStaffForm.name.trim() || !newStaffForm.email.trim() || !newStaffForm.password.trim()) { setAddStaffError('All fields are required.'); return; }
+                          if (newStaffForm.isPartner && newStaffForm.assignedEntityIds.length === 0) { setAddStaffError('At least one trading entity must be assigned for a Partner account.'); return; }
                           setAddStaffLoading(true); setAddStaffError(null);
                           try {
-                            const fn = httpsCallable<{ name: string; email: string; password: string; roleId: string }, { uid: string }>(functions, 'createStaffMember');
-                            const result = await fn({ name: newStaffForm.name.trim(), email: newStaffForm.email.trim(), password: newStaffForm.password, roleId: newStaffForm.roleId });
-                            writeAuditLog('RoleChange', `Created staff account for ${newStaffForm.name.trim()} (${result.data.uid}), role: ${newStaffForm.roleId}`);
+                            const fn = httpsCallable<{ name: string; email: string; password: string; roleId: string; isPartner?: boolean; assignedEntityIds?: string[] }, { uid: string }>(functions, 'createStaffMember');
+                            const result = await fn({
+                              name: newStaffForm.name.trim(),
+                              email: newStaffForm.email.trim(),
+                              password: newStaffForm.password,
+                              roleId: newStaffForm.roleId,
+                              isPartner: newStaffForm.isPartner,
+                              assignedEntityIds: newStaffForm.assignedEntityIds,
+                            });
+                            writeAuditLog('RoleChange', `Created staff account for ${newStaffForm.name.trim()} (${result.data.uid}), role: ${newStaffForm.roleId}, isPartner: ${newStaffForm.isPartner}`);
                             setShowAddStaffModal(false);
                           } catch (e: any) {
                             setAddStaffError(e.message || 'Failed to create staff account.');
@@ -5136,6 +5189,39 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         <input type="checkbox" checked={editStaffForm.active} onChange={e => setEditStaffForm(prev => ({ ...prev, active: e.target.checked }))} className="accent-primary size-4" />
                         <span className="text-xs font-bold text-slate-700">Active Status</span>
                       </label>
+                      <label className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer">
+                        <input type="checkbox" checked={editStaffForm.isPartner} onChange={e => setEditStaffForm(prev => ({ ...prev, isPartner: e.target.checked }))} className="accent-primary size-4" />
+                        <div>
+                          <p className="text-xs font-bold text-slate-700">Partner Account</p>
+                          <p className="text-[10px] text-slate-400 font-medium">Restricts kitchen view to assigned trading entities only.</p>
+                        </div>
+                      </label>
+                      {editStaffForm.isPartner && (
+                        <div className="space-y-1.5 p-3 rounded-xl border border-slate-100 bg-slate-50">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Assigned Trading Entities</label>
+                          <div className="space-y-1.5 mt-1">
+                            {entities.map(ent => (
+                              <label key={ent.id} className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={editStaffForm.assignedEntityIds.includes(ent.id)}
+                                  onChange={e => {
+                                    const checked = e.target.checked;
+                                    setEditStaffForm(prev => ({
+                                      ...prev,
+                                      assignedEntityIds: checked
+                                        ? [...prev.assignedEntityIds, ent.id]
+                                        : prev.assignedEntityIds.filter(id => id !== ent.id)
+                                    }));
+                                  }}
+                                  className="accent-primary size-3.5"
+                                />
+                                <span>{ent.name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {editStaffError && <p className="text-xs text-red-600 font-bold">{editStaffError}</p>}
                     </div>
                     <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
@@ -5150,15 +5236,50 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               return;
                             }
                           }
+                          if (editStaffForm.isPartner && editStaffForm.assignedEntityIds.length === 0) {
+                            setEditStaffError('At least one trading entity must be assigned for a Partner account.');
+                            return;
+                          }
+
+                          // Guarded Reassignment Check: Block unassigning an entity with active/preparing orders
+                          let hasActiveOrders = false;
+                          let blockedEntityName = '';
+                          const previousEntities = editingStaff.assignedEntityIds || [];
+                          const targetEntities = editStaffForm.isPartner ? editStaffForm.assignedEntityIds : [];
+                          const removedEntityIds = previousEntities.filter(id => !targetEntities.includes(id));
+
+                          for (const entId of removedEntityIds) {
+                            for (const orderId of Object.keys(fsOrderDocs)) {
+                              const o = fsOrderDocs[orderId];
+                              if (o?.entityId === entId) {
+                                const items = fsItemDocs[orderId] || [];
+                                if (items.some((it: any) => it.status === 'Active' || it.status === 'Preparing')) {
+                                  hasActiveOrders = true;
+                                  const ent = entities.find(e => e.id === entId);
+                                  blockedEntityName = ent ? ent.name : entId;
+                                  break;
+                                }
+                              }
+                            }
+                            if (hasActiveOrders) break;
+                          }
+
+                          if (hasActiveOrders) {
+                            setEditStaffError(`Cannot unassign entity "${blockedEntityName}": there are active or preparing orders for this entity. Complete or cancel orders before unassigning.`);
+                            return;
+                          }
+
                           setEditStaffLoading(true);
                           setEditStaffError(null);
                           try {
                             await updateDoc(doc(db, 'staff', editingStaff.id), {
                               roleId: editStaffForm.roleId,
                               active: editStaffForm.active,
+                              isPartner: editStaffForm.isPartner,
+                              assignedEntityIds: editStaffForm.assignedEntityIds,
                               updatedAt: Timestamp.now()
                             });
-                            writeAuditLog('RoleChange', `Updated staff member ${editingStaff.name} (${editingStaff.id}) - active: ${editStaffForm.active}, role: ${editStaffForm.roleId}`);
+                            writeAuditLog('RoleChange', `Updated staff member ${editingStaff.name} (${editingStaff.id}) - active: ${editStaffForm.active}, role: ${editStaffForm.roleId}, isPartner: ${editStaffForm.isPartner}`);
                             setShowEditStaffModal(false);
                             setEditingStaff(null);
                           } catch (e: any) {

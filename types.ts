@@ -243,6 +243,8 @@ export interface Staff {
   roleId: string;
   active: boolean;
   createdAt: any;
+  isPartner?: boolean;
+  assignedEntityIds?: string[];
 }
 
 export type AuditLogType =

@@ -45,6 +45,23 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/roles/$(staffDoc().data.roleId)).data.permissions[groupName][permissionType] == true;
     }
 
+    // Partner accounts (BonManzE_PartnerAccounts_Scope.md): unlike the
+    // Entity-Restricted Views filter, this IS a security boundary — Partner
+    // staff are external/less-trusted and must be hard-locked out of any
+    // entity they aren't assigned to, enforced here, not just filtered
+    // client-side in Operations.tsx.
+    function isPartnerStaff() {
+      return isActiveStaff() && staffDoc().data.get('isPartner', false) == true;
+    }
+
+    // true for: any non-Partner request (no-op — everyone else is
+    // unaffected), OR a Partner request whose entityId is in their
+    // assignedEntityIds. false for a Partner request against any other
+    // entity, or against a document with no entityId at all.
+    function isPartnerEntityAllowed(entityId) {
+      return !isPartnerStaff() || (entityId != null && entityId in staffDoc().data.get('assignedEntityIds', []));
+    }
+
     // ---- customers/{uid} ----
     // A customer reads/writes only their own doc. Financial/loyalty fields
     // (points, storeCredit, tier, ltv) are NOT directly writable by anyone
@@ -205,10 +222,11 @@ service cloud.firestore {
     // (a client could submit any total/price it wanted) — closed 2026-08-13
     // once confirmCheckout existed to do that job properly instead.
     match /orders/{orderId} {
-      allow read: if isCustomer(resource.data.customerId)
-        || isStaffAllowed('ordersByDish', 'view')
-        || isStaffAllowed('deliveryList', 'view')
-        || isStaffAllowed('payments', 'view');
+      allow read: if isPartnerEntityAllowed(resource.data.get('entityId', null))
+        && (isCustomer(resource.data.customerId)
+          || isStaffAllowed('ordersByDish', 'view')
+          || isStaffAllowed('deliveryList', 'view')
+          || isStaffAllowed('payments', 'view'));
       allow create: if false; // Cloud Function only — see confirmCheckout
       allow update, delete: if false;
     }
@@ -217,12 +235,13 @@ service cloud.firestore {
     // here at the TOP LEVEL with {path=**} rather than nested inside the
     // orders/{orderId} match above.
     match /{path=**}/items/{itemId} {
-      allow read: if isCustomer(resource.data.customerId)
-        || isStaffAllowed('ordersByDish', 'view')
-        || isStaffAllowed('deliveryList', 'view')
-        || isStaffAllowed('payments', 'view');
+      allow read: if isPartnerEntityAllowed(resource.data.get('entityId', null))
+        && (isCustomer(resource.data.customerId)
+          || isStaffAllowed('ordersByDish', 'view')
+          || isStaffAllowed('deliveryList', 'view')
+          || isStaffAllowed('payments', 'view'));
       allow create: if false; // Cloud Function only — see confirmCheckout
-      allow update: if (
+      allow update: if isPartnerEntityAllowed(resource.data.get('entityId', null)) && (
           // 1. Staff update
           (
             (
@@ -249,6 +268,7 @@ service cloud.firestore {
           && request.resource.data.qty == resource.data.qty
           && request.resource.data.name == resource.data.name
           && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.get('entityId', null) == resource.data.get('entityId', null)
         ) || (
           // 2. Customer update (pay claim)
           isCustomer(resource.data.customerId)
@@ -258,6 +278,7 @@ service cloud.firestore {
           && request.resource.data.name == resource.data.name
           && request.resource.data.status == resource.data.status
           && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.get('entityId', null) == resource.data.get('entityId', null)
           && request.resource.data.deliveryDate == resource.data.deliveryDate
           && request.resource.data.serviceSlot == resource.data.serviceSlot
           && request.resource.data.get('tierAtOrder', null) == resource.data.get('tierAtOrder', null)

@@ -28,6 +28,14 @@
       "collectionGroup": "items",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
+        { "fieldPath": "entityId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "items",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
         { "fieldPath": "paymentStatus", "order": "ASCENDING" },
         { "fieldPath": "deliveryDate", "order": "DESCENDING" }
       ]

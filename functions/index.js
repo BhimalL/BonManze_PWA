@@ -545,6 +545,7 @@ export const confirmCheckout = onCall(async (request) => {
         ...itemFields,
         customerId: uid,
         customerName: customer.name || '',
+        entityId: customer.entityId,
       });
     });
   });
@@ -1058,7 +1059,7 @@ export const createStaffMember = onCall(async (request) => {
   }
 
   // 3. Validate input parameters
-  const { name, email, password, roleId: targetRoleId } = request.data || {};
+  const { name, email, password, roleId: targetRoleId, isPartner, assignedEntityIds } = request.data || {};
   if (typeof name !== 'string' || !name.trim()) {
     throw new HttpsError('invalid-argument', 'Name is required.');
   }
@@ -1101,6 +1102,8 @@ export const createStaffMember = onCall(async (request) => {
       roleId: targetRoleId,
       active: true,
       createdAt: Timestamp.now(),
+      isPartner: typeof isPartner === 'boolean' ? isPartner : false,
+      assignedEntityIds: Array.isArray(assignedEntityIds) ? assignedEntityIds.filter(id => typeof id === 'string') : [],
     });
   } catch (err) {
     // If the Firestore write fails, clean up the auth user to keep state consistent
