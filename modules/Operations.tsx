@@ -979,6 +979,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         name: it.name,
         qty: it.qty,
         price: it.price,
+        cost: it.cost,
         notes: it.notes,
         deliveryDate: it.deliveryDate,
         deliveryDay: it.deliveryDay,
