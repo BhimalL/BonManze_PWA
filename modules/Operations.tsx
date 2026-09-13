@@ -5091,7 +5091,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <h2 className="text-lg font-black text-slate-900">Add Staff Member</h2>
                       <button onClick={() => { setShowAddStaffModal(false); setAddStaffError(null); }} className="p-2 text-slate-400 hover:text-red-500"><X className="size-4" /></button>
                     </div>
-                    <div className="p-6 space-y-4">
+                    <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
                       {(['name', 'email', 'password'] as const).map(f => (
                         <div key={f}>
                           <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{f === 'password' ? 'Temporary Password' : f.charAt(0).toUpperCase() + f.slice(1)}</label>
@@ -5195,7 +5195,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <h2 className="text-lg font-black text-slate-900">Edit Staff Member</h2>
                       <button onClick={() => { setShowEditStaffModal(false); setEditingStaff(null); setEditStaffError(null); }} className="p-2 text-slate-400 hover:text-red-500"><X className="size-4" /></button>
                     </div>
-                    <div className="p-6 space-y-4">
+                    <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
                       <div>
                         <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Name</p>
                         <p className="text-sm font-bold text-slate-800 mt-1">{editingStaff.name}</p>
