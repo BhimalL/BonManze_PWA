@@ -700,6 +700,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [ordersWeekFilter, setOrdersWeekFilter] = useState<'this' | 'next'>('this');
   const [ordersDayFilter, setOrdersDayFilter] = useState<string | 'all'>('all');
   const [ordersServiceFilter, setOrdersServiceFilter] = useState<'all' | 'Lunch' | 'Dinner'>('all');
+  const [ordersPartnerFilter, setOrdersPartnerFilter] = useState<'all' | 'partnerOnly' | 'noPartner'>('all');
   // Delivery List filter state
   const [deliveryWeekFilter, setDeliveryWeekFilter] = useState<'this' | 'next'>('this');
   const [deliveryServiceFilter, setDeliveryServiceFilter] = useState<'all' | 'Lunch' | 'Dinner'>('all');
@@ -1382,6 +1383,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     ];
   }, [entities, isPartner, partnerEntityIds]);
 
+  const entitiesWithActivePartner = useMemo(() => {
+    const set = new Set<string>();
+    staffListRaw.forEach(s => {
+      if (s.isPartner === true && s.active !== false) {
+        (s.assignedEntityIds || []).forEach(id => set.add(id));
+      }
+    });
+    return set;
+  }, [staffListRaw]);
+
   // Non-cancelled order lines, flattened for aggregation across tabs.
   const lines = useMemo(() => {
     const out: { order: Order; item: OrderItem }[] = [];
@@ -1434,6 +1445,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     lines.forEach(({ item }) => {
       const day = item.deliveryDate || '';
       if (!allOrdersDateKeys.has(day)) return;
+      if (ordersPartnerFilter === 'partnerOnly' && !entitiesWithActivePartner.has(item.entityId || '')) return;
+      if (ordersPartnerFilter === 'noPartner' && entitiesWithActivePartner.has(item.entityId || '')) return;
       const service: Service = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
       const key = `${service}::${item.name}`;
       if (!days[day]) days[day] = {};
@@ -1453,7 +1466,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       }
     });
     return days;
-  }, [lines, allOrdersDateKeys]);
+  }, [lines, allOrdersDateKeys, ordersPartnerFilter, entitiesWithActivePartner]);
 
   // Active days for the orders tab, based on the week filter
   const ordersDaysForWeek = useMemo(() => ordersWeekFilter === 'next' ? nextWeekDays : weekDays, [ordersWeekFilter, weekDays, nextWeekDays]);
@@ -6115,8 +6128,30 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     ))}
                   </div>
                 )}
-                <div className="pt-2 border-t border-slate-100 mt-2 flex items-center justify-between">
+                <div className="pt-2 border-t border-slate-100 mt-2 flex items-center justify-between flex-wrap gap-2">
                   {renderEntityFilterToggle()}
+                  {!isPartner && (
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ordersPartnerFilter === 'partnerOnly'}
+                          onChange={e => setOrdersPartnerFilter(e.target.checked ? 'partnerOnly' : 'all')}
+                          className="accent-primary size-3.5"
+                        />
+                        Partner-assigned only
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ordersPartnerFilter === 'noPartner'}
+                          onChange={e => setOrdersPartnerFilter(e.target.checked ? 'noPartner' : 'all')}
+                          className="accent-primary size-3.5"
+                        />
+                        No partner assigned
+                      </label>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -7063,7 +7098,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             `}</style>
             <div className="bmz-print-ticket-container bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-xs shadow-lg font-mono text-[11px] text-slate-800">
               <div className="text-center border-b border-dashed border-slate-300 pb-3 mb-3">
-                <p className="text-sm font-black uppercase tracking-wider text-slate-900">{SYSTEM_CONFIG.businessName}</p>
+                <p className="text-sm font-black uppercase tracking-wider text-slate-900">{activePrintDrop.entityName || (entities.find(e => e.id === activePrintDrop.entityId)?.name) || activePrintDrop.entityId}</p>
                 <p className="text-[10px] uppercase font-bold text-slate-400 mt-0.5">Delivery Ticket</p>
               </div>
               
@@ -7100,9 +7135,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     const isForUser = isNoteForCustomer(person, activePrintDrop.customerName, cust);
                     return (
                       <div key={idx} className="space-y-0.5">
-                        <div className="flex justify-between font-bold text-slate-950">
-                          <span>{item.qty}x {item.name}</span>
-                          <span>Rs {item.price * item.qty}</span>
+                        <div className="font-bold text-slate-950">
+                          {item.qty}x {item.name}
                         </div>
                         {detail && <p className="text-[10px] text-slate-500 leading-tight pl-2">↳ {detail}</p>}
                         {person && !isForUser && <p className="text-[10px] font-bold text-accent pl-2">👤 For {person}</p>}
@@ -7228,7 +7262,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 return (
                   <div key={drop.key} className="bmz-print-ticket-container bg-white border border-slate-200 rounded-2xl p-6 shadow-lg font-mono text-[11px] text-slate-800">
                     <div className="text-center border-b border-dashed border-slate-300 pb-3 mb-3">
-                      <p className="text-sm font-black uppercase tracking-wider text-slate-900">{SYSTEM_CONFIG.businessName}</p>
+                      <p className="text-sm font-black uppercase tracking-wider text-slate-900">{drop.entityName || (entities.find(e => e.id === drop.entityId)?.name) || drop.entityId}</p>
                       <p className="text-[10px] uppercase font-bold text-slate-400 mt-0.5">Delivery Ticket</p>
                     </div>
                     
