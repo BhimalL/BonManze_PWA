@@ -1004,6 +1004,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         paymentMethodName: it.paymentMethodName,
         paymentReference: it.paymentReference,
         isReconciled: it.isReconciled,
+        entityId: it.entityId,
         _fsItemId: it._fsItemId,
         rating: it.rating,
         ratingComment: it.ratingComment,

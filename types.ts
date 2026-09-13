@@ -169,6 +169,7 @@ export interface OrderItem {
   dessertId?: string;
   instructions?: string;
   tierAtOrder?: string;
+  entityId?: string;
 }
 
 export interface Order {
