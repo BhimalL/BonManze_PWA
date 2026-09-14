@@ -1433,11 +1433,64 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return out.sort((a, b) => (b.item.deliveryDate || '').localeCompare(a.item.deliveryDate || ''));
   }, [myOrders, weekDateKeys, systemDate, orderHistoryCutoff]);
 
+  // A per-order "effective rate" that folds this order's discount + VAT into
+  // one multiplier — order.total ÷ order.subtotal — so a customer paying for
+  // only some of an order's meals still pays their real share of that order
+  // (discount and VAT are computed once per whole order by confirmCheckout,
+  // never per item). Falls back to 1 (no proration) for legacy orders that
+  // predate the subtotal/discount/vat fields — same `has` guard already used
+  // in the order-totals display block further down this screen.
+  const orderProrationFactor = (order: Order): number => {
+    const hasFinancials = typeof order.subtotal === 'number' && order.subtotal > 0;
+    return hasFinancials ? order.total / (order.subtotal as number) : 1;
+  };
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  // Turns a set of pending (unclaimed) lines into the write targets
+  // (payTarget.items) and the one number actually shown/collected
+  // (payTarget.amount) — grouped by order:
+  //  - when every one of an order's non-cancelled items is in this pending
+  //    set, that order's own order.total is charged directly for its share
+  //    — exact, no rounding drift, and matches the number already shown in
+  //    that order's own totals block further down this screen;
+  //  - otherwise (some of the order's meals are already paid/claimed, or
+  //    belong to a different week's group than the one being paid right
+  //    now), only the pending subset is charged, prorated by that order's
+  //    own orderProrationFactor.
+  const buildPayItemsAndAmount = (pending: Line[]) => {
+    const items = pending.map(l => ({
+      orderId: l.order.id,
+      date: l.item.deliveryDate || '',
+      slot: l.item.serviceSlot || 'Lunch',
+      amount: round2(l.item.qty * l.item.price * orderProrationFactor(l.order)),
+      fsItemId: l.item._fsItemId,
+    }));
+
+    const byOrder = new Map<string, Line[]>();
+    pending.forEach(l => {
+      if (!byOrder.has(l.order.id)) byOrder.set(l.order.id, []);
+      byOrder.get(l.order.id)!.push(l);
+    });
+
+    let amount = 0;
+    byOrder.forEach(orderLines => {
+      const order = orderLines[0].order;
+      const activeOrderItemCount = order.items.filter(it => it.status !== 'Cancelled').length;
+      const wholeOrderPending = orderLines.length === activeOrderItemCount;
+      amount += wholeOrderPending
+        ? order.total
+        : orderLines.reduce((t, l) => t + round2(l.item.qty * l.item.price * orderProrationFactor(l.order)), 0);
+    });
+
+    return { items, amount: round2(amount) };
+  };
+
   // "Outstanding" now means "still needs the customer to pick a payment
   // method" — once they've claimed one, it moves to awaitingConfirmation
   // below (still unpaid, but nothing left for the customer to do).
   const outstandingTotal = useMemo(
-    () => thisWeekLines.filter(l => l.item.status !== 'Cancelled' && isUnclaimed(l.item)).reduce((t, l) => t + l.item.qty * l.item.price, 0),
+    () => buildPayItemsAndAmount(thisWeekLines.filter(l => l.item.status !== 'Cancelled' && isUnclaimed(l.item))).amount,
     [thisWeekLines]
   );
 
@@ -1465,7 +1518,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       orderId: line.order.id,
       date: line.item.deliveryDate || '',
       slot: line.item.serviceSlot || 'Lunch',
-      amount: line.item.qty * line.item.price,
+      amount: round2(line.item.qty * line.item.price * orderProrationFactor(line.order)),
       what: `${line.item.deliveryDay || ''} · ${line.item.name}`,
       ref: generateRef(),
       fsItemId: line.item._fsItemId,
@@ -1478,10 +1531,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     setPayMethod(null);
     setCustomerRef('');
     setPaymentError(null);
+    const { items, amount } = buildPayItemsAndAmount(pending);
     setPayTarget({
       kind: 'balance',
-      items: pending.map(l => ({ orderId: l.order.id, date: l.item.deliveryDate || '', slot: l.item.serviceSlot || 'Lunch', amount: l.item.qty * l.item.price, fsItemId: l.item._fsItemId })),
-      amount: pending.reduce((t, l) => t + l.item.qty * l.item.price, 0),
+      items,
+      amount,
       what: `${pending.length} unpaid meal${pending.length !== 1 ? 's' : ''} · full balance`,
       ref: generateRef()
     });
@@ -1496,10 +1550,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     setPayMethod(null);
     setCustomerRef('');
     setPaymentError(null);
+    const { items, amount } = buildPayItemsAndAmount(pending);
     setPayTarget({
       kind: 'balance',
-      items: pending.map(l => ({ orderId: l.order.id, date: l.item.deliveryDate || '', slot: l.item.serviceSlot || 'Lunch', amount: l.item.qty * l.item.price, fsItemId: l.item._fsItemId })),
-      amount: pending.reduce((t, l) => t + l.item.qty * l.item.price, 0),
+      items,
+      amount,
       what: `${pending.length} unpaid meal${pending.length !== 1 ? 's' : ''} · this order`,
       ref: generateRef()
     });
@@ -2580,7 +2635,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   {weekOrders.map(({ order, lines }, gi) => {
                     const orderPaid = lines.every(l => l.item.paymentStatus === 'Paid');
                     const orderUnclaimed = lines.filter(l => isUnclaimed(l.item));
-                    const orderUnclaimedTotal = orderUnclaimed.reduce((t, l) => t + l.item.price, 0);
+                    const orderUnclaimedTotal = buildPayItemsAndAmount(orderUnclaimed).amount;
                     // Only offer one receipt for the whole order when it was
                     // actually settled as one payment (every line shares the
                     // same reference) — if some meals were paid individually
@@ -2711,7 +2766,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   {nextWeekOrders.map(({ order, lines }, gi) => {
                     const orderPaid = lines.every(l => l.item.paymentStatus === 'Paid');
                     const orderUnclaimed = lines.filter(l => isUnclaimed(l.item));
-                    const orderUnclaimedTotal = orderUnclaimed.reduce((t, l) => t + l.item.price, 0);
+                    const orderUnclaimedTotal = buildPayItemsAndAmount(orderUnclaimed).amount;
                     const orderPaymentRefs = new Set(lines.map(l => l.item.paymentReference || `solo-${l.order.id}-${l.item.itemId}-${l.item.deliveryDate}`));
                     const orderIsOnePayment = orderPaid && orderPaymentRefs.size === 1;
                     const serviceGroups = groupByOrderServiceDay(lines)[0]?.services || [];
