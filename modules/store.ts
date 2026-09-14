@@ -188,13 +188,6 @@ export let PAYMENT_METHODS: PaymentMethod[] = [
   { id: '6', name: 'MauCAS', type: 'Digital', isActive: true, icon: '📲', applicableTo: ['Delivery', 'Meal Plan'] },
 ];
 
-// The Meal Plan side of the business (Customer App checkout + Operator
-// Console's payment collection) only ever offers these three — the rest of
-// PAYMENT_METHODS (Cash Drawer, Visa/MC, Staff Meal) are legacy dine-in/POS
-// entries left over from the cut ERP modules. Single source of truth so
-// both surfaces stay in sync instead of each hardcoding its own list.
-export const MEAL_PLAN_PAYMENT_METHOD_NAMES = ['Juice / Transfer', 'MauCAS', 'Cash on Delivery'];
-
 // --- INVENTORY MASTER DATA ---
 export interface InventoryItem {
   sku: string;
@@ -1929,9 +1922,10 @@ export const updateSystemConfig = async (updates: Partial<typeof SYSTEM_CONFIG>)
 };
 
 
-export const updatePaymentMethods = (methods: PaymentMethod[]) => {
+export const updatePaymentMethods = async (methods: PaymentMethod[]) => {
   PAYMENT_METHODS = [...methods];
   paymentMethodListeners.forEach(l => l([...PAYMENT_METHODS]));
+  await setDoc(doc(db, 'paymentMethods', 'current'), { items: dropUndefined(PAYMENT_METHODS), updatedAt: serverTimestamp() });
 };
 
 // --- POS STATE ---
@@ -2011,6 +2005,19 @@ onSnapshot(doc(db, 'loyaltyTiers', 'current'), snap => {
   if (!snap.exists()) return;
   LOYALTY_TIERS = (snap.data().items || []) as LoyaltyTier[];
   loyaltyListeners.forEach(l => l([...LOYALTY_TIERS]));
+});
+
+onSnapshot(doc(db, 'paymentMethods', 'current'), snap => {
+  if (!snap.exists()) {
+    // First run in this environment — seed from today's hardcoded six-entry
+    // default so nothing currently offered at checkout disappears on
+    // cutover. One-time; every subsequent load finds the doc and skips this.
+    setDoc(doc(db, 'paymentMethods', 'current'), { items: dropUndefined(PAYMENT_METHODS), updatedAt: serverTimestamp() })
+      .catch(e => console.error('Failed to seed paymentMethods/current', e));
+    return;
+  }
+  PAYMENT_METHODS = (snap.data().items || []) as PaymentMethod[];
+  paymentMethodListeners.forEach(l => l([...PAYMENT_METHODS]));
 });
 
 // --- CUSTOMER GROUPS SYSTEM ---

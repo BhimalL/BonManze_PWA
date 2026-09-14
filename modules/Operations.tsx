@@ -68,6 +68,7 @@ import {
   updateCustomerGroups,
   deleteCustomerGroup,
   subscribeToPaymentMethods,
+  updatePaymentMethods,
   subscribeToSystemDate,
   updateSystemDate,
   subscribeToLunchMenu,
@@ -99,7 +100,6 @@ import {
   dishDessertApplicable,
   dishPhotoFor,
   formatCurrency,
-  MEAL_PLAN_PAYMENT_METHOD_NAMES,
   SYSTEM_CONFIG,
   subscribeToConfig,
   updateSystemConfig,
@@ -318,10 +318,11 @@ const SETTINGS_SUB_TABS = [
   { key: 'icons'           as const, permGroup: 'iconLibrary'      },
   { key: 'rolesAndStaff'   as const, permGroup: 'rolesAndStaff'    },
   { key: 'tradingEntities' as const, permGroup: 'tradingEntities'  },
+  { key: 'paymentMethods'  as const, permGroup: 'paymentMethods'   },
 ];
 type SettingsSubTab = typeof SETTINGS_SUB_TABS[number]['key'];
 
-// 14-row permission group manifest used by the role editor View/Edit table and save handler.
+// 15-row permission group manifest used by the role editor View/Edit table and save handler.
 const PERM_GROUPS = [
   { key: 'menuPlanner'          as const, label: 'Menu Planner',          hasEdit: true  },
   { key: 'mealLibrary'          as const, label: 'Meal Library',          hasEdit: true  },
@@ -337,6 +338,7 @@ const PERM_GROUPS = [
   { key: 'iconLibrary'          as const, label: 'Icon Library',          hasEdit: true  },
   { key: 'rolesAndStaff'        as const, label: 'Roles & Staff',         hasEdit: true  },
   { key: 'tradingEntities'      as const, label: 'Trading Entities',      hasEdit: true  },
+  { key: 'paymentMethods'       as const, label: 'Payment Methods',      hasEdit: true  },
 ];
 
 const Operations: React.FC<OperationsProps> = ({ onExit }) => {
@@ -803,6 +805,25 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [entityActionError, setEntityActionError] = useState<string | null>(null);
   const [entityActionLoading, setEntityActionLoading] = useState(false);
   const [entityLogoFile, setEntityLogoFile] = useState<File | null>(null);
+
+  // --- Payment Methods sub-tab state ---
+  const [showPaymentMethodModal, setShowPaymentMethodModal] = useState(false);
+  const [editingPaymentMethodId, setEditingPaymentMethodId] = useState<string | null>(null);
+  const [paymentMethodForm, setPaymentMethodForm] = useState<{
+    name: string;
+    icon: string;
+    type: 'Cash' | 'Card' | 'Digital' | 'Voucher';
+    applicableTo: ('Dine-In' | 'Takeout' | 'Delivery' | 'Meal Plan')[];
+    isActive: boolean;
+  }>({
+    name: '',
+    icon: '💳',
+    type: 'Digital',
+    applicableTo: ['Meal Plan', 'Delivery'],
+    isActive: true,
+  });
+  const [paymentMethodActionError, setPaymentMethodActionError] = useState<string | null>(null);
+  const [paymentMethodActionLoading, setPaymentMethodActionLoading] = useState(false);
 
   // Staff auth listener — mirrors CustomerPortal.tsx's onAuthStateChanged
   // pattern. Verifies an active staff/{uid} doc exists before treating
@@ -3912,6 +3933,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       rating?: number;
       ratingComment?: string;
       serviceSlot: string;
+      _item: OrderItem;
     }[] = [];
 
     orders.forEach(o => {
@@ -3977,7 +3999,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           deliveryStatus: item.status || 'Active',
           rating: item.rating,
           ratingComment: item.ratingComment,
-          serviceSlot: item.serviceSlot || 'Lunch'
+          serviceSlot: item.serviceSlot || 'Lunch',
+          _item: item
         });
       });
     });
@@ -4241,6 +4264,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     <th className="px-5 py-4 text-center min-w-[100px]">Payment</th>
                     <th className="px-5 py-4 text-center min-w-[90px]">Delivery</th>
                     <th className="px-5 py-4 min-w-[120px]">Rating & Feedback</th>
+                    <th className="px-5 py-4 min-w-[70px]"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E7E0D0]/60 font-bold text-slate-700">
@@ -4332,6 +4356,49 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           <span className="text-slate-300 italic font-normal">No rating yet</span>
                         )}
                       </td>
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setActivePrintDrop({
+                              key: `ledger-${r.orderId}-${idx}`,
+                              orderId: r.orderId,
+                              customerName: r.customerName,
+                              date: r.deliveryDate,
+                              slot: r.serviceSlot,
+                              items: [r._item],
+                              total: r.totalWithTax,
+                              paymentStatus: r.paymentStatus as 'Paid' | 'Pending' | 'Refunded',
+                              entityId: r.entityId,
+                              entityName: r.entityName,
+                            })}
+                            className="p-2 rounded-lg text-slate-400 hover:text-primary hover:bg-primary/10 transition-colors cursor-pointer"
+                            title="View delivery ticket"
+                          >
+                            <Truck className="size-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => r.paymentStatus === 'Paid' && setActiveReceiptDrop({
+                              key: `ledger-${r.orderId}-${idx}`,
+                              orderId: r.orderId,
+                              customerName: r.customerName,
+                              date: r.deliveryDate,
+                              slot: r.serviceSlot,
+                              items: [r._item],
+                              total: r.totalWithTax,
+                              paymentStatus: r.paymentStatus as 'Paid' | 'Pending' | 'Refunded',
+                              entityId: r.entityId,
+                              entityName: r.entityName,
+                            })}
+                            disabled={r.paymentStatus !== 'Paid'}
+                            className="p-2 rounded-lg text-slate-400 hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed cursor-pointer"
+                            title={r.paymentStatus === 'Paid' ? 'View receipt' : 'No payment confirmed yet'}
+                          >
+                            <Receipt className="size-4" />
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -4353,6 +4420,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       icons: 'Icon Library',
       rolesAndStaff: 'Roles & Staff',
       tradingEntities: 'Trading Entities',
+      paymentMethods: 'Payment Methods',
     };
     return (
       <div className="space-y-8 animate-fade-in pb-24">
@@ -5586,6 +5654,231 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         className="px-5 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors disabled:opacity-50"
                       >
                         {entityActionLoading ? 'Saving…' : 'Save Entity'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </Portal>
+            )}
+          </div>
+        )}
+
+        {/* ── Payment Methods ───────────────────────────────────────── */}
+        {settingsSubTab === 'paymentMethods' && (
+          <div className="space-y-6">
+            {paymentMethodActionError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl px-4 py-3 flex items-center gap-2">
+                <AlertCircle className="size-4 shrink-0" /> {paymentMethodActionError}
+              </div>
+            )}
+            <div className="bg-white border border-[#E7E0D0] rounded-3xl p-6 shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-base font-black text-slate-900">Payment Methods Catalog</h3>
+                  <p className="text-xs text-slate-400 font-medium mt-1">
+                    Manage available payment options across the customer app and operator console. Retiring a method preserves existing transaction history.
+                  </p>
+                </div>
+                {currentPermissions?.paymentMethods?.edit && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingPaymentMethodId(null);
+                      setPaymentMethodForm({
+                        name: '',
+                        icon: '💳',
+                        type: 'Digital',
+                        applicableTo: ['Meal Plan', 'Delivery'],
+                        isActive: true,
+                      });
+                      setPaymentMethodActionError(null);
+                      setShowPaymentMethodModal(true);
+                    }}
+                    className="px-4 py-2.5 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors flex items-center gap-2 shrink-0 cursor-pointer"
+                  >
+                    <Plus className="size-4" /> Add Payment Method
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-3 pt-2">
+                {paymentMethods.map(m => (
+                  <div key={m.id} className="p-4 rounded-2xl border border-slate-100 bg-slate-50/50 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="text-2xl shrink-0">{m.icon}</span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-black text-slate-900 truncate">{m.name}</h4>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${m.isActive ? 'bg-success/15 text-success' : 'bg-slate-200 text-slate-500'}`}>
+                            {m.isActive ? 'Active' : 'Retired'}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[9px] font-black uppercase tracking-wider">
+                            {m.type}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 font-medium mt-0.5">
+                          Applicable to: {m.applicableTo.join(', ')}
+                        </p>
+                      </div>
+                    </div>
+
+                    {currentPermissions?.paymentMethods?.edit && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingPaymentMethodId(m.id);
+                            setPaymentMethodForm({
+                              name: m.name,
+                              icon: m.icon,
+                              type: m.type,
+                              applicableTo: [...m.applicableTo],
+                              isActive: m.isActive,
+                            });
+                            setPaymentMethodActionError(null);
+                            setShowPaymentMethodModal(true);
+                          }}
+                          className="p-2 text-slate-400 hover:text-primary hover:bg-primary/10 rounded-xl transition-colors cursor-pointer"
+                          title="Edit Payment Method"
+                        >
+                          <Edit3 className="size-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {paymentMethods.length === 0 && (
+                  <p className="text-xs text-slate-400 font-medium text-center py-6">No payment methods configured yet.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Add/Edit Payment Method Modal */}
+            {showPaymentMethodModal && (
+              <Portal>
+                <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
+                  <div className="bg-white rounded-[32px] w-full max-w-md shadow-2xl overflow-hidden">
+                    <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                      <h2 className="text-lg font-black text-slate-900">{editingPaymentMethodId ? 'Edit Payment Method' : 'New Payment Method'}</h2>
+                      <button onClick={() => { setShowPaymentMethodModal(false); setPaymentMethodActionError(null); }} className="p-2 text-slate-400 hover:text-red-500"><X className="size-4" /></button>
+                    </div>
+                    <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                      <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Name</label>
+                        <input
+                          value={paymentMethodForm.name}
+                          onChange={e => setPaymentMethodForm(prev => ({ ...prev, name: e.target.value }))}
+                          className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          placeholder="e.g. MauCAS Transfer"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Icon / Emoji</label>
+                        <input
+                          value={paymentMethodForm.icon}
+                          onChange={e => setPaymentMethodForm(prev => ({ ...prev, icon: e.target.value }))}
+                          className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          placeholder="e.g. 💳"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Type</label>
+                        <select
+                          value={paymentMethodForm.type}
+                          onChange={e => setPaymentMethodForm(prev => ({ ...prev, type: e.target.value as any }))}
+                          className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        >
+                          <option value="Cash">Cash</option>
+                          <option value="Card">Card</option>
+                          <option value="Digital">Digital</option>
+                          <option value="Voucher">Voucher</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Applicable Order Types</label>
+                        <div className="grid grid-cols-2 gap-2 mt-2">
+                          {(['Meal Plan', 'Delivery', 'Takeout', 'Dine-In'] as const).map(appType => {
+                            const isChecked = paymentMethodForm.applicableTo.includes(appType);
+                            return (
+                              <label key={appType} className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer text-xs font-bold text-slate-700">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={e => {
+                                    const checked = e.target.checked;
+                                    setPaymentMethodForm(prev => ({
+                                      ...prev,
+                                      applicableTo: checked
+                                        ? [...prev.applicableTo, appType]
+                                        : prev.applicableTo.filter(t => t !== appType)
+                                    }));
+                                  }}
+                                  className="accent-primary size-4"
+                                />
+                                <span>{appType}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={paymentMethodForm.isActive}
+                          onChange={e => setPaymentMethodForm(prev => ({ ...prev, isActive: e.target.checked }))}
+                          className="accent-primary size-4"
+                        />
+                        <div>
+                          <p className="text-xs font-bold text-slate-700">Active Status</p>
+                          <p className="text-[10px] text-slate-400 font-medium">Uncheck to retire this payment method without deleting historical records.</p>
+                        </div>
+                      </label>
+                      {paymentMethodActionError && <p className="text-xs text-red-600 font-bold">{paymentMethodActionError}</p>}
+                    </div>
+                    <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
+                      <button onClick={() => { setShowPaymentMethodModal(false); setPaymentMethodActionError(null); }} className="px-4 py-2 text-xs font-black text-slate-500 hover:bg-slate-50 rounded-xl transition-colors">Cancel</button>
+                      <button
+                        disabled={paymentMethodActionLoading}
+                        onClick={async () => {
+                          if (!paymentMethodForm.name.trim()) { setPaymentMethodActionError('Method name is required.'); return; }
+                          if (paymentMethodForm.applicableTo.length === 0) { setPaymentMethodActionError('Select at least one applicable order type.'); return; }
+                          setPaymentMethodActionLoading(true); setPaymentMethodActionError(null);
+                          try {
+                            let nextMethods: PaymentMethod[];
+                            if (editingPaymentMethodId) {
+                              nextMethods = paymentMethods.map(m => m.id === editingPaymentMethodId ? {
+                                ...m,
+                                name: paymentMethodForm.name.trim(),
+                                icon: paymentMethodForm.icon.trim() || '💳',
+                                type: paymentMethodForm.type,
+                                applicableTo: paymentMethodForm.applicableTo,
+                                isActive: paymentMethodForm.isActive,
+                              } : m);
+                              writeAuditLog('ConfigChange', `Updated payment method "${paymentMethodForm.name.trim()}" (${editingPaymentMethodId})`);
+                            } else {
+                              const newId = String(Date.now());
+                              const newMethod: PaymentMethod = {
+                                id: newId,
+                                name: paymentMethodForm.name.trim(),
+                                icon: paymentMethodForm.icon.trim() || '💳',
+                                type: paymentMethodForm.type,
+                                applicableTo: paymentMethodForm.applicableTo,
+                                isActive: paymentMethodForm.isActive,
+                              };
+                              nextMethods = [...paymentMethods, newMethod];
+                              writeAuditLog('ConfigChange', `Created payment method "${paymentMethodForm.name.trim()}" (${newId})`);
+                            }
+                            await updatePaymentMethods(nextMethods);
+                            setShowPaymentMethodModal(false);
+                          } catch (e: any) {
+                            setPaymentMethodActionError(e.message || 'Failed to save payment method.');
+                          } finally {
+                            setPaymentMethodActionLoading(false);
+                          }
+                        }}
+                        className="px-5 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors disabled:opacity-50"
+                      >
+                        {paymentMethodActionLoading ? 'Saving…' : 'Save Payment Method'}
                       </button>
                     </div>
                   </div>
@@ -6944,7 +7237,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 )}
               </div>
               <div className="grid grid-cols-2 gap-3">
-                {paymentMethods.filter(m => m.isActive && MEAL_PLAN_PAYMENT_METHOD_NAMES.includes(m.name)).map(m => {
+                {paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan')).map(m => {
                   const isConfirming = confirmPaymentId === m.id;
                   const isSubmitting = pendingPaymentKey === paymentDrop.key;
                   return (
@@ -7302,6 +7595,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         const vat = breakdowns.reduce((s, b) => s + b.vat, 0);
         const total = breakdowns.reduce((s, b) => s + b.net, 0);
         const first = activeReceiptDrop.items[0];
+        const orderSubtotalForBreakdown = order ? (order.subtotal || order.items.reduce((s, it) => s + (it.price * it.qty), 0)) : 0;
+        const dropProportion = orderSubtotalForBreakdown > 0 ? (subtotal / orderSubtotalForBreakdown) : 0;
+        const standardDiscount = (order?.discountBreakdown?.standard || 0) * dropProportion;
+        const birthdayDiscount = (order?.discountBreakdown?.birthday || 0) * dropProportion;
+        const bulkDiscount = (order?.discountBreakdown?.bulk || 0) * dropProportion;
         return (
           <Portal>
             <div className="fixed inset-0 z-[10000] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto bmz-receipt-overlay">
@@ -7370,26 +7668,51 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     <span className="w-16 text-right shrink-0">Amount</span>
                   </div>
                   <div className="space-y-3">
-                    {activeReceiptDrop.items.map((item, idx) => (
-                      <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD] flex items-start gap-2' : 'flex items-start gap-2'}>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-bold text-slate-800">{item.name}</p>
+                    {activeReceiptDrop.items.map((item, idx) => {
+                      const { detail, person } = splitNotesTag(item.notes);
+                      return (
+                        <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
+                          <div className="flex items-start gap-2">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold text-slate-800">{item.deliveryDay ? `${item.deliveryDay} · ` : ''}{item.name}</p>
+                              {detail && <p className="text-[11px] text-slate-400 mt-0.5">{detail}</p>}
+                            </div>
+                            <span className="w-8 text-center text-xs text-slate-600 shrink-0">{item.qty}</span>
+                            <span className="w-16 text-right text-xs font-black text-slate-900 shrink-0">Rs {item.price}</span>
+                          </div>
+                          {person && (
+                            <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                              <PersonTag name={person} />
+                            </div>
+                          )}
                         </div>
-                        <span className="w-8 text-center text-xs text-slate-600 shrink-0">{item.qty}</span>
-                        <span className="w-16 text-right text-xs font-black text-slate-900 shrink-0">Rs {item.price}</span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
 
                 <div className="mt-3 pt-3 border-t border-[#E7E0D0] space-y-1 text-[11px]">
                   <div className="flex justify-between text-slate-500 font-bold"><span>Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
-                  {discount > 0 && <div className="flex justify-between text-primary font-bold"><span>Discount{order?.discountReason ? ` (${order.discountReason})` : ''}</span><span>-{formatCurrency(discount)}</span></div>}
+                  {order?.discountBreakdown ? (
+                    <>
+                      {standardDiscount > 0 && (
+                        <div className="flex justify-between text-primary font-bold"><span>Standard discount ({order.discountBreakdown.standardRate}%)</span><span>-{formatCurrency(standardDiscount)}</span></div>
+                      )}
+                      {birthdayDiscount > 0 && (
+                        <div className="flex justify-between text-primary font-bold"><span>Birthday discount ({order.discountBreakdown.birthdayRate}%)</span><span>-{formatCurrency(birthdayDiscount)}</span></div>
+                      )}
+                      {bulkDiscount > 0 && (
+                        <div className="flex justify-between text-primary font-bold"><span>Full-week discount ({order.discountBreakdown.bulkRate}%)</span><span>-{formatCurrency(bulkDiscount)}</span></div>
+                      )}
+                    </>
+                  ) : (
+                    discount > 0 && <div className="flex justify-between text-primary font-bold"><span>Discount{order?.discountReason ? ` (${order.discountReason})` : ''}</span><span>-{formatCurrency(discount)}</span></div>
+                  )}
                   {vat > 0 && <div className="flex justify-between text-slate-500 font-bold"><span>VAT ({SYSTEM_CONFIG.vatRate}%)</span><span>{formatCurrency(vat)}</span></div>}
                   <div className="flex justify-between text-slate-900 font-black pt-1.5 border-t border-[#E7E0D0] text-xs"><span>Total paid</span><span>{formatCurrency(total)}</span></div>
                 </div>
 
-                <p className="text-center text-[10px] text-slate-400 mt-4">Thank you for ordering with {SYSTEM_CONFIG.businessName} 🌿</p>
+                <p className="text-center text-[10px] text-slate-400 mt-4">Thank you for ordering with {activeReceiptDrop.entityName || (entities.find(e => e.id === activeReceiptDrop.entityId)?.name) || SYSTEM_CONFIG.businessName} 🌿</p>
 
                 <div className="bmz-no-print mt-5 flex gap-2">
                   <button onClick={() => setActiveReceiptDrop(null)} className="flex-1 py-2 bg-slate-100 text-slate-500 hover:bg-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-pointer">Close</button>

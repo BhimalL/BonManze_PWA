@@ -212,6 +212,10 @@ service cloud.firestore {
       allow read: if isActiveStaff();
       allow write: if isStaffAllowed('tradingEntities', 'edit');
     }
+    match /paymentMethods/{docId} {
+      allow read: if true; // customers need this to render the Pay sheet, same reasoning as config/loyaltyTiers
+      allow write: if isStaffAllowed('paymentMethods', 'edit');
+    }
 
     // ---- orders/{orderId} and its items subcollection (manageOrders) ----
     // A customer may read their own orders but never create or edit one

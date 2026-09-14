@@ -233,6 +233,7 @@ export interface RolePermissions {
   iconLibrary: PermissionPair;
   rolesAndStaff: PermissionPair;
   tradingEntities: PermissionPair;
+  paymentMethods: PermissionPair;
 }
 
 export interface Role {

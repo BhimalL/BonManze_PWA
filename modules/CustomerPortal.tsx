@@ -80,7 +80,6 @@ import {
   editOrderItem,
   updateOrderItemRating,
   submitPaymentClaim,
-  MEAL_PLAN_PAYMENT_METHOD_NAMES,
   formatCurrency,
   calculateTotal,
   specialPriceInfo
@@ -1500,7 +1499,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   );
 
   const applicablePaymentMethods = useMemo(
-    () => paymentMethods.filter(m => m.isActive && MEAL_PLAN_PAYMENT_METHOD_NAMES.includes(m.name)),
+    () => paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan')),
     [paymentMethods]
   );
 
@@ -3628,7 +3627,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   </div>
                 </div>
 
-                <p className="text-center text-[10px] text-slate-400 mt-5">Thank you for ordering with {SYSTEM_CONFIG.businessName} 🌿</p>
+                <p className="text-center text-[10px] text-slate-400 mt-5">Thank you for ordering with {receiptTarget.order.entityName || SYSTEM_CONFIG.businessName} 🌿</p>
 
                 <div className="bmz-no-print flex gap-2 mt-5">
                   <button onClick={() => setReceiptTarget(null)} className="flex-1 py-2.5 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Close</button>
