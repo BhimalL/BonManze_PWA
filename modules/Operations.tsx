@@ -982,6 +982,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         const raw = d.data();
         return {
           id: d.id,
+          ...raw,
           name: raw.name || '',
           brn: raw.brn || '',
           vatNumber: raw.vatNumber || '',
@@ -990,7 +991,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           active: !!raw.active,
           createdAt: raw.createdAt,
           updatedAt: raw.updatedAt,
-        };
+        } as Entity;
       });
       setEntities(list);
     }, err => console.error('entities listener failed', err));
@@ -5492,18 +5493,27 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       entity.active === false ? 'opacity-60' : ''
                     }`}
                   >
-                    <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-black text-slate-900">{entity.name}</p>
-                        {entity.active === false && (
-                          <span className="px-1.5 py-0.5 text-[9px] font-black uppercase bg-red-100 text-red-700 rounded-md tracking-wider">
-                            Retired
-                          </span>
-                        )}
+                    <div className="flex items-center gap-3">
+                      {entity.logoStoragePath ? (
+                        <img src={entity.logoStoragePath} alt={entity.name} className="size-10 object-contain rounded-xl bg-white p-1 border border-slate-200 shrink-0" />
+                      ) : (
+                        <div className="size-10 rounded-xl bg-slate-200/60 flex items-center justify-center text-slate-500 font-black text-xs shrink-0">
+                          {entity.name.substring(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-black text-slate-900">{entity.name}</p>
+                          {entity.active === false && (
+                            <span className="px-1.5 py-0.5 text-[9px] font-black uppercase bg-red-100 text-red-700 rounded-md tracking-wider">
+                              Retired
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 font-medium">BRN: {entity.brn} · VAT: {entity.vatNumber}</p>
+                        <p className="text-[10px] text-slate-300 font-medium">Bank ref: {entity.bankReference}</p>
+                        {entity.invoicePrefix && <p className="text-[10px] text-slate-300 font-medium">Invoice prefix: {entity.invoicePrefix}</p>}
                       </div>
-                      <p className="text-xs text-slate-400 font-medium">BRN: {entity.brn} · VAT: {entity.vatNumber}</p>
-                      <p className="text-[10px] text-slate-300 font-medium">Bank ref: {entity.bankReference}</p>
-                      {entity.invoicePrefix && <p className="text-[10px] text-slate-300 font-medium">Invoice prefix: {entity.invoicePrefix}</p>}
                     </div>
                     {currentPermissions?.tradingEntities?.edit === true && (
                       <div className="flex items-center gap-1.5">
@@ -5620,7 +5630,22 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         </div>
                       ))}
                       <div>
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Logo (optional)</label>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">Logo (optional)</label>
+                        {(() => {
+                          const currentEntity = entities.find(e => e.id === editingEntityId);
+                          const previewUrl = entityLogoFile
+                            ? URL.createObjectURL(entityLogoFile)
+                            : currentEntity?.logoStoragePath;
+                          return previewUrl ? (
+                            <div className="mb-2 flex items-center gap-3 p-2 bg-slate-50 border border-slate-200 rounded-xl">
+                              <img src={previewUrl} alt="Entity Logo Preview" className="h-10 w-10 object-contain rounded-lg bg-white p-1 border border-slate-100 shrink-0" />
+                              <div className="text-xs">
+                                <p className="font-bold text-slate-700">{entityLogoFile ? 'New logo selected' : 'Current entity logo'}</p>
+                                <p className="text-[10px] text-slate-400">{entityLogoFile ? entityLogoFile.name : 'Saved in storage'}</p>
+                              </div>
+                            </div>
+                          ) : null;
+                        })()}
                         <input type="file" accept="image/*" onChange={e => setEntityLogoFile(e.target.files?.[0] ?? null)} className="mt-1 w-full text-xs font-medium text-slate-500" />
                       </div>
                       {entityActionError && <p className="text-xs text-red-600 font-bold">{entityActionError}</p>}
