@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Home as HomeIcon,
   BookOpen,
@@ -470,37 +470,62 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [view, setView] = useState<'home' | 'menu' | 'order' | 'contact'>('home');
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [cart, setCart] = useState<Record<string, MealSelection[]>>(() => {
-    try {
-      const saved = localStorage.getItem('bmz_customer_cart_lunch');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
+  // Draft carts start empty and are loaded per-customer by the effect below —
+  // NOT read from localStorage here, since at first mount we don't yet know
+  // who's logged in (Firebase auth resolves asynchronously). Loading here
+  // used to read a single global key shared by every customer who ever used
+  // this browser, which let one customer's draft meals bleed into another's
+  // "My Order" screen after switching accounts. `cartOwnerIdRef` tracks whose
+  // data is currently loaded into `cart`/`dinnerCart`, so the persist effects
+  // below always write to that customer's own key, never a stale one.
+  const [cart, setCart] = useState<Record<string, MealSelection[]>>({});
   // Dinner's own draft cart, kept as a separate parallel state rather than
   // folding a service key into `cart` — same shape, same day-keyed pattern,
   // just a second bucket so Lunch's existing logic above stays untouched.
-  const [dinnerCart, setDinnerCart] = useState<Record<string, MealSelection[]>>(() => {
-    try {
-      const saved = localStorage.getItem('bmz_customer_cart_dinner');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
+  const [dinnerCart, setDinnerCart] = useState<Record<string, MealSelection[]>>({});
+  const cartOwnerIdRef = useRef<string | null>(null);
+
+  // Loads (or clears) the draft carts whenever the logged-in customer
+  // changes — covers both a fresh page load (currentUser resolving from
+  // null → an id) and switching accounts within the same browser session
+  // without a full page reload (currentUser resolving from one id → another).
+  useEffect(() => {
+    const id = currentUser?.id || null;
+    cartOwnerIdRef.current = id;
+    if (!id) {
+      setCart({});
+      setDinnerCart({});
+      return;
     }
-  });
+    try {
+      const savedLunch = localStorage.getItem(`bmz_customer_cart_lunch_${id}`);
+      setCart(savedLunch ? JSON.parse(savedLunch) : {});
+    } catch {
+      setCart({});
+    }
+    try {
+      const savedDinner = localStorage.getItem(`bmz_customer_cart_dinner_${id}`);
+      setDinnerCart(savedDinner ? JSON.parse(savedDinner) : {});
+    } catch {
+      setDinnerCart({});
+    }
+  }, [currentUser?.id]);
 
   useEffect(() => {
+    const id = cartOwnerIdRef.current;
+    if (!id) return;
     try {
-      localStorage.setItem('bmz_customer_cart_lunch', JSON.stringify(cart));
+      localStorage.setItem(`bmz_customer_cart_lunch_${id}`, JSON.stringify(cart));
     } catch (e) {
       console.error('Failed to save lunch cart to localStorage', e);
     }
   }, [cart]);
 
   useEffect(() => {
+    const id = cartOwnerIdRef.current;
+    if (!id) return;
     try {
-      localStorage.setItem('bmz_customer_cart_dinner', JSON.stringify(dinnerCart));
+      localStorage.setItem(`bmz_customer_cart_dinner_${id}`, JSON.stringify(dinnerCart));
     } catch (e) {
       console.error('Failed to save dinner cart to localStorage', e);
     }
@@ -1474,6 +1499,26 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
 
+  // Exact per-item payment amount: this item's own price minus its own
+  // discountShare (standard + birthday + bulk, written by confirmCheckout),
+  // plus its own share of VAT — used instead of orderProrationFactor
+  // whenever discountShare is present, so paying for just one day/item
+  // reflects only the discount that item actually earned (a birthday
+  // discount tied to one specific day no longer leaks into what another
+  // day owes). Falls back to the previous blended
+  // order.total/order.subtotal proration for orders placed before
+  // discountShare existed.
+  const itemPayAmount = (order: Order, item: FsOrderItem): number => {
+    const share = item.discountShare;
+    if (share) {
+      const gross = item.qty * item.price;
+      const net = gross - ((share.standard || 0) + (share.birthday || 0) + (share.bulk || 0));
+      const vat = net * (SYSTEM_CONFIG.vatRate / 100);
+      return round2(net + vat);
+    }
+    return round2(item.qty * item.price * orderProrationFactor(order));
+  };
+
   // Turns a set of pending (unclaimed) lines into the write targets
   // (payTarget.items) and the one number actually shown/collected
   // (payTarget.amount) — grouped by order:
@@ -1490,7 +1535,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       orderId: l.order.id,
       date: l.item.deliveryDate || '',
       slot: l.item.serviceSlot || 'Lunch',
-      amount: round2(l.item.qty * l.item.price * orderProrationFactor(l.order)),
+      amount: itemPayAmount(l.order, l.item),
       fsItemId: l.item._fsItemId,
     }));
 
@@ -1507,7 +1552,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       const wholeOrderPending = orderLines.length === activeOrderItemCount;
       amount += wholeOrderPending
         ? order.total
-        : orderLines.reduce((t, l) => t + round2(l.item.qty * l.item.price * orderProrationFactor(l.order)), 0);
+        : orderLines.reduce((t, l) => t + itemPayAmount(l.order, l.item), 0);
     });
 
     return { items, amount: round2(amount) };
@@ -1571,7 +1616,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       orderId: line.order.id,
       date: line.item.deliveryDate || '',
       slot: line.item.serviceSlot || 'Lunch',
-      amount: round2(line.item.qty * line.item.price * orderProrationFactor(line.order)),
+      amount: itemPayAmount(line.order, line.item),
       what: `${line.item.deliveryDay || ''} · ${line.item.name}`,
       ref: generateRef(),
       fsItemId: line.item._fsItemId,
@@ -2829,12 +2874,20 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                           const vatAmt = has ? (order.vat || 0) : 0;
                           const tot = has ? order.total : itemSum;
                           const reason = formatOrderDiscountReason(order);
+                          const bd = order.discountBreakdown;
+                          const rawReason = order.discountReason || '';
+                          const standardLabel = bd && bd.standard > 0
+                            ? (rawReason.split(', ').find(p => !p.startsWith('Birthday') && !p.startsWith('Full-week') && !p.startsWith('Bulk')) || `Standard (${bd.standardRate}%)`)
+                            : '';
                           if (sub === 0) return null;
                           return (
                             <div className="mx-4 mb-4 pt-3 border-t border-[#E7E0D0]">
                               <div className="space-y-1 text-[11px]">
                                 <div className="flex justify-between text-slate-500 font-bold"><span>Subtotal</span><span>{formatCurrency(sub)}</span></div>
-                                {disc > 0 && <div className="flex justify-between text-primary font-bold"><span>Discount{reason ? ` (${reason})` : ''}</span><span>-{formatCurrency(disc)}</span></div>}
+                                {bd && bd.standard > 0 && <div className="flex justify-between text-primary font-bold"><span>{standardLabel}</span><span>-{formatCurrency(bd.standard)}</span></div>}
+                                {bd && bd.birthday > 0 && <div className="flex justify-between text-accent font-bold"><span>🎂 Birthday Discount ({bd.birthdayRate}%)</span><span>-{formatCurrency(bd.birthday)}</span></div>}
+                                {bd && bd.bulk > 0 && <div className="flex justify-between text-success font-bold"><span>Full-Week Discount ({bd.bulkRate}%)</span><span>-{formatCurrency(bd.bulk)}</span></div>}
+                                {!bd && disc > 0 && <div className="flex justify-between text-primary font-bold"><span>Discount{reason ? ` (${reason})` : ''}</span><span>-{formatCurrency(disc)}</span></div>}
                                 {vatAmt > 0 && <div className="flex justify-between text-slate-500 font-bold"><span>VAT ({SYSTEM_CONFIG.vatRate}%)</span><span>{formatCurrency(vatAmt)}</span></div>}
                                 <div className="flex justify-between text-slate-900 font-black pt-1.5 border-t border-[#E7E0D0] text-xs"><span>Total</span><span>{formatCurrency(tot)}</span></div>
                               </div>
@@ -2956,12 +3009,20 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                           const vatAmt = has ? (order.vat || 0) : 0;
                           const tot = has ? order.total : itemSum;
                           const reason = formatOrderDiscountReason(order);
+                          const bd = order.discountBreakdown;
+                          const rawReason = order.discountReason || '';
+                          const standardLabel = bd && bd.standard > 0
+                            ? (rawReason.split(', ').find(p => !p.startsWith('Birthday') && !p.startsWith('Full-week') && !p.startsWith('Bulk')) || `Standard (${bd.standardRate}%)`)
+                            : '';
                           if (sub === 0) return null;
                           return (
                             <div className="mx-4 mb-4 pt-3 border-t border-[#E7E0D0]">
                               <div className="space-y-1 text-[11px]">
                                 <div className="flex justify-between text-slate-500 font-bold"><span>Subtotal</span><span>{formatCurrency(sub)}</span></div>
-                                {disc > 0 && <div className="flex justify-between text-primary font-bold"><span>Discount{reason ? ` (${reason})` : ''}</span><span>-{formatCurrency(disc)}</span></div>}
+                                {bd && bd.standard > 0 && <div className="flex justify-between text-primary font-bold"><span>{standardLabel}</span><span>-{formatCurrency(bd.standard)}</span></div>}
+                                {bd && bd.birthday > 0 && <div className="flex justify-between text-accent font-bold"><span>🎂 Birthday Discount ({bd.birthdayRate}%)</span><span>-{formatCurrency(bd.birthday)}</span></div>}
+                                {bd && bd.bulk > 0 && <div className="flex justify-between text-success font-bold"><span>Full-Week Discount ({bd.bulkRate}%)</span><span>-{formatCurrency(bd.bulk)}</span></div>}
+                                {!bd && disc > 0 && <div className="flex justify-between text-primary font-bold"><span>Discount{reason ? ` (${reason})` : ''}</span><span>-{formatCurrency(disc)}</span></div>}
                                 {vatAmt > 0 && <div className="flex justify-between text-slate-500 font-bold"><span>VAT ({SYSTEM_CONFIG.vatRate}%)</span><span>{formatCurrency(vatAmt)}</span></div>}
                                 <div className="flex justify-between text-slate-900 font-black pt-1.5 border-t border-[#E7E0D0] text-xs"><span>Total</span><span>{formatCurrency(tot)}</span></div>
                               </div>
@@ -3574,20 +3635,41 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           return activeOrderItems.length === linesInGroup;
         });
 
-        // Compute pro-rated calculations for partial/item-level receipts
+        // Compute pro-rated calculations for partial/item-level receipts.
+        // Exact per-item attribution when the item has discountShare (any
+        // order confirmed after that field started being written) — this is
+        // what keeps a birthday discount on the day/item that earned it
+        // instead of blending it proportionally across the whole order.
+        // Falls back to the previous proportional estimate (by this item's
+        // price-share of its order's subtotal) for older orders that
+        // predate discountShare, so nothing regresses for existing data.
+        const lineDiscountAndVat = (l: OrderLine) => {
+          const gross = l.item.price * l.item.qty;
+          const share = l.item.discountShare;
+          if (share) {
+            const standard = share.standard || 0;
+            const birthday = share.birthday || 0;
+            const bulk = share.bulk || 0;
+            const net = gross - (standard + birthday + bulk);
+            const vat = net * (SYSTEM_CONFIG.vatRate / 100);
+            return { discount: standard + birthday + bulk, vat, standard, birthday, bulk };
+          }
+          const ord = l.order;
+          const ordSub = ord.subtotal || ord.items.reduce((acc, it) => acc + (it.price * it.qty), 0);
+          const prop = ordSub > 0 ? gross / ordSub : 0;
+          const bd = ord.discountBreakdown;
+          return {
+            discount: (ord.discount || 0) * prop,
+            vat: (ord.vat || 0) * prop,
+            standard: (bd?.standard || 0) * prop,
+            birthday: (bd?.birthday || 0) * prop,
+            bulk: (bd?.bulk || 0) * prop,
+          };
+        };
         const partialSubtotal = receiptTarget.lines.reduce((s, l) => s + (l.item.price * l.item.qty), 0);
-        const partialDiscount = receiptTarget.lines.reduce((s, l) => {
-          const ord = l.order;
-          const ordSub = ord.subtotal || ord.items.reduce((acc, it) => acc + (it.price * it.qty), 0);
-          const prop = ordSub > 0 ? (l.item.price * l.item.qty) / ordSub : 0;
-          return s + ((ord.discount || 0) * prop);
-        }, 0);
-        const partialVat = receiptTarget.lines.reduce((s, l) => {
-          const ord = l.order;
-          const ordSub = ord.subtotal || ord.items.reduce((acc, it) => acc + (it.price * it.qty), 0);
-          const prop = ordSub > 0 ? (l.item.price * l.item.qty) / ordSub : 0;
-          return s + ((ord.vat || 0) * prop);
-        }, 0);
+        const partialLineCalcs = receiptTarget.lines.map(lineDiscountAndVat);
+        const partialDiscount = partialLineCalcs.reduce((s, c) => s + c.discount, 0);
+        const partialVat = partialLineCalcs.reduce((s, c) => s + c.vat, 0);
         const partialTotal = round2(partialSubtotal - partialDiscount + partialVat);
 
         const displaySubtotal = isFullOrderReceipt
@@ -3610,11 +3692,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           ? firstOrder?.discountBreakdown
           : (firstOrder?.discountBreakdown ? {
               standardRate: firstOrder.discountBreakdown.standardRate,
-              standard: round2((firstOrder.discountBreakdown.standard || 0) * (displaySubtotal / (firstOrder.subtotal || 1))),
+              standard: round2(partialLineCalcs.reduce((s, c) => s + c.standard, 0)),
               birthdayRate: firstOrder.discountBreakdown.birthdayRate,
-              birthday: round2((firstOrder.discountBreakdown.birthday || 0) * (displaySubtotal / (firstOrder.subtotal || 1))),
+              birthday: round2(partialLineCalcs.reduce((s, c) => s + c.birthday, 0)),
               bulkRate: firstOrder.discountBreakdown.bulkRate,
-              bulk: round2((firstOrder.discountBreakdown.bulk || 0) * (displaySubtotal / (firstOrder.subtotal || 1))),
+              bulk: round2(partialLineCalcs.reduce((s, c) => s + c.bulk, 0)),
             } : undefined);
 
         const allInvoiced = receiptTarget.lines.every(l => !!l.item.invoiceNumber);

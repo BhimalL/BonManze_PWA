@@ -471,16 +471,27 @@ export const confirmCheckout = onCall(async (request) => {
     bDay = bd;
   }
 
+  // Per-item discount shares are captured alongside the aggregate sums
+  // below — same expressions, just also stashed on `p` before being added
+  // to the running total, so the order-level math (standardDiscount /
+  // birthdayDiscount / bulkDiscount, and everything rounded from them) is
+  // byte-for-byte unchanged from before this field existed.
   let standardDiscount = 0, birthdayDiscount = 0;
   priced.forEach((p) => {
-    standardDiscount += p.price * (effectiveStandardRate / 100);
+    const itemStandardDiscount = p.price * (effectiveStandardRate / 100);
+    standardDiscount += itemStandardDiscount;
+    p._itemStandardDiscount = itemStandardDiscount;
     const [, fm, fd] = p.deliveryDate.split('-').map(Number);
+    let itemBirthdayDiscount = 0;
     if (fm === bMonth && fd === bDay && birthdayTierRate > 0) {
-      birthdayDiscount += p.price * (birthdayTierRate / 100);
+      itemBirthdayDiscount = p.price * (birthdayTierRate / 100);
+      birthdayDiscount += itemBirthdayDiscount;
     }
+    p._itemBirthdayDiscount = itemBirthdayDiscount;
   });
 
   let bulkDiscount = 0;
+  const bulkQualifyingWeekStarts = new Set();
   if (config.bulkDiscountEnabled) {
     const weekStarts = new Set(priced.map((p) => p._weekStart));
     weekStarts.forEach((ws) => {
@@ -490,9 +501,19 @@ export const confirmCheckout = onCall(async (request) => {
       if (lunchDaysCovered.size >= WEEKDAY_KEYS.length) {
         const weekSubtotal = priced.filter((p) => p._weekStart === ws).reduce((t, p) => t + p.price, 0);
         bulkDiscount += weekSubtotal * ((config.bulkDiscountRate || 0) / 100);
+        bulkQualifyingWeekStarts.add(ws);
       }
     });
   }
+  // Per-item bulk share is exact, not estimated: bulk discount is a flat
+  // rate on that week's subtotal, so each item's own price * rate is its
+  // real contribution — by construction these sum back to weekSubtotal *
+  // rate for every qualifying week, with no proportional guessing involved.
+  priced.forEach((p) => {
+    p._itemBulkDiscount = bulkQualifyingWeekStarts.has(p._weekStart)
+      ? p.price * ((config.bulkDiscountRate || 0) / 100)
+      : 0;
+  });
 
   const round2 = (n) => Math.round(n * 100) / 100;
   const subtotal = round2(priced.reduce((t, p) => t + p.price, 0));
@@ -552,13 +573,22 @@ export const confirmCheckout = onCall(async (request) => {
       entityLogoStoragePath: entity.logoStoragePath || '',
     });
     priced.forEach((p) => {
-      const { _weekStart, _service, _weekdayKey, ...itemFields } = p;
+      const {
+        _weekStart, _service, _weekdayKey,
+        _itemStandardDiscount, _itemBirthdayDiscount, _itemBulkDiscount,
+        ...itemFields
+      } = p;
       const itemRef = orderRef.collection('items').doc();
       tx.set(itemRef, {
         ...itemFields,
         customerId: uid,
         customerName: customer.name || '',
         entityId: customer.entityId,
+        discountShare: {
+          standard: round2(_itemStandardDiscount),
+          birthday: round2(_itemBirthdayDiscount),
+          bulk: round2(_itemBulkDiscount),
+        },
       });
     });
   });

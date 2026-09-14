@@ -1449,9 +1449,23 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // the customer actually owes/paid. Shared by drops, paymentDrops,
   // paymentSummary, and the Payments-console receipt view so all of them
   // agree with the Ledger.
+  // Exact per-item attribution when the item has discountShare (written by
+  // confirmCheckout on every order confirmed after that field started being
+  // written) — this is what keeps a birthday discount on the day/item that
+  // actually earned it instead of blending it proportionally across every
+  // item in the order. Falls back to the previous proportional estimate
+  // (this item's price-share of the order's subtotal) for older orders that
+  // predate discountShare.
   const itemAmountBreakdown = (order: Order, item: OrderItem) => {
-    const orderSubtotal = order.subtotal || order.items.reduce((sum, it) => sum + (it.price * it.qty), 0);
     const gross = item.qty * item.price;
+    const share = item.discountShare;
+    if (share) {
+      const discount = (share.standard || 0) + (share.birthday || 0) + (share.bulk || 0);
+      const net = gross - discount;
+      const vat = net * (SYSTEM_CONFIG.vatRate / 100);
+      return { gross, discount, vat, net: net + vat };
+    }
+    const orderSubtotal = order.subtotal || order.items.reduce((sum, it) => sum + (it.price * it.qty), 0);
     const proportion = orderSubtotal > 0 ? (gross / orderSubtotal) : 0;
     const discount = (order.discount || 0) * proportion;
     const vat = (order.vat || 0) * proportion;
@@ -3978,25 +3992,29 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         const cust = getCustomer(o.customerName);
         const entityName = o.entityName || (entities.find(e => e.id === o.entityId)?.name) || '';
         const itemTotal = item.price * item.qty;
-        
+
         // Calculate proportional discounts & VAT based on pre-tax subtotal
+        // — only used as a fallback below, for orders placed before
+        // discountShare existed.
         const orderSubtotal = o.subtotal || o.items.reduce((sum, it) => sum + (it.price * it.qty), 0);
         const proportion = orderSubtotal > 0 ? (itemTotal / orderSubtotal) : 0;
-        const itemDiscount = (o.discount || 0) * proportion;
-        // Per-type breakdown — proportionally allocated like itemDiscount
-        // above, straight from the order's discountBreakdown (added in
-        // 8d22d8b). Orders placed before that fix have no discountBreakdown,
-        // so these are 0 for them — the existing combined `discount` column
-        // still shows their real total, we just can't retroactively know
-        // which type it was.
-        const standardDiscount = (o.discountBreakdown?.standard || 0) * proportion;
-        const birthdayDiscount = (o.discountBreakdown?.birthday || 0) * proportion;
-        const bulkDiscount = (o.discountBreakdown?.bulk || 0) * proportion;
+        // Per-type breakdown — exact when this item has discountShare
+        // (written by confirmCheckout on every order confirmed after that
+        // field started being written), so a birthday discount lands only
+        // on the item that earned it. Proportionally allocated from the
+        // order's discountBreakdown, same as before, for older orders that
+        // predate discountShare (and older still, orders that predate
+        // discountBreakdown entirely — 0 for those, same as always).
+        const itemShare = item.discountShare;
+        const standardDiscount = itemShare ? (itemShare.standard || 0) : (o.discountBreakdown?.standard || 0) * proportion;
+        const birthdayDiscount = itemShare ? (itemShare.birthday || 0) : (o.discountBreakdown?.birthday || 0) * proportion;
+        const bulkDiscount = itemShare ? (itemShare.bulk || 0) : (o.discountBreakdown?.bulk || 0) * proportion;
         const standardRate = o.discountBreakdown?.standardRate || 0;
         const birthdayRate = o.discountBreakdown?.birthdayRate || 0;
         const bulkRate = o.discountBreakdown?.bulkRate || 0;
+        const itemDiscount = standardDiscount + birthdayDiscount + bulkDiscount;
         const totalBeforeVat = itemTotal - itemDiscount;
-        const itemVat = (o.vat || 0) * proportion;
+        const itemVat = itemShare ? totalBeforeVat * (SYSTEM_CONFIG.vatRate / 100) : (o.vat || 0) * proportion;
         const itemNetTotal = totalBeforeVat + itemVat;
         // Blank (undefined), not 0, when this item predates the cost-
         // snapshot fix — 0 would falsely claim "this cost nothing." Cost is
@@ -7846,10 +7864,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         const total = breakdowns.reduce((s, b) => s + b.net, 0);
         const first = activeReceiptDrop.items[0];
         const orderSubtotalForBreakdown = order ? (order.subtotal || order.items.reduce((s, it) => s + (it.price * it.qty), 0)) : 0;
-        const dropProportion = orderSubtotalForBreakdown > 0 ? (subtotal / orderSubtotalForBreakdown) : 0;
-        const standardDiscount = (order?.discountBreakdown?.standard || 0) * dropProportion;
-        const birthdayDiscount = (order?.discountBreakdown?.birthday || 0) * dropProportion;
-        const bulkDiscount = (order?.discountBreakdown?.bulk || 0) * dropProportion;
+        // Exact per-item attribution when the item has discountShare;
+        // proportional estimate (this item's price-share of the order's
+        // subtotal) for older orders that predate discountShare — same
+        // fallback itemAmountBreakdown above uses.
+        const byTypeDiscount = (type: 'standard' | 'birthday' | 'bulk') => activeReceiptDrop.items.reduce((s, item) => {
+          const share = item.discountShare;
+          if (share) return s + (share[type] || 0);
+          const prop = orderSubtotalForBreakdown > 0 ? (item.qty * item.price) / orderSubtotalForBreakdown : 0;
+          return s + (order?.discountBreakdown?.[type] || 0) * prop;
+        }, 0);
+        const standardDiscount = byTypeDiscount('standard');
+        const birthdayDiscount = byTypeDiscount('birthday');
+        const bulkDiscount = byTypeDiscount('bulk');
         const allInvoiced = activeReceiptDrop.items.every(i => !!i.invoiceNumber);
         const invoiceRefDisplay = allInvoiced
           ? Array.from(new Set(activeReceiptDrop.items.map(i => i.invoiceNumber))).join(', ')

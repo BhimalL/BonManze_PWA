@@ -186,6 +186,22 @@ export interface OrderItem {
   invoiceNumber?: string;
   invoiceIssuedAt?: any;
   invoiceReprintCount?: number;
+  // Exact per-item discount amounts, written by confirmCheckout at order
+  // creation time — NOT an estimate. Standard/birthday/bulk are each
+  // computed per item there (birthday already only ever applied to the one
+  // item whose deliveryDate matches the customer's birthday; bulk is an
+  // exact per-item share of a week-level discount, since bulk = weekSubtotal
+  // * rate is linear in each item's own price). Lets any receipt or partial-
+  // payment view attribute discount to the item/day that actually earned it
+  // instead of blending the order's total discount proportionally across
+  // every item (which used to smear birthday discount across the whole
+  // week). Absent on orders placed before this field existed — callers must
+  // fall back to the old proportional estimate for those.
+  discountShare?: {
+    standard: number;
+    birthday: number;
+    bulk: number;
+  };
 }
 
 export interface Order {
