@@ -530,10 +530,14 @@ export const confirmCheckout = onCall(async (request) => {
       updatedAt: Timestamp.now(),
     });
 
+    const standardLabel = (groupObj && groupRate > standardTierRate)
+      ? `${groupObj.name} Group`
+      : (tierObj?.name ? `${tierObj.name} Tier` : 'Standard');
+
     const reasonParts = [];
-    if (standardDiscountRounded > 0) reasonParts.push(`Standard: ${effectiveStandardRate}%`);
-    if (birthdayDiscountRounded > 0) reasonParts.push(`Birthday: ${birthdayTierRate}%`);
-    if (bulkDiscountRounded > 0) reasonParts.push(`Bulk: ${config.bulkDiscountRate}%`);
+    if (standardDiscountRounded > 0) reasonParts.push(`${standardLabel} (${effectiveStandardRate}%)`);
+    if (birthdayDiscountRounded > 0) reasonParts.push(`Birthday (${birthdayTierRate}%)`);
+    if (bulkDiscountRounded > 0) reasonParts.push(`Full-week (${config.bulkDiscountRate}%)`);
 
     const now = Timestamp.now();
     tx.set(orderRef, {

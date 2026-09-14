@@ -433,6 +433,29 @@ const statusTone = (status?: string): 'success' | 'warning' | 'danger' | 'slate'
   return 'slate';
 };
 
+const formatOrderDiscountReason = (order: Order): string => {
+  const rawReason = order.discountReason || '';
+  if (order.discountBreakdown) {
+    const parts: string[] = [];
+    const bd = order.discountBreakdown;
+    if (bd.standard > 0) {
+      const match = rawReason.split(', ').find(p => !p.startsWith('Birthday') && !p.startsWith('Full-week') && !p.startsWith('Bulk'));
+      parts.push(match || `Standard (${bd.standardRate}%)`);
+    }
+    if (bd.birthday > 0) {
+      parts.push(`Birthday (${bd.birthdayRate}%)`);
+    }
+    if (bd.bulk > 0) {
+      parts.push(`Full-week (${bd.bulkRate}%)`);
+    }
+    if (parts.length > 0) return parts.join(', ');
+  }
+  return rawReason
+    .split(', ')
+    .filter(r => !r.endsWith(': 0%') && !r.includes('Birthday: 5%'))
+    .join(', ');
+};
+
 interface CustomerPortalProps { onLogout?: () => void; }
 
 const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
@@ -2783,8 +2806,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                           const disc = has ? (order.discount || 0) : 0;
                           const vatAmt = has ? (order.vat || 0) : 0;
                           const tot = has ? order.total : itemSum;
-                          const rawReason = has ? (order.discountReason || '') : '';
-                          const reason = rawReason.split(', ').filter(r => !r.endsWith(': 0%')).join(', ');
+                          const reason = formatOrderDiscountReason(order);
                           if (sub === 0) return null;
                           return (
                             <div className="mx-4 mb-4 pt-3 border-t border-[#E7E0D0]">
@@ -2911,7 +2933,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                           const disc = has ? (order.discount || 0) : 0;
                           const vatAmt = has ? (order.vat || 0) : 0;
                           const tot = has ? order.total : itemSum;
-                          const reason = has ? (order.discountReason || '') : '';
+                          const reason = formatOrderDiscountReason(order);
                           if (sub === 0) return null;
                           return (
                             <div className="mx-4 mb-4 pt-3 border-t border-[#E7E0D0]">
