@@ -254,6 +254,7 @@ export type AuditLogType =
   | 'RegistrationDecision'
   | 'EntityReassignment'
   | 'PaymentConfirmed'
+  | 'PaymentClaimReset'
   | 'DeliveryConfirmed';
 
 export interface AuditLog {

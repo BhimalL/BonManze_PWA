@@ -396,6 +396,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [pendingDispatchKey, setPendingDispatchKey] = useState<string | null>(null);
   const [pendingCookingKey, setPendingCookingKey] = useState<string | null>(null);
   const [pendingPaymentKey, setPendingPaymentKey] = useState<string | null>(null);
+  const [pendingResetPaymentKey, setPendingResetPaymentKey] = useState<string | null>(null);
   const [opsActionError, setOpsActionError] = useState<string | null>(null);
   const [activePrintDrop, setActivePrintDrop] = useState<DropTask | null>(null);
   const [activePrintService, setActivePrintService] = useState<{ date: string; service: 'Lunch' | 'Dinner'; drops: DropTask[] } | null>(null);
@@ -1775,6 +1776,43 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     } finally {
       setPendingPaymentKey(null);
       setPaymentDrop(null);
+    }
+  };
+
+  // The mirror of markPaid: sends a claimed-but-unconfirmed payment back to
+  // the customer so they can pick a method again — for when a customer
+  // claims a method (e.g. Cash on Delivery) but never actually pays. Only
+  // ever targets items that are still Pending with a claimed method; an
+  // item already confirmed Paid needs a refund/reversal flow, not this, so
+  // it's deliberately excluded here rather than silently un-doing a
+  // confirmed payment.
+  const resetPaymentClaim = async (drop: DropTask) => {
+    if (currentPermissions?.payments?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to reset payments.');
+      return;
+    }
+    const targets = drop.items.filter(i => !!i._fsItemId && i.paymentStatus !== 'Paid' && !!i.paymentMethodName);
+    if (targets.length === 0) {
+      setOpsActionError('Nothing to reset — no claimed, unconfirmed items found on this order.');
+      return;
+    }
+    setOpsActionError(null);
+    setPendingResetPaymentKey(drop.key);
+    try {
+      const batch = writeBatch(db);
+      targets.forEach(i => {
+        batch.update(doc(db, 'orders', drop.orderId, 'items', i._fsItemId as string), {
+          paymentMethodName: null,
+          paymentReference: null,
+        });
+      });
+      await batch.commit();
+      writeAuditLog('PaymentClaimReset', `Reset payment claim (was ${drop.claimedMethod || 'unknown'}${drop.claimedReference ? `, ref ${drop.claimedReference}` : ''}) for ${targets.length} item(s), order ${drop.orderId} (${drop.customerName}) — sent back to customer for re-processing`);
+    } catch (e) {
+      console.error('Reset payment claim failed', e);
+      setOpsActionError('Could not reset this payment claim — please try again.');
+    } finally {
+      setPendingResetPaymentKey(null);
     }
   };
 
@@ -6593,6 +6631,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               >
                                 <Printer className="size-4" /> Print
                               </button>
+                              {drop.claimedMethod && (
+                                <button
+                                  type="button"
+                                  onClick={() => resetPaymentClaim(drop)}
+                                  disabled={pendingResetPaymentKey === drop.key}
+                                  className="px-4 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                                  title="Send back to the customer to pick a payment method again — use this if they claimed a method but never actually paid."
+                                >
+                                  {pendingResetPaymentKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                                  {pendingResetPaymentKey === drop.key ? 'Resetting...' : 'Send back'}
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => setPaymentDrop(drop)}
