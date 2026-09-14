@@ -28,8 +28,8 @@
 - **Dish Batch Cooking Interactive Progression (`modules/Operations.tsx` & `firestore.rules`)**: Upgraded `Orders by Dish` cooking action buttons from static badges to a full 4-stage interactive progression:
   1. `Start Cooking` (updates active unstarted batch items to `'Preparing'`).
   2. `Mark Ready` (updates preparing batch items to `'Ready'`). Fixed `firestore.rules` item status update rule so setting status to `'Ready'` is authorized by `ordersByDish.edit` (previously required `deliveryList.edit`, which caused Firestore to reject writes and revert the button state).
-  3. `✓ Cooked` (badge displayed when batch items are ready/en-route).
-  4. `✓ Delivered` (badge displayed automatically when all batch items are delivered/completed).
+  3. `Dispatch` (updates ready items in Delivery List tab to `'En route'`). Fixed `canDispatch` and `handleDispatchDrop` target filtering in `Operations.tsx` (`Claude outputs/dispatch-after-ready-fix.md`) so Dispatch appears after dishes are marked `'Ready'`, authorized by `deliveryList.edit` or `ordersByDish.edit`.
+  4. `✓ Cooked` / `✓ Delivered` (badges displayed automatically when batch items reach ready, en-route, or delivered/completed state).
 
 ### 3. Discount Stacking & Birthday Business Logic Specification
 - **Standard / Group Discount**: Computed as `max(tierRate%, groupRate%)` for each meal item. If a customer belongs to a Group (`ABC Motors Co Ltd Group (6%)`) whose discount percentage exceeds their Loyalty Tier rate, the Group name and rate are stored on the order and rendered on summaries and receipts.

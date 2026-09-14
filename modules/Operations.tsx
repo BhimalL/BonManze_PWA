@@ -1782,11 +1782,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const handleDispatchDrop = async (drop: DropTask) => {
-    if (currentPermissions?.ordersByDish?.edit !== true) {
+    if (currentPermissions?.deliveryList?.edit !== true && currentPermissions?.ordersByDish?.edit !== true) {
       setOpsActionError('Access Denied: You do not have permission to dispatch orders.');
       return;
     }
-    const targets = drop.items.filter(i => !!i._fsItemId && (i.status === 'Active' || i.status === 'Preparing' || !i.status));
+    const targets = drop.items.filter(i => !!i._fsItemId && i.status === 'Ready');
     if (targets.length === 0) {
       setOpsActionError('Could not dispatch — no eligible items found to dispatch. Try refreshing.');
       return;
@@ -6961,7 +6961,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   const addr = cust?.addresses[0];
                   const allCompleted = drop.items.every(i => i.status === 'Completed');
                   const allEnRoute = drop.items.every(i => i.status === 'En route');
-                  const canDispatch = drop.items.some(i => i.status === 'Active' || i.status === 'Preparing' || !i.status);
+                  const canDispatch = drop.items.some(i => i.status === 'Ready');
 
                   return (
                     <div key={drop.key} className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-6 hover:shadow-md transition-all">
