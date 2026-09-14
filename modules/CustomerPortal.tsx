@@ -40,7 +40,7 @@ import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebas
 import { doc, getDoc, collection, collectionGroup, query, where, onSnapshot, writeBatch, updateDoc, Timestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from '../firebaseClient';
-import { Customer, Order, OrderItem, PaymentMethod } from '../types';
+import { Customer, Order, OrderItem, PaymentMethod, Entity } from '../types';
 import {
   WEEKDAY_KEYS,
   WeekdayKey,
@@ -441,6 +441,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [loyaltyTiers, setLoyaltyTiers] = useState(LOYALTY_TIERS);
   const [customerGroups, setCustomerGroups] = useState(CUSTOMER_GROUPS);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [entities, setEntities] = useState<Entity[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [systemDate, setSystemDate] = useState(MOCK_TODAY);
   const [view, setView] = useState<'home' | 'menu' | 'order' | 'contact'>('home');
@@ -621,7 +622,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const u7 = subscribeToLunchMenu(() => setMenuTick(t => t + 1));
     const u8 = subscribeToConfig(() => setConfigTick(t => t + 1));
     const u9 = subscribeToDinnerMenu(() => setMenuTick(t => t + 1));
-    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); u9(); };
+    const u10 = onSnapshot(collection(db, 'entities'), snap => {
+      setEntities(snap.docs.map(d => ({ id: d.id, ...d.data() } as Entity)));
+    }, err => console.error('entities listener failed in CustomerPortal', err));
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); u9(); u10(); };
   }, []);
 
   // If Operations turns Dinner off while it's the active tab, fall back to
@@ -722,6 +726,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       dietaryPreferences: customerDocRaw.dietaryPreferences,
       registrationStatus: customerDocRaw.registrationStatus,
       rejectionReason: customerDocRaw.rejectionReason,
+      entityId: customerDocRaw.entityId,
     });
   }, [customerDocRaw, loyaltyTiers, customerGroups]);
 
@@ -1498,10 +1503,22 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     [thisWeekLines]
   );
 
-  const applicablePaymentMethods = useMemo(
-    () => paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan')),
-    [paymentMethods]
-  );
+  const currentPayEntityId = useMemo(() => {
+    if (payTarget && payTarget.kind === 'item') {
+      const order = orders.find(o => o.id === payTarget.orderId);
+      if (order?.entityId) return order.entityId;
+    }
+    return currentUser?.entityId || customerDocRaw?.entityId || '';
+  }, [payTarget, orders, currentUser?.entityId, customerDocRaw?.entityId]);
+
+  const applicablePaymentMethods = useMemo(() => {
+    const activeMethods = paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan'));
+    const currentEntity = entities.find(e => e.id === currentPayEntityId);
+    if (currentEntity && currentEntity.acceptedPaymentMethodIds && currentEntity.acceptedPaymentMethodIds.length > 0) {
+      return activeMethods.filter(m => currentEntity.acceptedPaymentMethodIds!.includes(m.id));
+    }
+    return activeMethods;
+  }, [paymentMethods, entities, currentPayEntityId]);
 
   // A fresh reference per payment attempt — shown to the customer to quote
   // when they make the Juice/MauCAS transfer, and stored on the item(s) so
@@ -2737,7 +2754,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                           const disc = has ? (order.discount || 0) : 0;
                           const vatAmt = has ? (order.vat || 0) : 0;
                           const tot = has ? order.total : itemSum;
-                          const reason = has ? (order.discountReason || '') : '';
+                          const rawReason = has ? (order.discountReason || '') : '';
+                          const reason = rawReason.split(', ').filter(r => !r.endsWith(': 0%')).join(', ');
                           if (sub === 0) return null;
                           return (
                             <div className="mx-4 mb-4 pt-3 border-t border-[#E7E0D0]">
@@ -3332,6 +3350,21 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   )}
                   {payMethod.name !== 'Cash on Delivery' && (
                     <>
+                      {(() => {
+                        const currentEntity = entities.find(e => e.id === currentPayEntityId);
+                        const cfg = currentEntity?.paymentMethodConfig?.[payMethod.id];
+                        if (!cfg || Object.keys(cfg).length === 0) return null;
+                        return (
+                          <div className="bg-primary/5 border border-primary/20 rounded-xl p-3 space-y-1 text-xs">
+                            {Object.entries(cfg).map(([k, v]) => (
+                              <div key={k} className="flex justify-between items-center text-slate-700">
+                                <span className="font-bold text-slate-500 uppercase text-[10px] tracking-wider">{k}:</span>
+                                <span className="font-mono font-bold text-slate-900">{v}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                       <div className="bg-[#F4EFE4] rounded-xl p-4 flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Quote this reference</p>

@@ -1,6 +1,33 @@
 # Agent Coordination: BonManzE Project
 
-## 2026-09-14: Antigravity — Entity Details Persistence Fix, Logo Preview, & Roadmap Documentation
+## 2026-09-14: Antigravity — Full Invoicing Roadmap (Steps 0–4) & QA Enhancements Complete
+
+**Commits `0fbb09e`, `77c6dd5`, `bedcb7f`, `ea07f17`, `885d0f9`, `99d9e3a`** — Completed the entire 5-step Invoicing & Payment Methods Roadmap, fixed entity field persistence, added logo previews, pre-filled label hints, pay sheet payment method filtering by entity, discount reason label formatting, and dish batch cooking progression.
+
+### 1. Invoicing & Payment Methods Roadmap (Steps 0–4)
+- **Step 0 (`0fbb09e`)**: Verified receipt parity & ledger icon alignments.
+- **Step 1 (`0fbb09e`)**: `paymentMethods/current` managed Firestore collection with real-time `onSnapshot` listener and fallback seed logic.
+- **Step 2 (`77c6dd5`)**: Added `address`, `email`, `phone`, `invoicePrefix`, `invoiceNumberCounter` to `Entity` schema and Trading Entity edit form in `Operations.tsx`.
+- **Step 3 (`ea07f17`)**: Per-entity payment method acceptance (`acceptedPaymentMethodIds`) & custom key-value detail field editor (`paymentMethodConfig`) added to Trading Entity edit form in `Operations.tsx`.
+- **Step 4 (`885d0f9`)**: Updated `confirmCheckout` Cloud Function (`functions/index.js`) to transactionally generate sequential per-entity invoice numbers (`INV-A-000000001`), updated receipt UI in `Operations.tsx` to display formatted invoice numbers, and added `Duplicate / Reprint` badges with automatic print counter tracking (`invoiceReprintCount`).
+
+### 2. Manual QA Bug Fixes & UX Enhancements
+- **Entity Details Field Persistence Fix (`bedcb7f`)**: Fixed `unsubEntities` snapshot listener in `Operations.tsx` by spreading `...d.data()` so custom contact & payment fields persist across snapshot updates.
+- **Logo Live Previews (`bedcb7f`)**: Added live image thumbnail previewing in Trading Entity directory list and Add/Edit Entity modal.
+- **Pre-filled Account Detail Field Labels (`99d9e3a`)**: Replaced raw browser `prompt()` dialogs with pre-filled label hints (`Phone Number`, `Account Number`, `Merchant ID`) and inline editing in Trading Entity payment method configuration.
+- **Pay Sheet Payment Methods Gating (`modules/CustomerPortal.tsx`)**: Added `entities` real-time listener to `CustomerPortal.tsx`. Updated `applicablePaymentMethods` filtering to respect the customer's/order's assigned entity's `acceptedPaymentMethodIds`. Added rendering of custom per-entity payment details (`paymentMethodConfig`, e.g. Juice phone number) in the Pay Sheet drawer.
+- **Discount Reason String Formatting (`functions/index.js` & `CustomerPortal.tsx`)**: Formatted order discount summaries to omit 0% entries and only display active discount percentages (e.g. `Discount (Standard 6%): -Rs 55.80`).
+- **Dish Batch Cooking Interactive Progression (`modules/Operations.tsx`)**: Upgraded `Orders by Dish` cooking action buttons from static badges to a full 4-stage interactive progression:
+  1. `Start Cooking` (updates active unstarted batch items to `'Preparing'`).
+  2. `Mark Ready` (updates preparing batch items to `'Ready'`).
+  3. `✓ Cooked` (badge displayed when batch items are ready/en-route).
+  4. `✓ Delivered` (badge displayed automatically when all batch items are delivered/completed).
+
+### 3. Verification & Dual-Clone Synchronization
+- Verified with `npx tsc --noEmit` (0 type errors).
+- Synchronized all updated files (`functions/index.js`, `modules/CustomerPortal.tsx`, `modules/Operations.tsx`, `types.ts`, `AGENTS.md`) across both local workspaces (`AntiGravity/BonManze_pwa` and `BonManze_pwa`).
+
+---
 
 **Commits `0fbb09e`, `77c6dd5`, `bedcb7f`** — Implemented Steps 0–2 of the Invoicing & Payment Methods roadmap, fixed the entity field persistence bug in `unsubEntities`, added live logo thumbnail previews in the entity editor & directory list, and documented state handoff for Claude.
 

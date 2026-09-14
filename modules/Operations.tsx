@@ -1747,6 +1747,40 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     }
   };
 
+  const handleMarkReady = async (dateStr: string, serviceSlot: 'Lunch' | 'Dinner') => {
+    if (currentPermissions?.ordersByDish?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to mark items ready.');
+      return;
+    }
+    const targets: { orderId: string; itemId: string }[] = [];
+    lines.forEach(({ order, item }) => {
+      if (item.deliveryDate === dateStr && item.status !== 'Cancelled') {
+        const itemService = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
+        if (itemService === serviceSlot && item.status === 'Preparing' && item._fsItemId) {
+          targets.push({ orderId: order.id, itemId: item._fsItemId });
+        }
+      }
+    });
+
+    if (targets.length === 0) return;
+
+    const key = `${dateStr}::${serviceSlot}`;
+    setOpsActionError(null);
+    setPendingCookingKey(key);
+    try {
+      const batch = writeBatch(db);
+      targets.forEach(t => {
+        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), { status: 'Ready' });
+      });
+      await batch.commit();
+    } catch (e) {
+      console.error('Mark Ready failed', e);
+      setOpsActionError('Mark Ready failed — please try again.');
+    } finally {
+      setPendingCookingKey(null);
+    }
+  };
+
   const handleDispatchDrop = async (drop: DropTask) => {
     if (currentPermissions?.ordersByDish?.edit !== true) {
       setOpsActionError('Access Denied: You do not have permission to dispatch orders.');
@@ -6691,12 +6725,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 const showLunch = ordersServiceFilter !== 'Dinner' && lunchDishes.length > 0;
                 const showDinner = ordersServiceFilter !== 'Lunch' && dinnerDishes.length > 0;
                 const hasAny = showLunch || showDinner;
-                const dayLines = lines.filter(l => l.item.deliveryDate === d.date);
+                const dayLines = lines.filter(l => l.item.deliveryDate === d.date && l.item.status !== 'Cancelled');
                 const lunchLines = dayLines.filter(l => !(l.item.serviceSlot || '').startsWith('Dinner'));
                 const dinnerLines = dayLines.filter(l => (l.item.serviceSlot || '').startsWith('Dinner'));
 
                 const activeLunchCount = lunchLines.filter(l => l.item.status === 'Active' || !l.item.status).length;
+                const preparingLunchCount = lunchLines.filter(l => l.item.status === 'Preparing').length;
+                const deliveredLunchCount = lunchLines.filter(l => l.item.status === 'Delivered' || l.item.status === 'Completed').length;
+                const totalLunchCount = lunchLines.length;
+
                 const activeDinnerCount = dinnerLines.filter(l => l.item.status === 'Active' || !l.item.status).length;
+                const preparingDinnerCount = dinnerLines.filter(l => l.item.status === 'Preparing').length;
+                const deliveredDinnerCount = dinnerLines.filter(l => l.item.status === 'Delivered' || l.item.status === 'Completed').length;
+                const totalDinnerCount = dinnerLines.length;
 
                 const lunchCookingKey = `${d.date}::Lunch`;
                 const dinnerCookingKey = `${d.date}::Dinner`;
@@ -6718,7 +6759,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           <div className="bg-primary/5 rounded-2xl p-4">
                             <div className="flex items-center justify-between gap-4 mb-3 border-b border-primary/10 pb-2">
                               <p className="text-[10px] font-black uppercase text-primary tracking-widest">☀️ Lunch</p>
-                              {activeLunchCount > 0 ? (
+                              {totalLunchCount > 0 && deliveredLunchCount === totalLunchCount ? (
+                                <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
+                                  <Check className="size-3" /> ✓ Delivered
+                                </span>
+                              ) : activeLunchCount > 0 ? (
                                 <button
                                   type="button"
                                   onClick={() => handleStartCooking(d.date, 'Lunch')}
@@ -6728,9 +6773,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                   {isLunchCookingPending ? <Loader2 className="size-3 animate-spin" /> : <ChefHat className="size-3" />}
                                   Start Cooking
                                 </button>
+                              ) : preparingLunchCount > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleMarkReady(d.date, 'Lunch')}
+                                  disabled={isLunchCookingPending || currentPermissions?.ordersByDish?.edit !== true}
+                                  className="px-3 py-1 bg-amber-600 text-white rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1 hover:bg-amber-700 active:scale-95 transition-all disabled:opacity-60 cursor-pointer shadow-sm"
+                                >
+                                  {isLunchCookingPending ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
+                                  Mark Ready
+                                </button>
                               ) : (
-                                <span className="px-2 py-0.5 bg-primary/10 text-primary rounded-md text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
-                                  <Check className="size-2.5" /> Cooking Started
+                                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-md text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
+                                  <CheckCircle2 className="size-2.5" /> ✓ Cooked
                                 </span>
                               )}
                             </div>
@@ -6766,7 +6821,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           <div className="bg-accent/5 rounded-2xl p-4">
                             <div className="flex items-center justify-between gap-4 mb-3 border-b border-accent/10 pb-2">
                               <p className="text-[10px] font-black uppercase text-accent tracking-widest">🌙 Dinner</p>
-                              {activeDinnerCount > 0 ? (
+                              {totalDinnerCount > 0 && deliveredDinnerCount === totalDinnerCount ? (
+                                <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
+                                  <Check className="size-3" /> ✓ Delivered
+                                </span>
+                              ) : activeDinnerCount > 0 ? (
                                 <button
                                   type="button"
                                   onClick={() => handleStartCooking(d.date, 'Dinner')}
@@ -6776,9 +6835,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                   {isDinnerCookingPending ? <Loader2 className="size-3 animate-spin" /> : <ChefHat className="size-3" />}
                                   Start Cooking
                                 </button>
+                              ) : preparingDinnerCount > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleMarkReady(d.date, 'Dinner')}
+                                  disabled={isDinnerCookingPending || currentPermissions?.ordersByDish?.edit !== true}
+                                  className="px-3 py-1 bg-amber-600 text-white rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1 hover:bg-amber-700 active:scale-95 transition-all disabled:opacity-60 cursor-pointer shadow-sm"
+                                >
+                                  {isDinnerCookingPending ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
+                                  Mark Ready
+                                </button>
                               ) : (
-                                <span className="px-2 py-0.5 bg-accent/10 text-accent rounded-md text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
-                                  <Check className="size-2.5" /> Cooking Started
+                                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-md text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
+                                  <CheckCircle2 className="size-2.5" /> ✓ Cooked
                                 </span>
                               )}
                             </div>

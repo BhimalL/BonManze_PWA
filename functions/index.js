@@ -530,6 +530,11 @@ export const confirmCheckout = onCall(async (request) => {
       updatedAt: Timestamp.now(),
     });
 
+    const reasonParts = [];
+    if (standardDiscountRounded > 0) reasonParts.push(`Standard: ${effectiveStandardRate}%`);
+    if (birthdayDiscountRounded > 0) reasonParts.push(`Birthday: ${birthdayTierRate}%`);
+    if (bulkDiscountRounded > 0) reasonParts.push(`Bulk: ${config.bulkDiscountRate}%`);
+
     const now = Timestamp.now();
     tx.set(orderRef, {
       customerId: uid,
@@ -542,7 +547,7 @@ export const confirmCheckout = onCall(async (request) => {
       subtotal,
       discount: totalDiscount,
       discountBreakdown,
-      discountReason: `Standard: ${effectiveStandardRate}%, Birthday: ${birthdayTierRate}%, Bulk: ${bulkDiscountRounded > 0 ? config.bulkDiscountRate : 0}%`,
+      discountReason: reasonParts.join(', '),
       vat,
       invoiceNumber,
       invoiceReprintCount: 0,
