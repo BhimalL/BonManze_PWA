@@ -37,7 +37,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc, collection, collectionGroup, query, where, onSnapshot, writeBatch, updateDoc, Timestamp } from 'firebase/firestore';
+import { doc, getDoc, collection, collectionGroup, query, where, onSnapshot, writeBatch, updateDoc, Timestamp, increment } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from '../firebaseClient';
 import { Customer, Order, OrderItem, PaymentMethod, Entity } from '../types';
@@ -1717,7 +1717,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // separate payments it was actually settled with.
   const openReceipt = (line: Line) => {
     const key = line.item.paymentReference || `solo-${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`;
-    setReceiptTarget({ order: line.order, lines: paymentGroups.get(key) || [line] });
+    const targetLines = paymentGroups.get(key) || [line];
+    setReceiptTarget({ order: line.order, lines: targetLines });
+    targetLines.forEach(l => {
+      if (l.item.invoiceNumber && l.item._fsItemId) {
+        updateDoc(doc(db, 'orders', l.order.id, 'items', l.item._fsItemId), {
+          invoiceReprintCount: increment(1),
+        }).catch(e => console.error('Reprint-count bump failed (non-fatal)', e));
+      }
+    });
   };
   const submitRating = async () => {
     if (!rateTarget || !rateStars) return;
@@ -3608,6 +3616,13 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               bulkRate: firstOrder.discountBreakdown.bulkRate,
               bulk: round2((firstOrder.discountBreakdown.bulk || 0) * (displaySubtotal / (firstOrder.subtotal || 1))),
             } : undefined);
+
+        const allInvoiced = receiptTarget.lines.every(l => !!l.item.invoiceNumber);
+        const invoiceRefDisplay = allInvoiced
+          ? Array.from(new Set(receiptTarget.lines.map(l => l.item.invoiceNumber))).join(', ')
+          : orderIds.join(', ');
+        const anyReprinted = receiptTarget.lines.some(l => (l.item.invoiceReprintCount || 0) > 0);
+
         return (
           <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md overflow-y-auto p-4">
             <style>{`
@@ -3634,6 +3649,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   <button onClick={() => setReceiptTarget(null)} className="bmz-no-print p-1.5 text-slate-400 hover:text-danger"><X className="size-5" /></button>
                 </div>
                 <p className="text-[10px] font-black uppercase text-primary tracking-widest mt-3">{vatOn ? 'Tax invoice' : 'Receipt'}</p>
+                {anyReprinted && (
+                  <p className="text-[10px] font-black uppercase text-amber-700 tracking-widest mt-1 border border-amber-300 bg-amber-50 rounded px-1.5 py-0.5 inline-block">
+                    Duplicate / Reprint
+                  </p>
+                )}
                 {receiptTarget.order.entityId ? (
                   <div className="text-[10px] text-slate-400 mt-1 space-y-0.5">
                     {receiptTarget.order.entityBrn && <p>BRN: {receiptTarget.order.entityBrn}</p>}
@@ -3660,7 +3680,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   </div>
                   <div className="text-right">
                     <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-1">{orderIds.length > 1 ? 'Invoice refs' : 'Invoice ref'}</p>
-                    <p className="font-mono text-slate-600">{orderIds.join(', ')}</p>
+                    <p className="font-mono text-slate-600">{invoiceRefDisplay}</p>
                     {orderIds.length === 1 && (
                       <p className="text-slate-500 mt-1">{new Date(receiptTarget.order.timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
                     )}

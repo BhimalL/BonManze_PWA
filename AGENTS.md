@@ -9,7 +9,12 @@
 - **Step 1 (`0fbb09e`)**: `paymentMethods/current` managed Firestore collection with real-time `onSnapshot` listener and fallback seed logic.
 - **Step 2 (`77c6dd5`)**: Added `address`, `email`, `phone`, `invoicePrefix`, `invoiceNumberCounter` to `Entity` schema and Trading Entity edit form in `Operations.tsx`.
 - **Step 3 (`ea07f17`)**: Per-entity payment method acceptance (`acceptedPaymentMethodIds`) & custom key-value detail field editor (`paymentMethodConfig`) added to Trading Entity edit form in `Operations.tsx`.
-- **Step 4 (`885d0f9`)**: Updated `confirmCheckout` Cloud Function (`functions/index.js`) to transactionally generate sequential per-entity invoice numbers (`INV-A-000000001`), updated receipt UI in `Operations.tsx` to display formatted invoice numbers, and added `Duplicate / Reprint` badges with automatic print counter tracking (`invoiceReprintCount`).
+- **Step 4 Rebuild (`Claude outputs/invoice-numbering-rebuild.md`)**:
+  - Reverted checkout-time invoice generation from `confirmCheckout` on `Order`.
+  - Added `issueInvoiceOnPayment` Cloud Function trigger in `functions/index.js` on `orders/{orderId}/items/{itemId}` when `paymentStatus` transitions into `'Paid'`, issuing per-entity sequential invoice numbers per payment drop via `orders/{orderId}/invoiceAssignments/{dropDocId}`.
+  - Moved `invoiceNumber`, `invoiceIssuedAt`, and `invoiceReprintCount` fields to `OrderItem` schema in `types.ts`.
+  - Updated `firestore.rules` to deny direct access to `invoiceAssignments` and authorize `invoiceReprintCount` increments on item documents.
+  - Wired customer-facing receipt in `CustomerPortal.tsx` and Operations receipt in `Operations.tsx` to render item-level invoice refs and `Duplicate / Reprint` badges, incrementing `invoiceReprintCount` on item documents via `increment(1)`.
 
 ### 2. Manual QA Bug Fixes & UX Enhancements
 - **Entity Details Field Persistence Fix (`bedcb7f`)**: Fixed `unsubEntities` snapshot listener in `Operations.tsx` by spreading `...d.data()` so custom contact & payment fields persist across snapshot updates.

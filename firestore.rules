@@ -291,8 +291,31 @@ service cloud.firestore {
           && (resource.data.paymentStatus != 'Paid'
               || (request.resource.data.get('paymentMethodName', null) == resource.data.get('paymentMethodName', null)
                   && request.resource.data.get('paymentReference', null) == resource.data.get('paymentReference', null)))
+        ) || (
+          // 3. Reprint-count bump (Operations Payments/paid-history view, or
+          // the customer's own receipt re-view). Only invoiceReprintCount
+          // may change; invoiceNumber/invoiceIssuedAt themselves are set
+          // only by issueInvoiceOnPayment's Admin SDK write, never by a
+          // client, so both are pinned equal here too.
+          (isStaffAllowed('payments', 'view') || isCustomer(resource.data.customerId))
+          && request.resource.data.get('invoiceReprintCount', null) != resource.data.get('invoiceReprintCount', null)
+          && request.resource.data.paymentStatus == resource.data.paymentStatus
+          && request.resource.data.get('paymentMethodName', null) == resource.data.get('paymentMethodName', null)
+          && request.resource.data.get('paymentReference', null) == resource.data.get('paymentReference', null)
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.price == resource.data.price
+          && request.resource.data.qty == resource.data.qty
+          && request.resource.data.name == resource.data.name
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.get('entityId', null) == resource.data.get('entityId', null)
+          && request.resource.data.get('invoiceNumber', null) == resource.data.get('invoiceNumber', null)
+          && request.resource.data.get('invoiceIssuedAt', null) == resource.data.get('invoiceIssuedAt', null)
         );
       allow delete: if false;
+    }
+
+    match /orders/{orderId}/invoiceAssignments/{dropDocId} {
+      allow read, write: if false;
     }
 
     // Everything else stays locked down by default — same starting

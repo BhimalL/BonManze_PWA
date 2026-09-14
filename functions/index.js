@@ -515,21 +515,8 @@ export const confirmCheckout = onCall(async (request) => {
 
   // ---- Write the order + its items subcollection transactionally ----
   const orderRef = db.collection('orders').doc();
-  const entityRef = db.collection('entities').doc(customer.entityId);
 
   await db.runTransaction(async (tx) => {
-    const txEntitySnap = await tx.get(entityRef);
-    const txEntityData = txEntitySnap.exists ? txEntitySnap.data() : (entity || {});
-    const currentCounter = (typeof txEntityData.invoiceNumberCounter === 'number' ? txEntityData.invoiceNumberCounter : 0) + 1;
-    const prefix = txEntityData.invoicePrefix || entity.invoicePrefix || 'INV';
-    const seqStr = String(currentCounter).padStart(9, '0');
-    const invoiceNumber = `${prefix}-${seqStr}`;
-
-    tx.update(entityRef, {
-      invoiceNumberCounter: currentCounter,
-      updatedAt: Timestamp.now(),
-    });
-
     const standardLabel = (groupObj && groupRate > standardTierRate)
       ? `${groupObj.name} Group`
       : (tierObj?.name ? `${tierObj.name} Tier` : 'Standard');
@@ -553,8 +540,6 @@ export const confirmCheckout = onCall(async (request) => {
       discountBreakdown,
       discountReason: reasonParts.join(', '),
       vat,
-      invoiceNumber,
-      invoiceReprintCount: 0,
       createdAt: now,
       entityId: customer.entityId,
       entityName: entity.name || '',
@@ -663,6 +648,96 @@ export const onItemPaymentConfirmed = onDocumentUpdated('orders/{orderId}/items/
       ltv: newLtv,
       tier: newTierId,
       updatedAt: Timestamp.now(),
+    });
+  });
+});
+
+// ============================================================================
+// issueInvoiceOnPayment — Firestore trigger, sibling to onItemPaymentConfirmed
+// above (same document path, same trigger event: paymentStatus transitions
+// INTO 'Paid'). Separate function so this piece can be reviewed/rolled back
+// independently of the already-verified loyalty-points trigger.
+//
+// Per BonManzE_InvoicingPaymentMethods_Scope.md §8: an order's real invoice
+// number is issued at Mark Paid, not at checkout (an earlier attempt at this,
+// commit 885d0f9, issued it inside confirmCheckout instead — reverted; see
+// invoice-numbering-rebuild.md Part A). One Mark Paid click can mark several
+// items Paid at once (every item in one drop — one order + one deliveryDate
+// + one serviceSlot, matching DropTask in Operations.tsx) — those items must
+// share ONE invoice number, not one each. This trigger fires once per item,
+// so it coordinates via a small per-drop assignment doc
+// (orders/{orderId}/invoiceAssignments/{dropDocId}) written inside the same
+// transaction that increments the entity's counter: whichever item's
+// trigger invocation reaches that transaction first mints the number and
+// writes the assignment doc; every other item in the same drop (including
+// this same item if the trigger ever retries/redelivers) reads the
+// existing assignment doc back and reuses its number. Firestore serializes
+// transactions that touch the same document, so this is race-safe under
+// concurrent invocations without any client-side change to markPaid.
+// ============================================================================
+export const issueInvoiceOnPayment = onDocumentUpdated('orders/{orderId}/items/{itemId}', async (event) => {
+  const before = event.data.before.data();
+  const after = event.data.after.data();
+
+  if (!after || after.paymentStatus !== 'Paid' || before?.paymentStatus === 'Paid') {
+    return; // only the transition INTO Paid issues an invoice, and only once
+  }
+  if (after.invoiceNumber) {
+    return; // already issued (defends against at-least-once trigger redelivery)
+  }
+
+  const entityId = after.entityId;
+  const orderId = event.params.orderId;
+  const itemId = event.params.itemId;
+  if (!entityId) {
+    return; // no entity on this item — nothing to number against, leave unset (raw-id fallback)
+  }
+
+  const deliveryDate = after.deliveryDate || 'none';
+  const serviceSlot = after.serviceSlot || 'none';
+  const dropDocId = `${deliveryDate}__${serviceSlot}`.replace(/[/\s]+/g, '_');
+
+  const itemRef = event.data.after.ref;
+  const entityRef = db.collection('entities').doc(entityId);
+  const assignmentRef = db.collection('orders').doc(orderId).collection('invoiceAssignments').doc(dropDocId);
+
+  await db.runTransaction(async (tx) => {
+    const itemSnapNow = await tx.get(itemRef);
+    if (!itemSnapNow.exists || itemSnapNow.data().invoiceNumber) return;
+
+    const assignmentSnap = await tx.get(assignmentRef);
+    let invoiceNumber, invoiceIssuedAt;
+
+    if (assignmentSnap.exists) {
+      const a = assignmentSnap.data();
+      invoiceNumber = a.invoiceNumber;
+      invoiceIssuedAt = a.invoiceIssuedAt;
+    } else {
+      const entitySnap = await tx.get(entityRef);
+      if (!entitySnap.exists) return;
+      const entity = entitySnap.data();
+      const prefix = entity.invoicePrefix;
+      if (!prefix || typeof prefix !== 'string' || !prefix.trim()) {
+        return; // no invoicePrefix configured yet — skip, raw-id fallback on the receipt
+      }
+      const nextSeq = (entity.invoiceNumberCounter || 0) + 1;
+      invoiceNumber = `${prefix.trim()}-${String(nextSeq).padStart(9, '0')}`;
+      invoiceIssuedAt = Timestamp.now();
+      tx.update(entityRef, { invoiceNumberCounter: nextSeq });
+      tx.set(assignmentRef, {
+        invoiceNumber,
+        invoiceIssuedAt,
+        orderId,
+        deliveryDate,
+        serviceSlot,
+        entityId,
+      });
+    }
+
+    tx.update(itemRef, {
+      invoiceNumber,
+      invoiceIssuedAt,
+      invoiceReprintCount: 0,
     });
   });
 });

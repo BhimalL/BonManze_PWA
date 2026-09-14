@@ -183,6 +183,9 @@ export interface OrderItem {
   instructions?: string;
   tierAtOrder?: string;
   entityId?: string;
+  invoiceNumber?: string;
+  invoiceIssuedAt?: any;
+  invoiceReprintCount?: number;
 }
 
 export interface Order {
@@ -221,8 +224,6 @@ export interface Order {
   entityEmail?: string;
   entityPhone?: string;
   entityLogoStoragePath?: string;
-  invoiceNumber?: string;
-  invoiceReprintCount?: number;
 }
 
 export interface PermissionPair {
