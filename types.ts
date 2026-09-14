@@ -114,6 +114,8 @@ export interface Entity {
   phone?: string;
   invoicePrefix?: string;
   invoiceNumberCounter?: number;
+  acceptedPaymentMethodIds?: string[];
+  paymentMethodConfig?: Record<string, Record<string, string>>;
   logoStoragePath?: string;
   active: boolean;
   createdAt: any;

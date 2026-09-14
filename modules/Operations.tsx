@@ -801,6 +801,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // --- Trading Entities sub-tab state ---
   const [showAddEntityModal, setShowAddEntityModal] = useState(false);
   const [entityForm, setEntityForm] = useState({ name: '', brn: '', vatNumber: '', bankReference: '', address: '', email: '', phone: '', invoicePrefix: '' });
+  const [entityAcceptedMethods, setEntityAcceptedMethods] = useState<string[]>([]);
+  const [entityMethodConfig, setEntityMethodConfig] = useState<Record<string, Record<string, string>>>({});
   const [editingEntityId, setEditingEntityId] = useState<string | null>(null);
   const [entityActionError, setEntityActionError] = useState<string | null>(null);
   const [entityActionLoading, setEntityActionLoading] = useState(false);
@@ -5478,7 +5480,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 </div>
                 {currentPermissions?.tradingEntities?.edit === true && (
                   <button
-                    onClick={() => { setEditingEntityId(null); setEntityForm({ name: '', brn: '', vatNumber: '', bankReference: '', address: '', email: '', phone: '', invoicePrefix: '' }); setEntityLogoFile(null); setShowAddEntityModal(true); }}
+                    onClick={() => { setEditingEntityId(null); setEntityForm({ name: '', brn: '', vatNumber: '', bankReference: '', address: '', email: '', phone: '', invoicePrefix: '' }); setEntityAcceptedMethods([]); setEntityMethodConfig({}); setEntityLogoFile(null); setShowAddEntityModal(true); }}
                     className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors"
                   >
                     <Plus className="size-3.5" /> Add Entity
@@ -5521,6 +5523,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           onClick={() => {
                             setEditingEntityId(entity.id);
                             setEntityForm({ name: entity.name, brn: entity.brn, vatNumber: entity.vatNumber, bankReference: entity.bankReference, address: entity.address || '', email: entity.email || '', phone: entity.phone || '', invoicePrefix: entity.invoicePrefix || '' });
+                            setEntityAcceptedMethods(entity.acceptedPaymentMethodIds || []);
+                            setEntityMethodConfig(entity.paymentMethodConfig || {});
                             setEntityLogoFile(null);
                             setShowAddEntityModal(true);
                           }}
@@ -5648,6 +5652,100 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         })()}
                         <input type="file" accept="image/*" onChange={e => setEntityLogoFile(e.target.files?.[0] ?? null)} className="mt-1 w-full text-xs font-medium text-slate-500" />
                       </div>
+
+                      {/* Accepted Payment Methods & Per-Method Config */}
+                      <div className="pt-2 border-t border-slate-100 space-y-3">
+                        <div>
+                          <h4 className="text-xs font-black text-slate-900">Accepted Payment Methods</h4>
+                          <p className="text-[10px] text-slate-400 font-medium">Select which payment methods this trading entity accepts. Leave empty to accept all methods.</p>
+                        </div>
+                        <div className="space-y-2">
+                          {paymentMethods.filter(m => m.isActive).map(m => {
+                            const isChecked = entityAcceptedMethods.includes(m.id);
+                            const methodCfg = entityMethodConfig[m.id] || {};
+                            return (
+                              <div key={m.id} className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                                <label className="flex items-center gap-2.5 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={e => {
+                                      if (e.target.checked) {
+                                        setEntityAcceptedMethods(prev => [...prev, m.id]);
+                                      } else {
+                                        setEntityAcceptedMethods(prev => prev.filter(id => id !== m.id));
+                                      }
+                                    }}
+                                    className="rounded text-primary focus:ring-primary/30"
+                                  />
+                                  <span className="text-sm">{m.icon}</span>
+                                  <span className="text-xs font-bold text-slate-800">{m.name}</span>
+                                  <span className="text-[10px] text-slate-400 font-medium ml-auto">({m.type})</span>
+                                </label>
+
+                                {isChecked && (
+                                  <div className="pl-6 space-y-2 border-t border-slate-200/60 pt-2 mt-1">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Account Details / Ref Parameters</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const key = prompt('Enter detail label (e.g. Phone Number, Account Number, QR Ref):');
+                                          if (key && key.trim()) {
+                                            setEntityMethodConfig(prev => ({
+                                              ...prev,
+                                              [m.id]: { ...(prev[m.id] || {}), [key.trim()]: '' }
+                                            }));
+                                          }
+                                        }}
+                                        className="text-[10px] font-bold text-primary hover:underline"
+                                      >
+                                        + Add Detail Field
+                                      </button>
+                                    </div>
+                                    {Object.keys(methodCfg).length === 0 ? (
+                                      <p className="text-[10px] text-slate-400 italic">No specific account details configured.</p>
+                                    ) : (
+                                      Object.entries(methodCfg).map(([k, v]) => (
+                                        <div key={k} className="flex items-center gap-2">
+                                          <span className="text-[10px] font-bold text-slate-600 w-28 shrink-0 truncate">{k}:</span>
+                                          <input
+                                            type="text"
+                                            value={v}
+                                            onChange={e => {
+                                              const newVal = e.target.value;
+                                              setEntityMethodConfig(prev => ({
+                                                ...prev,
+                                                [m.id]: { ...(prev[m.id] || {}), [k]: newVal }
+                                              }));
+                                            }}
+                                            placeholder={`Enter ${k}`}
+                                            className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-primary/30"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setEntityMethodConfig(prev => {
+                                                const copy = { ...(prev[m.id] || {}) };
+                                                delete copy[k];
+                                                return { ...prev, [m.id]: copy };
+                                              });
+                                            }}
+                                            className="text-slate-400 hover:text-red-500 text-xs p-1"
+                                          >
+                                            ✕
+                                          </button>
+                                        </div>
+                                      ))
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
                       {entityActionError && <p className="text-xs text-red-600 font-bold">{entityActionError}</p>}
                     </div>
                     <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
@@ -5674,6 +5772,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               email: entityForm.email.trim(),
                               phone: entityForm.phone.trim(),
                               invoicePrefix: entityForm.invoicePrefix.trim(),
+                              acceptedPaymentMethodIds: entityAcceptedMethods,
+                              paymentMethodConfig: entityMethodConfig,
                               updatedAt: Timestamp.now(),
                               ...(logoStoragePath ? { logoStoragePath } : {})
                             };
