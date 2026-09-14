@@ -7481,7 +7481,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 {(() => {
                   const activeMethods = paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan'));
                   const dropEntityId = paymentDrop.entityId || orders.find(o => o.id === paymentDrop.orderId)?.entityId;
-                  const currentEntity = entities.find(e => e.id === dropEntityId);
+                  const currentEntity = entities.find(e => e.id === dropEntityId) || (entities.length === 1 ? entities[0] : undefined);
                   const methodsToRender = (currentEntity && currentEntity.acceptedPaymentMethodIds && currentEntity.acceptedPaymentMethodIds.length > 0)
                     ? activeMethods.filter(m => currentEntity.acceptedPaymentMethodIds!.includes(m.id))
                     : activeMethods;

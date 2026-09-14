@@ -1527,16 +1527,30 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   );
 
   const currentPayEntityId = useMemo(() => {
-    if (payTarget && payTarget.kind === 'item') {
-      const order = orders.find(o => o.id === payTarget.orderId);
-      if (order?.entityId) return order.entityId;
+    if (payTarget) {
+      let orderId = '';
+      if (payTarget.kind === 'item' && payTarget.orderId) {
+        orderId = payTarget.orderId;
+      } else if (payTarget.kind === 'balance' && payTarget.items && payTarget.items.length > 0) {
+        orderId = payTarget.items[0].orderId;
+      }
+      if (orderId) {
+        const order = orders.find(o => o.id === orderId);
+        if (order?.entityId) return order.entityId;
+      }
     }
-    return currentUser?.entityId || customerDocRaw?.entityId || '';
-  }, [payTarget, orders, currentUser?.entityId, customerDocRaw?.entityId]);
+    if (currentUser?.entityId || customerDocRaw?.entityId) {
+      return currentUser?.entityId || customerDocRaw?.entityId || '';
+    }
+    if (entities.length === 1) {
+      return entities[0].id;
+    }
+    return '';
+  }, [payTarget, orders, currentUser?.entityId, customerDocRaw?.entityId, entities]);
 
   const applicablePaymentMethods = useMemo(() => {
     const activeMethods = paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan'));
-    const currentEntity = entities.find(e => e.id === currentPayEntityId);
+    const currentEntity = entities.find(e => e.id === currentPayEntityId) || (entities.length === 1 ? entities[0] : undefined);
     if (currentEntity && currentEntity.acceptedPaymentMethodIds && currentEntity.acceptedPaymentMethodIds.length > 0) {
       return activeMethods.filter(m => currentEntity.acceptedPaymentMethodIds!.includes(m.id));
     }
