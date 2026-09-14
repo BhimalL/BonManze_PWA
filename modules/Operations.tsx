@@ -5690,13 +5690,21 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          const key = prompt('Enter detail label (e.g. Phone Number, Account Number, QR Ref):');
-                                          if (key && key.trim()) {
-                                            setEntityMethodConfig(prev => ({
-                                              ...prev,
-                                              [m.id]: { ...(prev[m.id] || {}), [key.trim()]: '' }
-                                            }));
+                                          const defaultKey = m.name.toLowerCase().includes('juice') || m.name.toLowerCase().includes('transfer')
+                                            ? 'Phone Number'
+                                            : m.name.toLowerCase().includes('maucas')
+                                            ? 'Merchant ID'
+                                            : 'Account Number';
+                                          let keyName = defaultKey;
+                                          let count = 1;
+                                          while (methodCfg[keyName] !== undefined) {
+                                            count++;
+                                            keyName = `${defaultKey} ${count}`;
                                           }
+                                          setEntityMethodConfig(prev => ({
+                                            ...prev,
+                                            [m.id]: { ...(prev[m.id] || {}), [keyName]: '' }
+                                          }));
                                         }}
                                         className="text-[10px] font-bold text-primary hover:underline"
                                       >
@@ -5706,9 +5714,31 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                     {Object.keys(methodCfg).length === 0 ? (
                                       <p className="text-[10px] text-slate-400 italic">No specific account details configured.</p>
                                     ) : (
-                                      Object.entries(methodCfg).map(([k, v]) => (
-                                        <div key={k} className="flex items-center gap-2">
-                                          <span className="text-[10px] font-bold text-slate-600 w-28 shrink-0 truncate">{k}:</span>
+                                      Object.entries(methodCfg).map(([k, v], fieldIdx) => (
+                                        <div key={fieldIdx} className="flex items-center gap-2">
+                                          <input
+                                            type="text"
+                                            value={k}
+                                            placeholder="Field Label"
+                                            onChange={e => {
+                                              const newKey = e.target.value;
+                                              setEntityMethodConfig(prev => {
+                                                const currentMap: Record<string, string> = { ...(prev[m.id] || {}) };
+                                                const entries = Object.entries(currentMap);
+                                                const newMap: Record<string, string> = {};
+                                                entries.forEach(([oldK, oldV], idx) => {
+                                                  if (idx === fieldIdx) {
+                                                    newMap[newKey] = oldV;
+                                                  } else {
+                                                    newMap[oldK] = oldV;
+                                                  }
+                                                });
+                                                return { ...prev, [m.id]: newMap };
+                                              });
+                                            }}
+                                            className="w-32 text-[10px] font-bold text-slate-700 border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/30 shrink-0"
+                                          />
+                                          <span className="text-xs font-bold text-slate-400">:</span>
                                           <input
                                             type="text"
                                             value={v}
@@ -5719,7 +5749,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                                 [m.id]: { ...(prev[m.id] || {}), [k]: newVal }
                                               }));
                                             }}
-                                            placeholder={`Enter ${k}`}
+                                            placeholder={`Enter ${k || 'value'}`}
                                             className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-primary/30"
                                           />
                                           <button
@@ -5732,6 +5762,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                               });
                                             }}
                                             className="text-slate-400 hover:text-red-500 text-xs p-1"
+                                            title="Remove field"
                                           >
                                             ✕
                                           </button>
