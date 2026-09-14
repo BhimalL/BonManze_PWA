@@ -13,10 +13,11 @@
 - **Step 0 (`0fbb09e`)**: `receipt-parity-and-ledger-icons.md` — Verified receipt parity & ledger icon alignments.
 - **Step 1 (`0fbb09e`)**: `payment-methods-managed-collection.md` — Managed Firestore collection `paymentMethods/current` with real-time `onSnapshot` listener and fallback seed logic.
 - **Step 2 (`77c6dd5`)**: `entity-contact-fields-and-invoice-prefix.md` — Added `address`, `email`, `phone`, `invoicePrefix`, `invoiceNumberCounter` to `Entity` schema and Trading Entity edit form.
-- **Step 3**: Per-Entity Payment Method Acceptance (`acceptedPaymentMethodIds`) & custom key-value detail field editor (`paymentMethodConfig`) added to Trading Entity modal & pay sheet filtering.
+- **Step 3 (`ea07f17`)**: `per-entity-payment-config.md` — Added per-entity payment method acceptance (`acceptedPaymentMethodIds`) & custom key-value detail field editor (`paymentMethodConfig`) to Trading Entity modal & pay sheet filtering.
+- **Step 4**: `invoice-numbering-and-reprint-marking.md` — Updated `confirmCheckout` Cloud Function (`functions/index.js`) to transactionally generate sequential per-entity invoice numbers (`INV-A-000000001`), updated receipt UI to display formatted invoice numbers, and added `Duplicate / Reprint` badges with automatic print counter tracking (`invoiceReprintCount`).
 
-### 3. Roadmap Handoff for Claude (Step 4 Pending)
-- **Step 4 (`Claude outputs/invoice-numbering-and-reprint-marking.md`)**: Cloud Function trigger `issueInvoiceOnPayment` for atomic per-entity sequential invoice counter generation + receipt reprint tracking.
+### 3. Roadmap Status Handoff for Claude
+- All 5 steps (Steps 0 through 4) of the Invoicing & Payment Methods roadmap are 100% implemented, type-checked (`npx tsc --noEmit`), synchronized across dual workspaces, committed, and pushed to `origin/main`.
 
 ---
 

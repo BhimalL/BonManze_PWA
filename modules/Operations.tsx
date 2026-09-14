@@ -7765,7 +7765,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   </div>
                   <button onClick={() => setActiveReceiptDrop(null)} className="bmz-no-print p-1.5 text-slate-400 hover:text-danger"><X className="size-5" /></button>
                 </div>
-                <p className="text-[10px] font-black uppercase text-primary tracking-widest mt-3">{SYSTEM_CONFIG.vatEnabled ? 'Tax invoice' : 'Receipt'}</p>
+                <div className="flex items-center justify-between mt-3">
+                  <p className="text-[10px] font-black uppercase text-primary tracking-widest">{SYSTEM_CONFIG.vatEnabled ? 'Tax invoice' : 'Receipt'}</p>
+                  {Boolean(order?.invoiceReprintCount && order.invoiceReprintCount > 0) && (
+                    <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-black uppercase tracking-wider">
+                      Duplicate / Reprint #{order?.invoiceReprintCount}
+                    </span>
+                  )}
+                </div>
                 {order?.entityId ? (
                   <div className="text-[10px] text-slate-400 mt-1 space-y-0.5">
                     {order.entityBrn && <p>BRN: {order.entityBrn}</p>}
@@ -7789,7 +7796,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   </div>
                   <div className="text-right">
                     <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-1">Invoice ref</p>
-                    <p className="font-mono text-slate-600">{activeReceiptDrop.orderId}</p>
+                    <p className="font-mono text-slate-600">{order?.invoiceNumber || activeReceiptDrop.orderId}</p>
                     {order?.timestamp && <p className="text-slate-500 mt-1">{new Date(order.timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</p>}
                   </div>
                 </div>
@@ -7860,7 +7867,24 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
                 <div className="bmz-no-print mt-5 flex gap-2">
                   <button onClick={() => setActiveReceiptDrop(null)} className="flex-1 py-2 bg-slate-100 text-slate-500 hover:bg-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-pointer">Close</button>
-                  <button onClick={() => window.print()} className="flex-1 py-2 bg-primary text-white hover:bg-primary/95 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-pointer">Print / Save PDF</button>
+                  <button
+                    onClick={async () => {
+                      if (order?.id) {
+                        try {
+                          await updateDoc(doc(db, 'orders', order.id), {
+                            invoiceReprintCount: (order.invoiceReprintCount || 0) + 1,
+                            updatedAt: Timestamp.now(),
+                          });
+                        } catch (e) {
+                          console.warn('Failed to increment invoice reprint count', e);
+                        }
+                      }
+                      window.print();
+                    }}
+                    className="flex-1 py-2 bg-primary text-white hover:bg-primary/95 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-pointer"
+                  >
+                    Print / Save PDF
+                  </button>
                 </div>
               </div>
             </div>

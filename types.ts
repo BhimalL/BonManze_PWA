@@ -221,6 +221,8 @@ export interface Order {
   entityEmail?: string;
   entityPhone?: string;
   entityLogoStoragePath?: string;
+  invoiceNumber?: string;
+  invoiceReprintCount?: number;
 }
 
 export interface PermissionPair {

@@ -515,7 +515,21 @@ export const confirmCheckout = onCall(async (request) => {
 
   // ---- Write the order + its items subcollection transactionally ----
   const orderRef = db.collection('orders').doc();
+  const entityRef = db.collection('entities').doc(customer.entityId);
+
   await db.runTransaction(async (tx) => {
+    const txEntitySnap = await tx.get(entityRef);
+    const txEntityData = txEntitySnap.exists ? txEntitySnap.data() : (entity || {});
+    const currentCounter = (typeof txEntityData.invoiceNumberCounter === 'number' ? txEntityData.invoiceNumberCounter : 0) + 1;
+    const prefix = txEntityData.invoicePrefix || entity.invoicePrefix || 'INV';
+    const seqStr = String(currentCounter).padStart(9, '0');
+    const invoiceNumber = `${prefix}-${seqStr}`;
+
+    tx.update(entityRef, {
+      invoiceNumberCounter: currentCounter,
+      updatedAt: Timestamp.now(),
+    });
+
     const now = Timestamp.now();
     tx.set(orderRef, {
       customerId: uid,
@@ -530,6 +544,8 @@ export const confirmCheckout = onCall(async (request) => {
       discountBreakdown,
       discountReason: `Standard: ${effectiveStandardRate}%, Birthday: ${birthdayTierRate}%, Bulk: ${bulkDiscountRounded > 0 ? config.bulkDiscountRate : 0}%`,
       vat,
+      invoiceNumber,
+      invoiceReprintCount: 0,
       createdAt: now,
       entityId: customer.entityId,
       entityName: entity.name || '',
