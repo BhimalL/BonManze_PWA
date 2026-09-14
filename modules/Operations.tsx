@@ -7478,40 +7478,49 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 )}
               </div>
               <div className="grid grid-cols-2 gap-3">
-                {paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan')).map(m => {
-                  const isConfirming = confirmPaymentId === m.id;
-                  const isSubmitting = pendingPaymentKey === paymentDrop.key;
-                  return (
-                    <button
-                      key={m.id}
-                      disabled={isSubmitting || currentPermissions?.payments?.edit !== true}
-                      onClick={() => {
-                        if (isConfirming) {
-                          markPaid(paymentDrop, m);
-                          setConfirmPaymentId(null);
-                        } else {
-                          setConfirmPaymentId(m.id);
-                        }
-                      }}
-                      className={`p-5 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 disabled:opacity-60 disabled:cursor-wait ${
-                        isConfirming
-                          ? 'border-warning bg-warning/10 text-warning-700 animate-pulse'
-                          : paymentDrop.claimedMethod === m.name
-                          ? 'border-primary text-primary bg-primary/[0.02]'
-                          : 'border-slate-100 bg-white text-slate-500 hover:border-primary hover:text-primary hover:bg-slate-50'
-                      }`}
-                    >
-                      {isSubmitting && isConfirming ? (
-                        <Loader2 className="size-6 animate-spin" />
-                      ) : (
-                        <span className="text-2xl">{m.icon}</span>
-                      )}
-                      <span className="text-[10px] font-black uppercase tracking-widest">
-                        {isSubmitting && isConfirming ? 'Marking...' : isConfirming ? 'Confirm ' + m.name + '?' : m.name}
-                      </span>
-                    </button>
-                  );
-                })}
+                {(() => {
+                  const activeMethods = paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan'));
+                  const dropEntityId = paymentDrop.entityId || orders.find(o => o.id === paymentDrop.orderId)?.entityId;
+                  const currentEntity = entities.find(e => e.id === dropEntityId);
+                  const methodsToRender = (currentEntity && currentEntity.acceptedPaymentMethodIds && currentEntity.acceptedPaymentMethodIds.length > 0)
+                    ? activeMethods.filter(m => currentEntity.acceptedPaymentMethodIds!.includes(m.id))
+                    : activeMethods;
+
+                  return methodsToRender.map(m => {
+                    const isConfirming = confirmPaymentId === m.id;
+                    const isSubmitting = pendingPaymentKey === paymentDrop.key;
+                    return (
+                      <button
+                        key={m.id}
+                        disabled={isSubmitting || currentPermissions?.payments?.edit !== true}
+                        onClick={() => {
+                          if (isConfirming) {
+                            markPaid(paymentDrop, m);
+                            setConfirmPaymentId(null);
+                          } else {
+                            setConfirmPaymentId(m.id);
+                          }
+                        }}
+                        className={`p-5 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 disabled:opacity-60 disabled:cursor-wait ${
+                          isConfirming
+                            ? 'border-warning bg-warning/10 text-warning-700 animate-pulse'
+                            : paymentDrop.claimedMethod === m.name
+                            ? 'border-primary text-primary bg-primary/[0.02]'
+                            : 'border-slate-100 bg-[#FAF8F5] text-slate-500 hover:border-primary hover:text-primary hover:bg-slate-50'
+                        }`}
+                      >
+                        {isSubmitting && isConfirming ? (
+                          <Loader2 className="size-6 animate-spin" />
+                        ) : (
+                          <span className="text-2xl">{m.icon}</span>
+                        )}
+                        <span className="text-[10px] font-black uppercase tracking-widest">
+                          {isSubmitting && isConfirming ? 'Marking...' : isConfirming ? 'Confirm ' + m.name + '?' : m.name}
+                        </span>
+                      </button>
+                    );
+                  });
+                })()}
               </div>
             </div>
           </div>

@@ -1576,6 +1576,22 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     });
   };
 
+  const openPayDay = (lines: Line[], dayLabel: string) => {
+    const pending = lines.filter(l => isUnclaimed(l.item));
+    if (!pending.length) return;
+    setPayMethod(null);
+    setCustomerRef('');
+    setPaymentError(null);
+    const { items, amount } = buildPayItemsAndAmount(pending);
+    setPayTarget({
+      kind: 'balance',
+      items,
+      amount,
+      what: `${dayLabel} · ${pending.length} meal${pending.length !== 1 ? 's' : ''}`,
+      ref: generateRef()
+    });
+  };
+
   // Choosing a method here only records a claim — it never marks anything
   // Paid. Only Operations confirming a payment (Operator Console) does that
   // (Mark Paid, wired to real writes in the previous round). A target with
@@ -2699,10 +2715,23 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                   const locked = isPastCancelCutoff(group.date, sg.service, systemDate);
                                   return (
                                     <div key={group.date} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
-                                      <div className="flex items-center gap-1.5 mb-2 flex-wrap">
-                                        <p className="text-[10px] font-black uppercase text-primary tracking-widest">{group.label}</p>
-                                        {locked && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase">🔒 Locked</span>}
-                                      </div>
+                                      <div className="flex items-center justify-between gap-1.5 mb-2 flex-wrap">
+                                         <div className="flex items-center gap-1.5">
+                                           <p className="text-[10px] font-black uppercase text-primary tracking-widest">{group.label}</p>
+                                           {locked && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase">🔒 Locked</span>}
+                                         </div>
+                                         {(() => {
+                                           const dayUnclaimed = group.items.filter(l => isUnclaimed(l.item));
+                                           return dayUnclaimed.length >= 2 ? (
+                                             <button
+                                               onClick={() => openPayDay(group.items, group.label)}
+                                               className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger hover:bg-danger/20 transition-all cursor-pointer"
+                                             >
+                                               Pay {group.label} ({dayUnclaimed.length} meals) · {formatCurrency(buildPayItemsAndAmount(dayUnclaimed).amount)}
+                                             </button>
+                                           ) : null;
+                                         })()}
+                                       </div>
                                       <div className="space-y-3">
                                         {group.items.map((line, idx) => {
                                           const rating = line.item.rating || ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`]?.stars;
@@ -2814,10 +2843,23 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                   const locked = isPastCancelCutoff(group.date, sg.service, systemDate);
                                   return (
                                     <div key={group.date} className="bg-white rounded-2xl border border-[#E7E0D0] p-4">
-                                      <div className="flex items-center gap-1.5 mb-2 flex-wrap">
-                                        <p className="text-[10px] font-black uppercase text-primary tracking-widest">{group.label}</p>
-                                        {locked && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase">🔒 Locked</span>}
-                                      </div>
+                                      <div className="flex items-center justify-between gap-1.5 mb-2 flex-wrap">
+                                         <div className="flex items-center gap-1.5">
+                                           <p className="text-[10px] font-black uppercase text-primary tracking-widest">{group.label}</p>
+                                           {locked && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-black uppercase">🔒 Locked</span>}
+                                         </div>
+                                         {(() => {
+                                           const dayUnclaimed = group.items.filter(l => isUnclaimed(l.item));
+                                           return dayUnclaimed.length >= 2 ? (
+                                             <button
+                                               onClick={() => openPayDay(group.items, group.label)}
+                                               className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger hover:bg-danger/20 transition-all cursor-pointer"
+                                             >
+                                               Pay {group.label} ({dayUnclaimed.length} meals) · {formatCurrency(buildPayItemsAndAmount(dayUnclaimed).amount)}
+                                             </button>
+                                           ) : null;
+                                         })()}
+                                       </div>
                                       <div className="space-y-3">
                                         {group.items.map((line, idx) => {
                                           const rating = line.item.rating || ratings[`${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`]?.stars;
@@ -3479,31 +3521,57 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         // Must come after receiptGroups is declared.
         const firstOrder = receiptGroups[0]?.order;
         const hasSavedTotals = typeof firstOrder?.subtotal === 'number';
-        // When a receipt covers multiple orders ("Pay balance" spanning several
-        // orders at once), sum the saved fields across all covered orders.
-        const savedSubtotal = hasSavedTotals
+
+        // Check if receipt contains ALL non-cancelled items of the covered order(s).
+        // If it covers only a single item or subset, pro-rate totals proportionally.
+        const isFullOrderReceipt = hasSavedTotals && receiptGroups.every(og => {
+          const activeOrderItems = og.order.items.filter(i => i.status !== 'Cancelled');
+          const linesInGroup = og.services.flatMap(s => s.days.flatMap(d => d.items)).length;
+          return activeOrderItems.length === linesInGroup;
+        });
+
+        // Compute pro-rated calculations for partial/item-level receipts
+        const partialSubtotal = receiptTarget.lines.reduce((s, l) => s + (l.item.price * l.item.qty), 0);
+        const partialDiscount = receiptTarget.lines.reduce((s, l) => {
+          const ord = l.order;
+          const ordSub = ord.subtotal || ord.items.reduce((acc, it) => acc + (it.price * it.qty), 0);
+          const prop = ordSub > 0 ? (l.item.price * l.item.qty) / ordSub : 0;
+          return s + ((ord.discount || 0) * prop);
+        }, 0);
+        const partialVat = receiptTarget.lines.reduce((s, l) => {
+          const ord = l.order;
+          const ordSub = ord.subtotal || ord.items.reduce((acc, it) => acc + (it.price * it.qty), 0);
+          const prop = ordSub > 0 ? (l.item.price * l.item.qty) / ordSub : 0;
+          return s + ((ord.vat || 0) * prop);
+        }, 0);
+        const partialTotal = round2(partialSubtotal - partialDiscount + partialVat);
+
+        const displaySubtotal = isFullOrderReceipt
           ? receiptGroups.reduce((s, og) => s + (og.order.subtotal || 0), 0)
-          : receiptTotal;
-        const savedDiscount = hasSavedTotals
+          : partialSubtotal;
+        const displayDiscount = isFullOrderReceipt
           ? receiptGroups.reduce((s, og) => s + (og.order.discount || 0), 0)
-          : 0;
-        const savedDiscountReason = hasSavedTotals
+          : round2(partialDiscount);
+        const displayDiscountReason = isFullOrderReceipt
           ? Array.from(new Set(receiptGroups.map(og => og.order.discountReason).filter(Boolean))).join(', ')
-          : '';
-        const savedVat = hasSavedTotals
+          : (firstOrder?.discountReason || '');
+        const displayVat = isFullOrderReceipt
           ? receiptGroups.reduce((s, og) => s + (og.order.vat || 0), 0)
-          : 0;
-        const savedTotal = hasSavedTotals
+          : round2(partialVat);
+        const displayTotal = isFullOrderReceipt
           ? receiptGroups.reduce((s, og) => s + (og.order.total || 0), 0)
-          : receiptTotal;
-        const displaySubtotal = hasSavedTotals ? savedSubtotal : receiptTotal;
-        const displayDiscount = hasSavedTotals ? savedDiscount : 0;
-        const displayDiscountReason = hasSavedTotals ? savedDiscountReason : '';
-        const displayVat = hasSavedTotals ? savedVat : (vatOn ? legacyVatAmount : 0);
-        const displayTotal = hasSavedTotals ? savedTotal : receiptTotal;
-        const displayDiscountBreakdown = (hasSavedTotals && receiptGroups.length === 1)
+          : partialTotal;
+
+        const displayDiscountBreakdown = isFullOrderReceipt
           ? firstOrder?.discountBreakdown
-          : undefined;
+          : (firstOrder?.discountBreakdown ? {
+              standardRate: firstOrder.discountBreakdown.standardRate,
+              standard: round2((firstOrder.discountBreakdown.standard || 0) * (displaySubtotal / (firstOrder.subtotal || 1))),
+              birthdayRate: firstOrder.discountBreakdown.birthdayRate,
+              birthday: round2((firstOrder.discountBreakdown.birthday || 0) * (displaySubtotal / (firstOrder.subtotal || 1))),
+              bulkRate: firstOrder.discountBreakdown.bulkRate,
+              bulk: round2((firstOrder.discountBreakdown.bulk || 0) * (displaySubtotal / (firstOrder.subtotal || 1))),
+            } : undefined);
         return (
           <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md overflow-y-auto p-4">
             <style>{`
