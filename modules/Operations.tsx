@@ -1782,7 +1782,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const handleDispatchDrop = async (drop: DropTask) => {
-    if (currentPermissions?.deliveryList?.edit !== true && currentPermissions?.ordersByDish?.edit !== true) {
+    if (currentPermissions?.ordersByDish?.edit !== true) {
       setOpsActionError('Access Denied: You do not have permission to dispatch orders.');
       return;
     }
