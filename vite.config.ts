@@ -1,9 +1,24 @@
 import path from 'path';
+import { execSync } from 'child_process';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
+
+    // Build stamp (see Working Agreement, 2026-09-14 amendment): lets anyone looking at the
+    // running app confirm at a glance which commit it's actually running, instead of a stale
+    // cached bundle silently looking like a regression. Recomputed every time the dev server
+    // starts (npm run dev) and every production build (npm run build) — never at runtime.
+    let buildCommit = 'unknown';
+    try {
+      buildCommit = execSync('git rev-parse --short HEAD').toString().trim();
+    } catch {
+      // No .git available in this context (e.g. some deploy environments) — fall back rather
+      // than fail the build over a cosmetic feature.
+    }
+    const buildTime = new Date().toISOString();
+
     return {
       server: {
         port: 3000,
@@ -22,7 +37,8 @@ export default defineConfig(({ mode }) => {
       plugins: [react()],
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+        __BUILD_INFO__: JSON.stringify({ commit: buildCommit, time: buildTime })
       },
       optimizeDeps: {
         include: [

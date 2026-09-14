@@ -136,6 +136,9 @@ import {
   writeAuditLog
 } from './store';
 
+// Injected at build time by vite.config.ts — see the 2026-09-14 Working Agreement amendment.
+declare const __BUILD_INFO__: { commit: string; time: string };
+
 const splitNotesTag = (notes?: string): { detail: string; person: string | null; instructions: string | null } => {
   if (!notes) return { detail: '', person: null, instructions: null };
   const segments = notes.split(' · ');
@@ -6049,6 +6052,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
             )}
             
+            {/* Build stamp — confirms at a glance whether this tab is running the commit you
+                expect, rather than a stale cached bundle. See Working Agreement, 2026-09-14. */}
+            <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1.5 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-[#E7E0D0]">
+              <span>Build {typeof __BUILD_INFO__ !== 'undefined' ? __BUILD_INFO__.commit : 'unknown'} · {typeof __BUILD_INFO__ !== 'undefined' ? new Date(__BUILD_INFO__.time).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}</span>
+            </div>
+
             {/* Load time stamp for sync visibility */}
             <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1.5 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-[#E7E0D0]">
               <Clock className="size-3" />
