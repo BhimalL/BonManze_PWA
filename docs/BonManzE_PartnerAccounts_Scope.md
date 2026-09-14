@@ -5,6 +5,12 @@ v1)
 **Status:** Scope settled directly with Bhimal. Ready for Antigravity's technical review before any code or
 rules are written, same process every other feature in this project has gone through.
 
+**Status update (2026-09-12, later same day):** built, independently verified (rules, `confirmCheckout`,
+indexes, types, UI, and the entity-scoped query fix all confirmed against actual source and `origin/main`, not
+just Antigravity's self-report), and now partway through a live manual click-through with Bhimal. One real bug
+found and still open (the entity filter dropdown), and one requirement amended based on what testing surfaced
+(Dashboard access) — see §5. Not yet closed; §5 is the live record of where this stands.
+
 ## 0. Why this came up, and how the design got here
 
 Bhimal raised the idea of letting the business work with outside operators who aren't full BonManzE staff —
@@ -35,12 +41,16 @@ able to see anything outside the one screen they need — enforced, not just hid
   payment-collection complications and other operational risk of an outside party handling delivery). This
   removes an entire dimension from the original ask ("Kitchen, Delivery, or both") — Partner staff are always
   Kitchen-scoped, full stop. No delivery scope value exists to choose.
-- **Screen access: Orders by Dish only, nothing else.** No Meal Library, no Delivery List, no Payments, no
-  Customer Directory, no Settings, no Transactions Ledger. Confirmed this needs no new screen-hiding mechanism
-  at all — it's exactly what the existing Roles & Staff permission system already does: a "Partner" Role with
-  only `ordersByDish: {view: true, edit: true}` set and every other permission group off achieves this today,
-  demonstrated directly in the Roles & Staff UI already. **Edit is required, not just View** — Bhimal confirmed
-  Partner kitchen staff need to be able to mark "Start Cooking" themselves, not just look at the list.
+- **Screen access: Orders by Dish, plus a non-financial Dashboard — nothing else.** No Meal Library, no
+  Delivery List, no Payments, no Customer Directory, no Settings, no Transactions Ledger. **Amended 2026-09-12
+  — see §5:** Dashboard access was originally meant to be excluded too, but live testing found it was never
+  gated by the permission system in the first place (a pre-existing, unrelated architectural gap this feature
+  exposed rather than introduced). Bhimal's call once he saw it: leave Dashboard visible for Partners rather
+  than add a new exclusion, since its stat cards are already correctly entity-scoped for free — but hide the
+  "This Week's Revenue" card and the "Manage Curries"/"Delivery List" quick-action buttons (both financial or
+  lead to screens Partners can't open anyway). Orders by Dish itself needs both View and Edit — Bhimal
+  confirmed Partner kitchen staff need to be able to mark "Start Cooking" themselves, not just look at the
+  list.
 - **No customer PII exposure — and this is already true today.** Orders by Dish was checked directly against
   the live source: it shows no price and no customer phone/address at all, only an anonymized "for [name]" tag
   pulled from the order's own notes field (not the customer's real account details). Bhimal's original privacy
@@ -102,6 +112,16 @@ rule structure (per-document `list` rule checking `resource.data.entityId` again
 `assignedEntityIds` array, most likely, mirroring how `isStaffAllowed()` already does live lookups) is left to
 Antigravity's implementation plan — flagging the *requirement* here, not prescribing the rule syntax.
 
+**Resolved during build (2026-09-12):** Firestore rules aren't filters over query results — a rule whose
+truth depends on `resource.data` fields the query itself doesn't constrain causes the *entire* query to be
+denied, not silently filtered. The first implementation pass hardened `firestore.rules` correctly but left
+`Operations.tsx`'s live listeners (`onSnapshot(collection(db,'orders'))`,
+`onSnapshot(collectionGroup(db,'items'))`) unconstrained, which meant a Partner account's queries were being
+denied outright rather than scoped — Orders by Dish would have rendered completely empty. Fixed by
+conditionally querying `where('entityId','in', assignedEntityIds)` when the signed-in staff member is a
+Partner (commit `012956a`), with query-level automated test coverage added afterward (`testPartnerRBAC.js`,
+commit `0334b02`) so this specific class of bug can't regress silently.
+
 ## 4. Suggested build sequence
 
 1. Add `isPartner`/`assignedEntityIds` fields to `staff/{uid}` and the Roles & Staff create/edit UI (a
@@ -119,3 +139,60 @@ Antigravity's implementation plan — flagging the *requirement* here, not presc
 6. Automated test coverage: a Partner staff account should be able to view and start cooking for its assigned
    entities only, and confirmed blocked (both in the UI and via a direct Firestore rules test) from any other
    entity's data and any other screen.
+
+## 5. Live verification log (2026-09-12) — findings, fixes applied, and what's still open
+
+Build was reviewed before implementation (Antigravity's implementation plan was read in full, not approved
+off a summary), and every commit below was independently verified against `git reflog` + `origin/main` +
+direct source read, per the Working Agreement — not taken on self-report.
+
+**Implemented and verified clean:**
+- `firestore.rules`: `isPartnerStaff()`/`isPartnerEntityAllowed()` helpers, hard-gated read/update rules on
+  `orders/{orderId}` and `items/{itemId}`, and an `entityId` immutability check on item updates (added during
+  review — the original plan would have let a party with `ordersByDish` edit silently rewrite an item's
+  `entityId` to escape the lock).
+- `functions/index.js`: `confirmCheckout` denormalizes `entityId` onto each item write;
+  `createStaffMember` validates and writes `isPartner`/`assignedEntityIds`.
+- `firestore.indexes.json`: composite index for the reassignment guard's `entityId`+`status` query (the guard
+  ended up implemented client-side against already-loaded listener state instead, so this index isn't
+  currently exercised — harmless to keep).
+- `types.ts`, Roles & Staff UI (Partner toggle, entity multi-select, reassignment guard), `testPartnerRBAC.js`
+  (12 assertions: direct-doc reads/writes, the `entityId` immutability rule, and — added after a real gap was
+  found — query-level checks that a constrained query returns exactly the assigned entity's data and an
+  unconstrained one is rejected outright).
+- The query-scoping fix described in §3's "Resolved during build" note.
+
+Commits, in order: `d0fa8b1` (rules/functions/UI/types/first test pass) → `012956a` (query-scoping fix) →
+`0334b02` (query-level test coverage).
+
+**Live click-through findings (in progress with Bhimal, `partner1@gmail.com` / Entity A only):**
+- Confirmed working: sidebar correctly shows only Orders by Dish (plus Dashboard, see below) — Meal Library,
+  Delivery List, Payments, Customer Directory, Settings, Transactions Ledger all absent. Start Cooking
+  (Active → Preparing) works and the status persists, confirmed from the admin's own view afterward.
+- **Bug found, not yet fixed:** the "Filter Entity" dropdown on Orders by Dish was never restricted for
+  Partners — it still shows "All Entities" and the full entity list (including Entity B and several stray
+  "RBAC Test Entity" rows left behind by test scripts reusing auto-generated IDs instead of a fixed test
+  fixture id). Not a security hole — the underlying listener query is still hard-locked to the Partner's
+  assigned entity regardless of what's picked in that dropdown — but it leaks other entities' names to an
+  account that shouldn't know they exist, and doesn't match the "no All Entities option exposed" requirement
+  in §4 point 3. Fix: hide the dropdown for Partners (replace with a static label) or rebuild it to only list
+  their own assigned entities with no "All" choice.
+- **Bug found, not yet fixed:** the Dashboard's welcome banner reads the hardcoded string `"Welcome back,
+  Bhimal"` rather than the signed-in user's actual name — a pre-existing, unrelated cosmetic bug that surfaced
+  during this testing because a different account was signed in.
+- **Amendment settled (see §1):** Dashboard access itself turned out to be ungated for every staff account
+  (`hasTabPermission()`'s `dashboard` case unconditionally returns `true` — there's no "dashboard" entry in the
+  granular permission system at all, since it was built as a universal landing page before Partners existed).
+  Bhimal's decision on seeing this live: keep Dashboard for Partners rather than add a new exclusion, since
+  its stat cards (`todayCookCount`, `todayDeliveriesPending`, `pendingPaymentClaimsCount`,
+  `activeWeekFinancials`) all derive from the same already-entity-scoped `orders`/`lines` data — but hide the
+  "This Week's Revenue" card and the "Manage Curries"/"Delivery List" quick-action buttons (the latter two
+  currently lead a Partner straight into an "Access Denied" screen, which is safe but a dead end).
+- Not yet run: steps 7-9 of the manual walkthrough (Admin attempting to unassign Entity A from the Partner
+  while an order is Active/Preparing — should be blocked; clearing that order and confirming the unassignment
+  then succeeds).
+
+**Pending:** one consolidated fix spec covering the entity-picker restriction, the Dashboard changes just
+settled, the hardcoded welcome-text fix, and cleanup of the stray "RBAC Test Entity" test data (plus making the
+RBAC test scripts use a fixed, reusable entity id instead of creating a new one every run) — to be written
+once the reassignment-guard steps above are done, so it goes to Antigravity as one batch.
