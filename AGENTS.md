@@ -2,7 +2,7 @@
 
 ## 2026-09-14: Antigravity — Full Invoicing Roadmap (Steps 0–4) & QA Enhancements Complete
 
-**Commits `0fbb09e`, `77c6dd5`, `bedcb7f`, `ea07f17`, `885d0f9`, `99d9e3a`** — Completed the entire 5-step Invoicing & Payment Methods Roadmap, fixed entity field persistence, added logo previews, pre-filled label hints, pay sheet payment method filtering by entity, discount reason label formatting, and dish batch cooking progression.
+**Commits `0fbb09e`, `77c6dd5`, `bedcb7f`, `ea07f17`, `885d0f9`, `99d9e3a`, `1d81673`, `0e40bea`, `739be09`** — Completed the entire 5-step Invoicing & Payment Methods Roadmap, fixed entity field persistence, added logo previews, pre-filled label hints, pay sheet payment method filtering by entity across all pay targets, discount reason label formatting, and dish batch cooking progression.
 
 ### 1. Invoicing & Payment Methods Roadmap (Steps 0–4)
 - **Step 0 (`0fbb09e`)**: Verified receipt parity & ledger icon alignments.
