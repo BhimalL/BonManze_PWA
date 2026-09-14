@@ -2595,8 +2595,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             <p className="text-[11px] font-black text-white leading-tight truncate">{c.emoji} {c.name}</p>
                             <p className="text-[9px] text-white/80 font-medium truncate mt-0.5">{c.desc}</p>
                             <div className="flex items-center gap-1.5 mt-1">
-                              {special && <span className="text-[9px] text-white/60 font-bold line-through">Rs {special.regularPrice}</span>}
-                              <p className={`text-[11px] font-black mt-0 ${special ? 'text-emerald-300' : 'text-white'}`}>Rs {c.price}</p>
+                              {special && <span className="text-[9px] text-white/60 font-bold line-through">{formatCurrency(special.regularPrice)}</span>}
+                              <p className={`text-[11px] font-black mt-0 ${special ? 'text-emerald-300' : 'text-white'}`}>{formatCurrency(c.price)}</p>
                             </div>
                           </div>
                         </button>
@@ -2616,7 +2616,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             </div>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
-                            <span className="font-black text-primary">Rs {mealPrice(m, d.key, activeService, activeWeekStart)}</span>
+                            <span className="font-black text-primary">{formatCurrency(mealPrice(m, d.key, activeService, activeWeekStart))}</span>
                             {!pastCutoff && (
                               <button onClick={() => openBuilder(d, activeService, activeWeekStart, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
                             )}
@@ -2662,7 +2662,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0">
-                                  <span className="font-black text-slate-900 text-xs">Rs {mealPrice(m, d.key, service, week.start)}</span>
+                                  <span className="font-black text-slate-900 text-xs">{formatCurrency(mealPrice(m, d.key, service, week.start))}</span>
                                   <button onClick={() => openBuilder(d, service, week.start, undefined, i)} className="p-1.5 text-slate-400 hover:text-primary"><Edit3 className="size-3.5" /></button>
                                   <button onClick={() => removeCartMeal(d.date, i, service)} className="p-1.5 text-slate-400 hover:text-danger"><Trash2 className="size-3.5" /></button>
                                 </div>
@@ -2789,7 +2789,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                             <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
                                               <div className="flex items-start justify-between gap-3 mb-1">
                                                 <p className={`text-sm font-bold min-w-0 ${isCancelled ? 'text-slate-400 line-through' : 'text-slate-900'}`}>{line.item.name}</p>
-                                                <span className={`text-sm font-black shrink-0 ${isCancelled ? 'text-slate-400 line-through' : 'text-slate-900'}`}>Rs {line.item.price}</span>
+                                                <span className={`text-sm font-black shrink-0 ${isCancelled ? 'text-slate-400 line-through' : 'text-slate-900'}`}>{formatCurrency(line.item.price)}</span>
                                               </div>
                                               {detail && <p className={`text-[11px] mb-1.5 ${isCancelled ? 'text-slate-300 line-through' : 'text-slate-400'}`}>{detail}</p>}
                                               <div className="flex items-center gap-1.5 flex-wrap mb-2">
@@ -2916,7 +2916,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                             <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
                                               <div className="flex items-start justify-between gap-3 mb-1">
                                                 <p className={`text-sm font-bold min-w-0 ${isCancelled ? 'text-slate-400 line-through' : 'text-slate-900'}`}>{line.item.name}</p>
-                                                <span className={`text-sm font-black shrink-0 ${isCancelled ? 'text-slate-400 line-through' : 'text-slate-900'}`}>Rs {line.item.price}</span>
+                                                <span className={`text-sm font-black shrink-0 ${isCancelled ? 'text-slate-400 line-through' : 'text-slate-900'}`}>{formatCurrency(line.item.price)}</span>
                                               </div>
                                               {detail && <p className={`text-[11px] mb-1.5 ${isCancelled ? 'text-slate-300 line-through' : 'text-slate-400'}`}>{detail}</p>}
                                               <div className="flex items-center gap-1.5 flex-wrap mb-2">
@@ -3166,7 +3166,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   {pastLines.map((line, i) => (
                     <div key={i} className="flex justify-between text-xs">
                       <span className="font-bold text-slate-600">{line.item.deliveryDay} · {line.item.name}</span>
-                      <span className="font-black text-slate-900">Rs {line.item.price}</span>
+                      <span className="font-black text-slate-900">{formatCurrency(line.item.price)}</span>
                     </div>
                   ))}
                 </div>
@@ -3281,8 +3281,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                         <div className="absolute bottom-0 left-0 right-0 p-2">
                           <p className="text-[11px] font-black text-white leading-tight truncate">{c.name}</p>
                           <div className="flex items-center gap-1.5">
-                            {special && <span className="text-[9px] text-white/60 font-bold line-through">Rs {special.regularPrice}</span>}
-                            <p className={`text-[10px] font-black mt-0.5 ${special ? 'text-emerald-300' : 'text-white/90'}`}>Rs {c.price}</p>
+                            {special && <span className="text-[9px] text-white/60 font-bold line-through">{formatCurrency(special.regularPrice)}</span>}
+                            <p className={`text-[10px] font-black mt-0.5 ${special ? 'text-emerald-300' : 'text-white/90'}`}>{formatCurrency(c.price)}</p>
                           </div>
                         </div>
                       </button>
@@ -3366,7 +3366,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
             <div className="p-4 border-t border-[#E7E0D0] flex items-center gap-3 shrink-0 bg-white">
               <div className="flex-1 text-right pr-3">
                 <span className="text-[10px] font-bold text-slate-400 uppercase">Total </span>
-                <span className="text-base font-black text-slate-900">Rs {mealPrice(builder.sel, builder.day.key, builder.service, builder.weekStart)}</span>
+                <span className="text-base font-black text-slate-900">{formatCurrency(mealPrice(builder.sel, builder.day.key, builder.service, builder.weekStart))}</span>
               </div>
               <button
                 disabled={!builderReady(builder) || builderSaving}
@@ -3727,7 +3727,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                           {detail && <p className="text-[11px] text-slate-400 mt-0.5">{detail}</p>}
                                         </div>
                                         <span className="w-8 text-center text-xs text-slate-600 shrink-0">{line.item.qty}</span>
-                                        <span className="w-16 text-right text-xs font-black text-slate-900 shrink-0">Rs {line.item.price}</span>
+                                        <span className="w-16 text-right text-xs font-black text-slate-900 shrink-0">{formatCurrency(line.item.price)}</span>
                                       </div>
                                       {((!!line.seq && line.seq > 0) || person) && (
                                         <div className="flex items-center gap-1.5 flex-wrap mt-1.5">

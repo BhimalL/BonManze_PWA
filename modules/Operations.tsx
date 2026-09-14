@@ -2653,8 +2653,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">This Week's Revenue</p>
-                <h3 className="text-xl font-black text-slate-900 mt-2 truncate">Rs {activeWeekFinancials.collected}</h3>
-                <p className="text-[11px] text-[#B4703A] font-bold mt-1">Rs {activeWeekFinancials.outstanding} outstanding</p>
+                <h3 className="text-xl font-black text-slate-900 mt-2 truncate">{formatCurrency(activeWeekFinancials.collected)}</h3>
+                <p className="text-[11px] text-[#B4703A] font-bold mt-1">{formatCurrency(activeWeekFinancials.outstanding)} outstanding</p>
               </div>
             </div>
           )}
@@ -7694,7 +7694,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <div className="space-y-2">
                         <div className="bg-[#3E7D22]/5 border border-[#3E7D22]/10 rounded-xl px-4 py-2.5 flex items-center justify-between">
                           <span className="text-[9px] uppercase font-black text-slate-400 tracking-wider">Lifetime Value (LTV)</span>
-                          <span className="text-xs font-black text-slate-900">Rs {editCustomer.ltv?.toLocaleString() || '0'}</span>
+                          <span className="text-xs font-black text-slate-900">{formatCurrency(editCustomer.ltv || 0)}</span>
                         </div>
                         
                         <div className="bg-[#B4703A]/5 border border-[#B4703A]/10 rounded-xl px-4 py-2.5 flex items-center justify-between">
@@ -7704,7 +7704,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
                         <div className="bg-slate-50 border border-slate-200/60 rounded-xl px-4 py-2.5 flex items-center justify-between">
                           <span className="text-[9px] uppercase font-black text-slate-400 tracking-wider">Store Credit Balance</span>
-                          <span className="text-xs font-black text-slate-900">Rs {editCustomer.storeCredit || 0}</span>
+                          <span className="text-xs font-black text-slate-900">{formatCurrency(editCustomer.storeCredit || 0)}</span>
                         </div>
                       </div>
                     </div>
@@ -7943,7 +7943,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               {detail && <p className="text-[11px] text-slate-400 mt-0.5">{detail}</p>}
                             </div>
                             <span className="w-8 text-center text-xs text-slate-600 shrink-0">{item.qty}</span>
-                            <span className="w-16 text-right text-xs font-black text-slate-900 shrink-0">Rs {item.price}</span>
+                            <span className="w-16 text-right text-xs font-black text-slate-900 shrink-0">{formatCurrency(item.price)}</span>
                           </div>
                           {person && (
                             <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
