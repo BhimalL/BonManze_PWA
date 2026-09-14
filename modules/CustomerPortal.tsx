@@ -1589,6 +1589,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           batch.update(doc(db, 'orders', t.orderId, 'items', t.fsItemId as string), {
             paymentMethodName: payMethod.name,
             paymentReference: finalRef,
+            paymentResetAt: null,
           });
         });
         await batch.commit();

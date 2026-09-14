@@ -160,6 +160,12 @@ export interface OrderItem {
   isReconciled?: boolean;
   paymentMethodName?: string;
   paymentReference?: string;
+  // Set by Operations' "Send back" action (resetPaymentClaim) when a
+  // claimed-but-unconfirmed payment is reset so the customer can pick a
+  // method again; cleared by the customer's own commitPayment once they
+  // re-claim. Lets the Payments console show "sent back, awaiting the
+  // customer" instead of the item silently looking untouched.
+  paymentResetAt?: any;
   rating?: number;
   ratingComment?: string;
   baseId?: string;
