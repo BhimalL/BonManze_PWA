@@ -259,8 +259,8 @@ service cloud.firestore {
               // Status edit: Cooking/Dispatch/Deliver
               request.resource.data.status != resource.data.status
               && (
-                (request.resource.data.status == 'Preparing' || request.resource.data.status == 'Active')
-                  ? isStaffAllowed('ordersByDish', 'edit')
+                (request.resource.data.status == 'Preparing' || request.resource.data.status == 'Ready' || request.resource.data.status == 'Active')
+                  ? (isStaffAllowed('ordersByDish', 'edit') || isStaffAllowed('deliveryList', 'edit'))
                   : isStaffAllowed('deliveryList', 'edit')
               )
               && request.resource.data.paymentStatus == resource.data.paymentStatus

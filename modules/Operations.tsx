@@ -1756,7 +1756,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     lines.forEach(({ order, item }) => {
       if (item.deliveryDate === dateStr && item.status !== 'Cancelled') {
         const itemService = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
-        if (itemService === serviceSlot && item.status === 'Preparing' && item._fsItemId) {
+        if (itemService === serviceSlot && (item.status === 'Preparing' || item.status === 'Active' || !item.status) && item._fsItemId) {
           targets.push({ orderId: order.id, itemId: item._fsItemId });
         }
       }

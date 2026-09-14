@@ -20,9 +20,9 @@
 - **Single-Item Receipt Totals Pro-rating (`modules/CustomerPortal.tsx`)**: Fixed customer receipt view so single-item/partial-order receipts calculate exact pro-rated subtotal, discount, VAT, and total paid for the printed items (displaying Total Paid: Rs 227.01 instead of full order Rs 1005.33).
 - **Pay Day Combined Payment Button (`modules/CustomerPortal.tsx`)**: Added a dedicated `Pay [Day]` button on day card headers in `My Order` tab when a customer has 2+ unclaimed meals on the same date, letting them settle all meals for that day in a single transaction with 1 payment reference code.
 - **Group Discount Name & Zero-Discount Filtering (`functions/index.js` & `CustomerPortal.tsx`)**: Updated `confirmCheckout` server-side function to generate `discountReason` with exact customer group name (e.g. `ABC Motors Co Ltd Group (6%)` instead of hardcoded `Standard: 6%`), and updated `formatOrderDiscountReason` in `CustomerPortal.tsx` to check `discountBreakdown` amounts and omit unearned discounts (such as 0% Birthday discount).
-- **Dish Batch Cooking Interactive Progression (`modules/Operations.tsx`)**: Upgraded `Orders by Dish` cooking action buttons from static badges to a full 4-stage interactive progression:
+- **Dish Batch Cooking Interactive Progression (`modules/Operations.tsx` & `firestore.rules`)**: Upgraded `Orders by Dish` cooking action buttons from static badges to a full 4-stage interactive progression:
   1. `Start Cooking` (updates active unstarted batch items to `'Preparing'`).
-  2. `Mark Ready` (updates preparing batch items to `'Ready'`).
+  2. `Mark Ready` (updates preparing batch items to `'Ready'`). Fixed `firestore.rules` item status update rule so setting status to `'Ready'` is authorized by `ordersByDish.edit` (previously required `deliveryList.edit`, which caused Firestore to reject writes and revert the button state).
   3. `✓ Cooked` (badge displayed when batch items are ready/en-route).
   4. `✓ Delivered` (badge displayed automatically when all batch items are delivered/completed).
 
