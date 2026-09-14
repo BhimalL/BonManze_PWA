@@ -26,7 +26,15 @@
   3. `✓ Cooked` (badge displayed when batch items are ready/en-route).
   4. `✓ Delivered` (badge displayed automatically when all batch items are delivered/completed).
 
-### 3. Verification & Dual-Clone Synchronization
+### 3. Discount Stacking & Birthday Business Logic Specification
+- **Standard / Group Discount**: Computed as `max(tierRate%, groupRate%)` for each meal item. If a customer belongs to a Group (`ABC Motors Co Ltd Group (6%)`) whose discount percentage exceeds their Loyalty Tier rate, the Group name and rate are stored on the order and rendered on summaries and receipts.
+- **Birthday Discount**: Evaluated strictly on the **delivery date** (`deliveryDate` YYYY-MM-DD) of each meal item, matching month and day against the customer's birthday (`customer.birthday`). It applies regardless of when the order was submitted/checked out.
+- **Multi-Discount Stacking Rules**:
+  1. *Non-birthday days*: Receive Standard/Group Discount (e.g. 6% Group).
+  2. *Birthday day*: Meal scheduled for the birthday gets Standard/Group + Birthday Tier % stacked (e.g. 6% Group + 5% Birthday = **11% discount** on that meal).
+  3. *Full-Week (5-Day Lunch) Order containing Birthday*: All 5 weekdays receive 5% Full-Week Bulk discount + 6% Group discount (**11% discount** on 4 non-birthday days). The birthday meal receives 5% Bulk + 6% Group + 5% Birthday = **16% discount** on that specific meal.
+
+### 4. Verification & Dual-Clone Synchronization
 - Verified with `npx tsc --noEmit` (0 type errors).
 - Synchronized all updated files (`functions/index.js`, `modules/CustomerPortal.tsx`, `modules/Operations.tsx`, `types.ts`, `AGENTS.md`) across both local workspaces (`AntiGravity/BonManze_pwa` and `BonManze_pwa`).
 
