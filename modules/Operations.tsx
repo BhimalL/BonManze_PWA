@@ -800,7 +800,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   // --- Trading Entities sub-tab state ---
   const [showAddEntityModal, setShowAddEntityModal] = useState(false);
-  const [entityForm, setEntityForm] = useState({ name: '', brn: '', vatNumber: '', bankReference: '' });
+  const [entityForm, setEntityForm] = useState({ name: '', brn: '', vatNumber: '', bankReference: '', address: '', email: '', phone: '', invoicePrefix: '' });
   const [editingEntityId, setEditingEntityId] = useState<string | null>(null);
   const [entityActionError, setEntityActionError] = useState<string | null>(null);
   const [entityActionLoading, setEntityActionLoading] = useState(false);
@@ -5477,7 +5477,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 </div>
                 {currentPermissions?.tradingEntities?.edit === true && (
                   <button
-                    onClick={() => { setEditingEntityId(null); setEntityForm({ name: '', brn: '', vatNumber: '', bankReference: '' }); setEntityLogoFile(null); setShowAddEntityModal(true); }}
+                    onClick={() => { setEditingEntityId(null); setEntityForm({ name: '', brn: '', vatNumber: '', bankReference: '', address: '', email: '', phone: '', invoicePrefix: '' }); setEntityLogoFile(null); setShowAddEntityModal(true); }}
                     className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors"
                   >
                     <Plus className="size-3.5" /> Add Entity
@@ -5503,13 +5503,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       </div>
                       <p className="text-xs text-slate-400 font-medium">BRN: {entity.brn} · VAT: {entity.vatNumber}</p>
                       <p className="text-[10px] text-slate-300 font-medium">Bank ref: {entity.bankReference}</p>
+                      {entity.invoicePrefix && <p className="text-[10px] text-slate-300 font-medium">Invoice prefix: {entity.invoicePrefix}</p>}
                     </div>
                     {currentPermissions?.tradingEntities?.edit === true && (
                       <div className="flex items-center gap-1.5">
                         <button
                           onClick={() => {
                             setEditingEntityId(entity.id);
-                            setEntityForm({ name: entity.name, brn: entity.brn, vatNumber: entity.vatNumber, bankReference: entity.bankReference });
+                            setEntityForm({ name: entity.name, brn: entity.brn, vatNumber: entity.vatNumber, bankReference: entity.bankReference, address: entity.address || '', email: entity.email || '', phone: entity.phone || '', invoicePrefix: entity.invoicePrefix || '' });
                             setEntityLogoFile(null);
                             setShowAddEntityModal(true);
                           }}
@@ -5596,14 +5597,25 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <h2 className="text-lg font-black text-slate-900">{editingEntityId ? 'Edit Entity' : 'New Trading Entity'}</h2>
                       <button onClick={() => { setShowAddEntityModal(false); setEntityActionError(null); }} className="p-2 text-slate-400 hover:text-red-500"><X className="size-4" /></button>
                     </div>
-                    <div className="p-6 space-y-4">
-                      {(['name', 'brn', 'vatNumber', 'bankReference'] as const).map(f => (
+                    <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
+                      {(['name', 'brn', 'vatNumber', 'bankReference', 'address', 'email', 'phone', 'invoicePrefix'] as const).map(f => (
                         <div key={f}>
-                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{f === 'vatNumber' ? 'VAT Number' : f === 'brn' ? 'BRN' : f === 'bankReference' ? 'Bank Reference' : 'Entity Name'}</label>
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">
+                            {f === 'vatNumber' ? 'VAT Number'
+                              : f === 'brn' ? 'BRN'
+                              : f === 'bankReference' ? 'Bank Reference'
+                              : f === 'invoicePrefix' ? 'Invoice Prefix'
+                              : f === 'address' ? 'Address'
+                              : f === 'email' ? 'Email'
+                              : f === 'phone' ? 'Phone'
+                              : 'Entity Name'}
+                          </label>
                           <input
+                            type={f === 'email' ? 'email' : 'text'}
                             value={entityForm[f]}
                             onChange={e => setEntityForm(prev => ({ ...prev, [f]: e.target.value }))}
                             className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            placeholder={f === 'invoicePrefix' ? 'e.g. INV-A' : undefined}
                           />
                         </div>
                       ))}
@@ -5633,6 +5645,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               brn: entityForm.brn.trim(),
                               vatNumber: entityForm.vatNumber.trim(),
                               bankReference: entityForm.bankReference.trim(),
+                              address: entityForm.address.trim(),
+                              email: entityForm.email.trim(),
+                              phone: entityForm.phone.trim(),
+                              invoicePrefix: entityForm.invoicePrefix.trim(),
                               updatedAt: Timestamp.now(),
                               ...(logoStoragePath ? { logoStoragePath } : {})
                             };
@@ -7629,6 +7645,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <div className="text-[10px] text-slate-400 mt-1 space-y-0.5">
                     {order.entityBrn && <p>BRN: {order.entityBrn}</p>}
                     {order.entityVatNumber && <p>VRN: {order.entityVatNumber}</p>}
+                    {order.entityAddress && <p>{order.entityAddress}</p>}
+                    {order.entityPhone && <p>{order.entityPhone}</p>}
+                    {order.entityEmail && <p>{order.entityEmail}</p>}
                   </div>
                 ) : (
                   SYSTEM_CONFIG.vatEnabled && SYSTEM_CONFIG.vatNumber && (

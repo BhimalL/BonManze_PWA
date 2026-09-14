@@ -536,6 +536,9 @@ export const confirmCheckout = onCall(async (request) => {
       entityBrn: entity.brn || '',
       entityVatNumber: entity.vatNumber || '',
       entityBankReference: entity.bankReference || '',
+      entityAddress: entity.address || '',
+      entityEmail: entity.email || '',
+      entityPhone: entity.phone || '',
       entityLogoStoragePath: entity.logoStoragePath || '',
     });
     priced.forEach((p) => {

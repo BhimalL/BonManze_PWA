@@ -3501,6 +3501,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                   <div className="text-[10px] text-slate-400 mt-1 space-y-0.5">
                     {receiptTarget.order.entityBrn && <p>BRN: {receiptTarget.order.entityBrn}</p>}
                     {receiptTarget.order.entityVatNumber && <p>VRN: {receiptTarget.order.entityVatNumber}</p>}
+                    {receiptTarget.order.entityAddress && <p>{receiptTarget.order.entityAddress}</p>}
+                    {receiptTarget.order.entityPhone && <p>{receiptTarget.order.entityPhone}</p>}
+                    {receiptTarget.order.entityEmail && <p>{receiptTarget.order.entityEmail}</p>}
                   </div>
                 ) : (
                   <>

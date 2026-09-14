@@ -109,6 +109,11 @@ export interface Entity {
   brn: string;
   vatNumber: string;
   bankReference: string;
+  address?: string;
+  email?: string;
+  phone?: string;
+  invoicePrefix?: string;
+  invoiceNumberCounter?: number;
   logoStoragePath?: string;
   active: boolean;
   createdAt: any;
@@ -210,6 +215,9 @@ export interface Order {
   entityBrn?: string;
   entityVatNumber?: string;
   entityBankReference?: string;
+  entityAddress?: string;
+  entityEmail?: string;
+  entityPhone?: string;
   entityLogoStoragePath?: string;
 }
 
