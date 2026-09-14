@@ -1,6 +1,24 @@
 # Agent Coordination: BonManzE Project
 
-## 2026-08-28: Antigravity — Emulator Persisted Path, Storage Rules Null-Safety, and Walkthrough Documentation
+## 2026-09-14: Antigravity — Entity Details Persistence Fix, Logo Preview, & Roadmap Documentation
+
+**Commits `0fbb09e`, `77c6dd5`, `bedcb7f`** — Implemented Steps 0–2 of the Invoicing & Payment Methods roadmap, fixed the entity field persistence bug in `unsubEntities`, added live logo thumbnail previews in the entity editor & directory list, and documented state handoff for Claude.
+
+### 1. Entity Field Persistence Bug Fix & Logo Previews (`bedcb7f`)
+- **Root Cause**: In `modules/Operations.tsx`, `unsubEntities` mapped Firestore document snapshots to `Entity` objects using an explicit key whitelist that omitted `address`, `email`, `phone`, `invoicePrefix`, `invoiceNumberCounter`, `acceptedPaymentMethodIds`, and `paymentMethodConfig`. As a result, editing entity details was saved to Firestore, but the snapshot listener immediately stripped those fields from `entities` React state, causing subsequent modal opens to show blank fields.
+- **Fix**: Spreading `...d.data()` into the mapped `Entity` object in `unsubEntities` so all fields persist seamlessly across snapshot updates.
+- **Logo Previews**: Added live logo thumbnail rendering to both the Trading Entities directory list (with a 2-letter uppercase initial avatar fallback) and the Add/Edit Entity modal (showing current stored logo OR live preview of newly selected image before saving).
+
+### 2. Completed Invoicing Roadmap Steps
+- **Step 0 (`0fbb09e`)**: `receipt-parity-and-ledger-icons.md` — Verified receipt parity & ledger icon alignments.
+- **Step 1 (`0fbb09e`)**: `payment-methods-managed-collection.md` — Managed Firestore collection `paymentMethods/current` with real-time `onSnapshot` listener and fallback seed logic.
+- **Step 2 (`77c6dd5`)**: `entity-contact-fields-and-invoice-prefix.md` — Added `address`, `email`, `phone`, `invoicePrefix`, `invoiceNumberCounter` to `Entity` schema and Trading Entity edit form.
+
+### 3. Roadmap Handoff for Claude (Steps 3 & 4 Pending)
+- **Step 3 (`Claude outputs/per-entity-payment-config.md`)**: Adding per-entity accepted payment methods (`acceptedPaymentMethodIds`) and per-method account numbers/QR parameters (`paymentMethodConfig`) to the Trading Entity modal & pay sheet filtering.
+- **Step 4 (`Claude outputs/invoice-numbering-and-reprint-marking.md`)**: Cloud Function trigger `issueInvoiceOnPayment` for atomic per-entity sequential invoice counter generation + receipt reprint tracking.
+
+---
 
 **Commits `13da6fc`, `1ff527d`, `7138c10`, `0a0a1eb`** — Configured the relative August 26 database export path in both workspaces to resolve empty/stale emulator startup, ported CEL null-safety exists/in checks to `storage.rules` to prevent crashes on narrow role requests, and converted the Playwright automation checklist into a manual browser walkthrough guide under `docs/`.
 
