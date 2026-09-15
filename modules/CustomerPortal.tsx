@@ -863,6 +863,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         _fsItemId: it._fsItemId,
         rating: it.rating,
         ratingComment: it.ratingComment,
+        // Without this, itemPayAmount/lineDiscountAndVat never see a share
+        // to key off and silently fall back to the old blended
+        // orderProrationFactor for every real order, even ones confirmCheckout
+        // already wrote exact per-item shares for.
+        discountShare: it.discountShare,
       }));
       const allPaid = items.length > 0 && items.every(i => i.paymentStatus === 'Paid');
       const createdAtIso = o.createdAt && typeof o.createdAt.toDate === 'function'

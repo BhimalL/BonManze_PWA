@@ -1042,6 +1042,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         _fsItemId: it._fsItemId,
         rating: it.rating,
         ratingComment: it.ratingComment,
+        // Without this, itemAmountBreakdown and the receipt/ledger call sites
+        // that read item.discountShare never see a share to key off, and
+        // silently fall back to the old proportional estimate for every real
+        // order — even ones confirmCheckout already wrote exact per-item
+        // shares for.
+        discountShare: it.discountShare,
       }));
       const allPaid = items.length > 0 && items.every(i => i.paymentStatus === 'Paid');
       const createdAtIso = o.createdAt && typeof o.createdAt.toDate === 'function'
