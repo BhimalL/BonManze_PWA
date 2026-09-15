@@ -62,6 +62,22 @@ service cloud.firestore {
       return !isPartnerStaff() || (entityId != null && entityId in staffDoc().data.get('assignedEntityIds', []));
     }
 
+    // Delivery Staff Payments (BonManzE_DeliveryPayments_Scope.md): a
+    // driver is, like a Partner, less-trusted external/field staff — this
+    // IS a real security boundary (not just client-side filtering), same
+    // reasoning as isPartnerEntityAllowed above, just keyed on a single
+    // assignedDriverId instead of a list of entity ids.
+    function isDriverStaff() {
+      return isActiveStaff() && staffDoc().data.get('isDriver', false) == true;
+    }
+
+    // true for: any non-driver request (no-op), OR a driver request whose
+    // item is assigned to exactly them. false for a driver request
+    // against any other driver's item, or an unassigned item.
+    function isDriverItemAllowed(assignedDriverId) {
+      return !isDriverStaff() || (assignedDriverId != null && assignedDriverId == request.auth.uid);
+    }
+
     // ---- customers/{uid} ----
     // A customer reads/writes only their own doc. Financial/loyalty fields
     // (points, storeCredit, tier, ltv) are NOT directly writable by anyone
@@ -225,6 +241,14 @@ service cloud.firestore {
     // create used to be allowed here with no field restriction at all
     // (a client could submit any total/price it wanted) — closed 2026-08-13
     // once confirmCheckout existed to do that job properly instead.
+    // Deliberately NOT driver-scoped here (unlike the items rule below):
+    // assignedDriverId lives per-item, not on the order envelope itself —
+    // an order can hold drops assigned to different drivers or none at
+    // all. A driver-flagged account can therefore still read the (coarse)
+    // order envelope for orders outside their own route, same as any
+    // other deliveryList/payments-view staff today; the actual sensitive
+    // data and the ability to act on it are both item-level, and item
+    // reads/writes are the real driver-scoping boundary below.
     match /orders/{orderId} {
       allow read: if isPartnerEntityAllowed(resource.data.get('entityId', null))
         && (isCustomer(resource.data.customerId)
@@ -240,12 +264,15 @@ service cloud.firestore {
     // orders/{orderId} match above.
     match /{path=**}/items/{itemId} {
       allow read: if isPartnerEntityAllowed(resource.data.get('entityId', null))
+        && isDriverItemAllowed(resource.data.get('assignedDriverId', null))
         && (isCustomer(resource.data.customerId)
           || isStaffAllowed('ordersByDish', 'view')
           || isStaffAllowed('deliveryList', 'view')
           || isStaffAllowed('payments', 'view'));
       allow create: if false; // Cloud Function only — see confirmCheckout
-      allow update: if isPartnerEntityAllowed(resource.data.get('entityId', null)) && (
+      allow update: if isPartnerEntityAllowed(resource.data.get('entityId', null))
+        && isDriverItemAllowed(resource.data.get('assignedDriverId', null))
+        && (
           // 1. Staff update
           (
             (
@@ -310,6 +337,50 @@ service cloud.firestore {
           && request.resource.data.get('entityId', null) == resource.data.get('entityId', null)
           && request.resource.data.get('invoiceNumber', null) == resource.data.get('invoiceNumber', null)
           && request.resource.data.get('invoiceIssuedAt', null) == resource.data.get('invoiceIssuedAt', null)
+        ) || (
+          // 4. Driver deliver + claim (BonManzE_DeliveryPayments_Scope.md).
+          // A driver marks their own assigned drop Delivered and, in the
+          // same write, records a payment claim or a partial/issue note —
+          // never a confirmed payment (paymentStatus is pinned below,
+          // exactly like clause 2's customer self-claim). This combines a
+          // status change with payment-field changes in one write, which
+          // clauses 1/2 above deliberately keep separate — a dedicated
+          // clause rather than a reuse, because the trust gate here is
+          // different: isDriverStaff() + the item's own assignedDriverId,
+          // not payments.edit. A driver's role only ever needs
+          // deliveryList.edit — payments.edit (the power to actually Mark
+          // Paid) is never granted to a Driver role.
+          isDriverStaff()
+          && resource.data.get('assignedDriverId', null) == request.auth.uid
+          && isStaffAllowed('deliveryList', 'edit')
+          && resource.data.status == 'En route'
+          // Client writes 'Completed' for a delivered item everywhere else
+          // in this app (handleMarkDelivered/handleBulkMarkDelivered) —
+          // 'Delivered' is a legacy status value some read-paths still
+          // tolerate but nothing writes today, so the driver path must
+          // target the same value the rest of the app actually uses.
+          && request.resource.data.status == 'Completed'
+          && request.resource.data.paymentStatus == resource.data.paymentStatus
+          && request.resource.data.price == resource.data.price
+          && request.resource.data.qty == resource.data.qty
+          && request.resource.data.name == resource.data.name
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.get('entityId', null) == resource.data.get('entityId', null)
+          && request.resource.data.get('assignedDriverId', null) == resource.data.get('assignedDriverId', null)
+          && request.resource.data.deliveryDate == resource.data.deliveryDate
+          && request.resource.data.serviceSlot == resource.data.serviceSlot
+          && request.resource.data.get('invoiceNumber', null) == resource.data.get('invoiceNumber', null)
+          && request.resource.data.get('invoiceIssuedAt', null) == resource.data.get('invoiceIssuedAt', null)
+          && request.resource.data.get('invoiceReprintCount', null) == resource.data.get('invoiceReprintCount', null)
+          && (
+            // Either no claim at all (the "Issue / dispute" outcome — a
+            // note is required client-side, but the rule only needs to
+            // stop a driver from forging a claim under someone else's
+            // name), or a claim attributed to exactly this driver.
+            request.resource.data.get('paymentClaimedBy', null) == null
+            || (request.resource.data.get('paymentClaimedBy', null) == 'driver'
+                && request.resource.data.get('paymentClaimedByStaffId', null) == request.auth.uid)
+          )
         );
       allow delete: if false;
     }

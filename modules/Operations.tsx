@@ -274,8 +274,25 @@ interface DropTask {
   // the customer hasn't re-claimed a method since — lets the Payments
   // console show that distinctly from "never claimed at all".
   wasReset?: boolean;
+  // Delivery Staff Payments (BonManzE_DeliveryPayments_Scope.md). Who
+  // claimedMethod/claimedReference above actually came from — absent
+  // (pre-existing claims) or 'customer' means the customer's own
+  // self-claim, same as always; 'driver' means it came from the driver's
+  // combined Deliver & Collect action instead, and claimedByStaffId names
+  // which one (for the reconciliation view).
+  claimedBy?: 'customer' | 'driver';
+  claimedByStaffId?: string;
+  // A driver's "Partial" or "Issue / dispute" outcome — never blocks
+  // delivery. Surfaced in the Payments tab so it's never silently missed.
+  paymentIssueAmount?: number;
+  paymentIssueNote?: string;
   entityId?: string;
   entityName?: string;
+  // Delivery Staff Payments (BonManzE_DeliveryPayments_Scope.md). Set once
+  // per drop (a single Dispatch action assigns every item in the drop to
+  // the same driver at once), same convention as entityId/entityName above
+  // even though the underlying field lives per-item.
+  assignedDriverId?: string;
 }
 
 // A group of one or more paymentDrops that share a single, non-empty
@@ -295,6 +312,8 @@ interface PaymentGroup {
   customerName: string;
   claimedMethod?: string;
   claimedReference?: string;
+  claimedBy?: 'customer' | 'driver';
+  claimedByStaffId?: string;
   entityId?: string;
   entityName?: string;
   earliestDate?: string; // for date-section placement and sorting
@@ -417,6 +436,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Customer App's own This week/Next week switcher.
   const [activeMenuWeek, setActiveMenuWeek] = useState<WeekChoice>('This');
   const [paymentGroup, setPaymentGroup] = useState<PaymentGroup | null>(null);
+  // Delivery Staff Payments (BonManzE_DeliveryPayments_Scope.md) §4.3 — the
+  // combined "Deliver & Collect" modal, shown only to a driver-flagged
+  // account on one of their own assigned, En-route drops. dcOutcome picks
+  // between the three outcomes; dcAmount/dcNote back the Partial/Issue
+  // paths only.
+  const [deliverCollectDrop, setDeliverCollectDrop] = useState<DropTask | null>(null);
+  const [dcOutcome, setDcOutcome] = useState<'paid' | 'partial' | 'issue'>('paid');
+  const [dcMethodId, setDcMethodId] = useState<string>('');
+  const [dcReference, setDcReference] = useState<string>('');
+  const [dcAmount, setDcAmount] = useState<string>('');
+  const [dcNote, setDcNote] = useState<string>('');
+  const [pendingDeliverCollectKey, setPendingDeliverCollectKey] = useState<string | null>(null);
   const [reuseWeekIndex, setReuseWeekIndex] = useState<number>(0);
 
   // In-flight/error state for the real Firestore writes behind Mark
@@ -438,6 +469,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [selectedDeliveryKeys, setSelectedDeliveryKeys] = useState<Set<string>>(new Set());
   const [pendingBulkDispatch, setPendingBulkDispatch] = useState(false);
   const [pendingBulkDelivery, setPendingBulkDelivery] = useState(false);
+  // Delivery Staff Payments (BonManzE_DeliveryPayments_Scope.md), §4.1 —
+  // driver assignment folded into Dispatch itself, not a separate screen.
+  // Per-drop picker state for the single-drop Dispatch button (keyed by
+  // drop.key, defaults to '' = unassigned) and one shared picker for the
+  // Bulk Dispatch toolbar (one driver per batch, per the scope doc).
+  const [dispatchDriverByKey, setDispatchDriverByKey] = useState<Record<string, string>>({});
+  const [bulkDispatchDriverId, setBulkDispatchDriverId] = useState<string>('');
   const [opsActionError, setOpsActionError] = useState<string | null>(null);
   const [activePrintDrop, setActivePrintDrop] = useState<DropTask | null>(null);
   const [activePrintService, setActivePrintService] = useState<{ date: string; service: 'Lunch' | 'Dinner'; drops: DropTask[] } | null>(null);
@@ -619,6 +657,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       ? staffDocRaw.assignedEntityIds.filter((id: any) => typeof id === 'string' && id.length > 0)
       : [];
   }, [isPartner, staffDocRaw]);
+
+  // Delivery Staff Payments (BonManzE_DeliveryPayments_Scope.md). Same
+  // shape as isPartner above — a driver's orders/items listeners are
+  // scoped to only their own assignedDriverId, enforced both here (so the
+  // UI never even loads other drivers' data) and in firestore.rules
+  // (isDriverStaff()/isDriverItemAllowed(), a real security boundary, not
+  // just client-side filtering).
+  const isDriver = staffDocRaw?.isDriver === true;
 
   // Derived from currentPermissions — the ordered list of settings sub-tabs
   // this staff member is allowed to see. Shared by hasTabPermission('settings'),
@@ -819,13 +865,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // --- Roles & Staff sub-tab state ---
   const [showEditStaffModal, setShowEditStaffModal] = useState(false);
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
-  const [editStaffForm, setEditStaffForm] = useState({ roleId: '', active: true, isPartner: false, assignedEntityIds: [] as string[] });
+  const [editStaffForm, setEditStaffForm] = useState({ roleId: '', active: true, isPartner: false, assignedEntityIds: [] as string[], isDriver: false });
   const [editStaffError, setEditStaffError] = useState<string | null>(null);
   const [editStaffLoading, setEditStaffLoading] = useState(false);
   const [rolesRaw, setRolesRaw] = useState<Role[]>([]);
   const [staffListRaw, setStaffListRaw] = useState<Staff[]>([]);
   const [showAddStaffModal, setShowAddStaffModal] = useState(false);
-  const [newStaffForm, setNewStaffForm] = useState({ name: '', email: '', password: '', roleId: '', isPartner: false, assignedEntityIds: [] as string[] });
+  const [newStaffForm, setNewStaffForm] = useState({ name: '', email: '', password: '', roleId: '', isPartner: false, assignedEntityIds: [] as string[], isDriver: false });
   const [addStaffError, setAddStaffError] = useState<string | null>(null);
   const [addStaffLoading, setAddStaffLoading] = useState(false);
   const [showAddRoleModal, setShowAddRoleModal] = useState(false);
@@ -998,11 +1044,21 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           : query(collection(db, 'orders'), where('entityId', '==', '__NONE__')))
       : collection(db, 'orders');
 
+    // Deliberately asymmetric with the orders query above: assignedDriverId
+    // only exists on items, not on the order envelope, so only the items
+    // listener is driver-scoped (see the matching note on the orders/{id}
+    // firestore.rules match) — a driver's own combined action and the
+    // Payments/Delivery List tabs only ever read from this items listener
+    // for the actual per-drop data anyway. isPartner takes precedence if an
+    // account were ever both (not a supported combination — see
+    // BonManzE_DeliveryPayments_Scope.md).
     const itemsQuery = isPartner
       ? (partnerEntityIds.length > 0
           ? query(collectionGroup(db, 'items'), where('entityId', 'in', partnerEntityIds))
           : query(collectionGroup(db, 'items'), where('entityId', '==', '__NONE__')))
-      : collectionGroup(db, 'items');
+      : isDriver
+        ? query(collectionGroup(db, 'items'), where('assignedDriverId', '==', staffAuthUser?.uid || '__NONE__'))
+        : collectionGroup(db, 'items');
 
     const unsubOrders = onSnapshot(ordersQuery, snap => {
       const map: Record<string, any> = {};
@@ -1098,6 +1154,17 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         invoiceNumber: it.invoiceNumber,
         invoiceIssuedAt: it.invoiceIssuedAt,
         invoiceReprintCount: it.invoiceReprintCount,
+        // Same class of bug as discountShare/invoiceNumber above — see
+        // BonManzE_DeliveryPayments_Scope.md. Without these five, the
+        // Delivery List driver picker, the driver's own combined action,
+        // and the Payments-tab "Driver claimed"/reconciliation views would
+        // silently see nothing even once issueInvoiceOnPayment's sibling
+        // write paths start setting them.
+        assignedDriverId: it.assignedDriverId,
+        paymentClaimedBy: it.paymentClaimedBy,
+        paymentClaimedByStaffId: it.paymentClaimedByStaffId,
+        paymentIssueAmount: it.paymentIssueAmount,
+        paymentIssueNote: it.paymentIssueNote,
       }));
       const allPaid = items.length > 0 && items.every(i => i.paymentStatus === 'Paid');
       const createdAtIso = o.createdAt && typeof o.createdAt.toDate === 'function'
@@ -1484,6 +1551,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     return set;
   }, [staffListRaw]);
 
+  // Active drivers, for the Dispatch driver-picker and for resolving a
+  // drop's assignedDriverId to a display name in the Delivery List/Payments
+  // tabs. Delivery Staff Payments (BonManzE_DeliveryPayments_Scope.md).
+  const activeDrivers = useMemo(
+    () => staffListRaw.filter(s => s.isDriver === true && s.active !== false),
+    [staffListRaw]
+  );
+  const driverNameById = useMemo(() => {
+    const map: Record<string, string> = {};
+    staffListRaw.forEach(s => { map[s.id] = s.name; });
+    return map;
+  }, [staffListRaw]);
+
   // Non-cancelled order lines, flattened for aggregation across tabs.
   const lines = useMemo(() => {
     const out: { order: Order; item: OrderItem }[] = [];
@@ -1634,7 +1714,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             total: 0,
             paymentStatus: 'Paid',
             entityId: o.entityId,
-            entityName: o.entityName
+            entityName: o.entityName,
+            assignedDriverId: item.assignedDriverId
           };
         }
         map[key].items.push(item);
@@ -1695,7 +1776,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             total: 0,
             paymentStatus: 'Paid',
             entityId: o.entityId,
-            entityName: o.entityName
+            entityName: o.entityName,
+            assignedDriverId: item.assignedDriverId
           };
         }
         map[key].items.push(item);
@@ -1704,9 +1786,15 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         if (item.paymentStatus !== 'Paid' && item.paymentMethodName && !map[key].claimedMethod) {
           map[key].claimedMethod = item.paymentMethodName;
           map[key].claimedReference = item.paymentReference;
+          map[key].claimedBy = item.paymentClaimedBy;
+          map[key].claimedByStaffId = item.paymentClaimedByStaffId;
         }
         if (item.paymentStatus !== 'Paid' && !item.paymentMethodName && item.paymentResetAt) {
           map[key].wasReset = true;
+        }
+        if (item.paymentIssueNote && !map[key].paymentIssueNote) {
+          map[key].paymentIssueAmount = item.paymentIssueAmount;
+          map[key].paymentIssueNote = item.paymentIssueNote;
         }
       });
     });
@@ -1736,6 +1824,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           customerName: d.customerName,
           claimedMethod: d.claimedMethod,
           claimedReference: d.claimedReference,
+          claimedBy: d.claimedBy,
+          claimedByStaffId: d.claimedByStaffId,
           entityId: d.entityId,
           entityName: d.entityName,
           earliestDate: d.date,
@@ -1770,6 +1860,37 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   }, [paymentGroups]);
 
   const paidDrops = useMemo(() => paymentDrops.filter(d => d.paymentStatus === 'Paid'), [paymentDrops]);
+
+  // Delivery Staff Payments §4.4 — cash reconciliation, derived straight
+  // from OrderItem documents (no separate collection/audit-log change
+  // needed, per the scope doc's own correction there). Only ever counts a
+  // driver's own Cash claims that back office hasn't confirmed yet
+  // (paymentStatus !== 'Paid') — the moment a Mark Paid happens, that
+  // cash is confirmed and drops out of "should still be in the driver's
+  // pocket". Grouped by driver + delivery date, since that's the natural
+  // "handed over at end of day" unit; a driver holding cash across
+  // multiple days shows up as multiple rows, which is intentional.
+  const driverCashReconciliation = useMemo(() => {
+    const map: Record<string, { staffId: string; driverName: string; date: string; amount: number; count: number }> = {};
+    lines.forEach(({ order, item }) => {
+      if (
+        item.paymentStatus !== 'Paid' &&
+        item.paymentClaimedBy === 'driver' &&
+        item.paymentClaimedByStaffId &&
+        (item.paymentMethodName || '').toLowerCase() === 'cash'
+      ) {
+        const staffId = item.paymentClaimedByStaffId;
+        const date = item.deliveryDate || 'Unscheduled';
+        const key = `${staffId}::${date}`;
+        if (!map[key]) {
+          map[key] = { staffId, driverName: driverNameById[staffId] || 'Unknown driver', date, amount: 0, count: 0 };
+        }
+        map[key].amount += itemNetAmount(order, item);
+        map[key].count += 1;
+      }
+    });
+    return Object.values(map).sort((a, b) => a.date.localeCompare(b.date) || a.driverName.localeCompare(b.driverName));
+  }, [lines, driverNameById]);
 
   const paymentSummary = useMemo(() => {
     let collected = 0, outstanding = 0;
@@ -1921,14 +2042,27 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setOpsActionError('Could not dispatch — no eligible items found to dispatch. Try refreshing.');
       return;
     }
+    // Delivery Staff Payments §4.1 — whichever driver was picked for this
+    // drop (defaults to '' = leave unassigned, same as before this feature
+    // existed). Written in the same batch as the dispatch itself so
+    // assignment and dispatch are one atomic step, not two.
+    const driverId = dispatchDriverByKey[drop.key] || '';
     setOpsActionError(null);
     setPendingDispatchKey(drop.key);
     try {
       const batch = writeBatch(db);
       targets.forEach(i => {
-        batch.update(doc(db, 'orders', drop.orderId, 'items', i._fsItemId as string), { status: 'En route' });
+        batch.update(doc(db, 'orders', drop.orderId, 'items', i._fsItemId as string), {
+          status: 'En route',
+          ...(driverId ? { assignedDriverId: driverId } : {}),
+        });
       });
       await batch.commit();
+      setDispatchDriverByKey(prev => {
+        const next = { ...prev };
+        delete next[drop.key];
+        return next;
+      });
     } catch (e) {
       console.error('Dispatch failed', e);
       setOpsActionError('Dispatch failed — please try again.');
@@ -1960,15 +2094,22 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setOpsActionError('None of the selected drops have items ready to dispatch.');
       return;
     }
+    // Delivery Staff Payments §4.1 — one driver per bulk-dispatch batch,
+    // same as the single-drop path (defaults to '' = leave unassigned).
+    const driverId = bulkDispatchDriverId || '';
     setOpsActionError(null);
     setPendingBulkDispatch(true);
     try {
       const batch = writeBatch(db);
       targets.forEach(t => {
-        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), { status: 'En route' });
+        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), {
+          status: 'En route',
+          ...(driverId ? { assignedDriverId: driverId } : {}),
+        });
       });
       await batch.commit();
       setSelectedDeliveryKeys(new Set());
+      setBulkDispatchDriverId('');
     } catch (e) {
       console.error('Bulk dispatch failed', e);
       setOpsActionError('Bulk dispatch failed — please try again.');
@@ -2107,6 +2248,92 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setOpsActionError('Could not reset this payment claim — please try again.');
     } finally {
       setPendingResetPaymentKey(null);
+    }
+  };
+
+  const closeDeliverCollectModal = () => {
+    setDeliverCollectDrop(null);
+    setDcOutcome('paid');
+    setDcMethodId('');
+    setDcReference('');
+    setDcAmount('');
+    setDcNote('');
+  };
+
+  // Delivery Staff Payments §4.3 — the driver-facing combined action. This
+  // is deliberately a *claim*, never a confirmation: paymentStatus is never
+  // touched here, exactly like the customer's own self-claim
+  // (commitPayment in CustomerPortal.tsx). Back office still does the real
+  // Mark Paid in the Payments tab. Three outcomes, per the scope doc:
+  //   - 'paid'    — full paymentMethodName/paymentReference claim, tagged
+  //                 paymentClaimedBy: 'driver'.
+  //   - 'partial' — same claim, plus paymentIssueAmount (what was actually
+  //                 collected) so back office can see the shortfall.
+  //   - 'issue'   — no claim at all, just a required paymentIssueNote for
+  //                 back office to chase manually.
+  // All three still mark the item Delivered — a payment problem never
+  // blocks delivery itself.
+  const handleDeliverAndCollect = async (drop: DropTask, method?: PaymentMethod) => {
+    if (!isDriver) {
+      setOpsActionError('Access Denied: this action is for driver accounts only.');
+      return;
+    }
+    if (currentPermissions?.deliveryList?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to mark orders delivered.');
+      return;
+    }
+    if (drop.items.some(i => i.assignedDriverId && i.assignedDriverId !== staffAuthUser?.uid)) {
+      setOpsActionError('Access Denied: this drop is not assigned to you.');
+      return;
+    }
+    if (dcOutcome !== 'issue' && !method) {
+      setOpsActionError('Pick a payment method before confirming.');
+      return;
+    }
+    if (dcOutcome === 'issue' && !dcNote.trim()) {
+      setOpsActionError('A short note is required for an Issue / dispute.');
+      return;
+    }
+    const targets = drop.items.filter(i => !!i._fsItemId);
+    if (targets.length === 0) {
+      setOpsActionError('Could not mark this delivered — no Firestore item ids found on this order. Try refreshing.');
+      return;
+    }
+    setOpsActionError(null);
+    setPendingDeliverCollectKey(drop.key);
+    try {
+      const batch = writeBatch(db);
+      const update: Record<string, any> = { status: 'Completed' };
+      if (dcOutcome === 'paid' || dcOutcome === 'partial') {
+        update.paymentMethodName = method!.name;
+        update.paymentReference = dcReference.trim() || null;
+        update.paymentClaimedBy = 'driver';
+        update.paymentClaimedByStaffId = staffAuthUser?.uid || null;
+      }
+      if (dcOutcome === 'partial') {
+        const amt = parseFloat(dcAmount);
+        update.paymentIssueAmount = isNaN(amt) ? null : amt;
+        update.paymentIssueNote = dcNote.trim() || 'Partial payment collected at the door.';
+      }
+      if (dcOutcome === 'issue') {
+        update.paymentIssueNote = dcNote.trim();
+      }
+      targets.forEach(i => {
+        batch.update(doc(db, 'orders', drop.orderId, 'items', i._fsItemId as string), update);
+      });
+      await batch.commit();
+      const summary = dcOutcome === 'paid'
+        ? `claimed paid via ${method!.name}${dcReference.trim() ? ` (ref ${dcReference.trim()})` : ''}`
+        : dcOutcome === 'partial'
+        ? `claimed partial payment via ${method!.name} (${dcAmount || '0'} collected) — flagged for back-office review`
+        : `delivered with a payment issue flagged for back-office review: ${dcNote.trim()}`;
+      writeAuditLog('DeliveryConfirmed', `Driver ${staffDocRaw?.name || staffAuthUser?.uid} marked ${targets.length} item(s) delivered for order ${drop.orderId} (${drop.customerName}) — ${summary}`);
+      closeDeliverCollectModal();
+    } catch (e) {
+      console.error('Deliver & Collect failed', e);
+      setOpsActionError('Deliver & Collect failed — please try again.');
+    } finally {
+      setPendingDeliverCollectKey(null);
     }
   };
 
@@ -5262,7 +5489,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <p className="text-xs text-slate-400 font-medium mt-0.5">Staff accounts created here are provisioned with a temporary password you set.</p>
                 </div>
                 <button
-                  onClick={() => { setNewStaffForm({ name: '', email: '', password: '', roleId: rolesRaw[0]?.id || '', isPartner: false, assignedEntityIds: [] }); setAddStaffError(null); setShowAddStaffModal(true); }}
+                  onClick={() => { setNewStaffForm({ name: '', email: '', password: '', roleId: rolesRaw[0]?.id || '', isPartner: false, assignedEntityIds: [], isDriver: false }); setAddStaffError(null); setShowAddStaffModal(true); }}
                   className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-black rounded-xl hover:bg-primary/90 transition-colors"
                 >
                   <Plus className="size-3.5" /> Add Staff Member
@@ -5283,6 +5510,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               Partner ({staff.assignedEntityIds?.length || 0} entities)
                             </span>
                           )}
+                          {staff.isDriver && (
+                            <span className="ml-2 text-[10px] font-black px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 border border-sky-200">
+                              Driver
+                            </span>
+                          )}
                         </p>
                       </div>
                       <div className="flex items-center gap-3">
@@ -5292,7 +5524,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         <button
                           onClick={() => {
                             setEditingStaff(staff);
-                            setEditStaffForm({ roleId: staff.roleId, active: staff.active, isPartner: staff.isPartner || false, assignedEntityIds: staff.assignedEntityIds || [] });
+                            setEditStaffForm({ roleId: staff.roleId, active: staff.active, isPartner: staff.isPartner || false, assignedEntityIds: staff.assignedEntityIds || [], isDriver: staff.isDriver || false });
                             setEditStaffError(null);
                             setShowEditStaffModal(true);
                           }}
@@ -5548,6 +5780,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           </div>
                         </div>
                       )}
+                      <label className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={newStaffForm.isDriver}
+                          onChange={e => setNewStaffForm(prev => ({ ...prev, isDriver: e.target.checked }))}
+                          className="accent-primary size-4"
+                        />
+                        <div>
+                          <p className="text-xs font-bold text-slate-700">Driver Account</p>
+                          <p className="text-[10px] text-slate-400 font-medium">Restricts Delivery List/Payments to only this driver's own assigned deliveries, and enables the combined Deliver &amp; Collect action.</p>
+                        </div>
+                      </label>
                       {addStaffError && <p className="text-xs text-red-600 font-bold">{addStaffError}</p>}
                     </div>
                     <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
@@ -5559,7 +5803,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           if (newStaffForm.isPartner && newStaffForm.assignedEntityIds.length === 0) { setAddStaffError('At least one trading entity must be assigned for a Partner account.'); return; }
                           setAddStaffLoading(true); setAddStaffError(null);
                           try {
-                            const fn = httpsCallable<{ name: string; email: string; password: string; roleId: string; isPartner?: boolean; assignedEntityIds?: string[] }, { uid: string }>(functions, 'createStaffMember');
+                            const fn = httpsCallable<{ name: string; email: string; password: string; roleId: string; isPartner?: boolean; assignedEntityIds?: string[]; isDriver?: boolean }, { uid: string }>(functions, 'createStaffMember');
                             const result = await fn({
                               name: newStaffForm.name.trim(),
                               email: newStaffForm.email.trim(),
@@ -5567,8 +5811,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               roleId: newStaffForm.roleId,
                               isPartner: newStaffForm.isPartner,
                               assignedEntityIds: newStaffForm.assignedEntityIds,
+                              isDriver: newStaffForm.isDriver,
                             });
-                            writeAuditLog('RoleChange', `Created staff account for ${newStaffForm.name.trim()} (${result.data.uid}), role: ${newStaffForm.roleId}, isPartner: ${newStaffForm.isPartner}`);
+                            writeAuditLog('RoleChange', `Created staff account for ${newStaffForm.name.trim()} (${result.data.uid}), role: ${newStaffForm.roleId}, isPartner: ${newStaffForm.isPartner}, isDriver: ${newStaffForm.isDriver}`);
                             setShowAddStaffModal(false);
                           } catch (e: any) {
                             setAddStaffError(e.message || 'Failed to create staff account.');
@@ -5647,6 +5892,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           </div>
                         </div>
                       )}
+                      <label className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer">
+                        <input type="checkbox" checked={editStaffForm.isDriver} onChange={e => setEditStaffForm(prev => ({ ...prev, isDriver: e.target.checked }))} className="accent-primary size-4" />
+                        <div>
+                          <p className="text-xs font-bold text-slate-700">Driver Account</p>
+                          <p className="text-[10px] text-slate-400 font-medium">Restricts Delivery List/Payments to only this driver's own assigned deliveries, and enables the combined Deliver &amp; Collect action.</p>
+                        </div>
+                      </label>
                       {editStaffError && <p className="text-xs text-red-600 font-bold">{editStaffError}</p>}
                     </div>
                     <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
@@ -5702,9 +5954,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               active: editStaffForm.active,
                               isPartner: editStaffForm.isPartner,
                               assignedEntityIds: editStaffForm.assignedEntityIds,
+                              isDriver: editStaffForm.isDriver,
                               updatedAt: Timestamp.now()
                             });
-                            writeAuditLog('RoleChange', `Updated staff member ${editingStaff.name} (${editingStaff.id}) - active: ${editStaffForm.active}, role: ${editStaffForm.roleId}, isPartner: ${editStaffForm.isPartner}`);
+                            writeAuditLog('RoleChange', `Updated staff member ${editingStaff.name} (${editingStaff.id}) - active: ${editStaffForm.active}, role: ${editStaffForm.roleId}, isPartner: ${editStaffForm.isPartner}, isDriver: ${editStaffForm.isDriver}`);
                             setShowEditStaffModal(false);
                             setEditingStaff(null);
                           } catch (e: any) {
@@ -7299,30 +7552,62 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               <Printer className="size-4" /> Print
                             </button>
                             {canDispatch && currentPermissions?.ordersByDish?.edit === true && (
-                              <button
-                                type="button"
-                                onClick={() => handleDispatchDrop(drop)}
-                                disabled={pendingDispatchKey === drop.key}
-                                className="px-4 py-3 bg-warning/10 text-warning hover:bg-warning/20 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
-                              >
-                                {pendingDispatchKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <Truck className="size-4" />}
-                                {pendingDispatchKey === drop.key ? 'Dispatching...' : 'Dispatch'}
-                              </button>
+                              <>
+                                {activeDrivers.length > 0 && (
+                                  <select
+                                    value={dispatchDriverByKey[drop.key] || ''}
+                                    onChange={(e) => setDispatchDriverByKey(prev => ({ ...prev, [drop.key]: e.target.value }))}
+                                    disabled={pendingDispatchKey === drop.key}
+                                    title="Assign a driver for this drop (optional)"
+                                    className="px-2 py-3 rounded-xl text-[10px] font-bold uppercase tracking-wide border border-slate-200 bg-white text-slate-600 cursor-pointer disabled:opacity-60"
+                                  >
+                                    <option value="">Unassigned</option>
+                                    {activeDrivers.map(d => (
+                                      <option key={d.id} value={d.id}>{d.name}</option>
+                                    ))}
+                                  </select>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleDispatchDrop(drop)}
+                                  disabled={pendingDispatchKey === drop.key}
+                                  className="px-4 py-3 bg-warning/10 text-warning hover:bg-warning/20 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                                >
+                                  {pendingDispatchKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <Truck className="size-4" />}
+                                  {pendingDispatchKey === drop.key ? 'Dispatching...' : 'Dispatch'}
+                                </button>
+                              </>
                             )}
                             {allEnRoute && (
                               <span className="px-4 py-3 bg-warning/10 text-warning rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5">
                                 <Truck className="size-4 animate-bounce" /> En Route
                               </span>
                             )}
-                            <button
-                              type="button"
-                              onClick={() => handleMarkDelivered(drop)}
-                              disabled={pendingDeliveryKey === drop.key || currentPermissions?.deliveryList?.edit !== true}
-                              className="px-6 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
-                            >
-                              {pendingDeliveryKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                              {pendingDeliveryKey === drop.key ? 'Marking...' : 'Mark Delivered'}
-                            </button>
+                            {isDriver ? (
+                              // Gated on allEnRoute to match firestore.rules clause 4
+                              // (Driver deliver + claim), which only allows this
+                              // write from 'En route' — a drop still 'Ready'/
+                              // unassigned has to be dispatched first.
+                              <button
+                                type="button"
+                                onClick={() => setDeliverCollectDrop(drop)}
+                                disabled={!allEnRoute || currentPermissions?.deliveryList?.edit !== true}
+                                title={!allEnRoute ? 'Waiting to be dispatched' : undefined}
+                                className="px-6 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                <CheckCircle2 className="size-4" /> Deliver &amp; Collect
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleMarkDelivered(drop)}
+                                disabled={pendingDeliveryKey === drop.key || currentPermissions?.deliveryList?.edit !== true}
+                                className="px-6 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                              >
+                                {pendingDeliveryKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                                {pendingDeliveryKey === drop.key ? 'Marking...' : 'Mark Delivered'}
+                              </button>
+                            )}
                           </>
                         )}
                       </div>
@@ -7354,6 +7639,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           </button>
                         </div>
                         <div className="flex items-center gap-2">
+                          {activeDrivers.length > 0 && currentPermissions?.ordersByDish?.edit === true && (
+                            <select
+                              value={bulkDispatchDriverId}
+                              onChange={(e) => setBulkDispatchDriverId(e.target.value)}
+                              disabled={pendingBulkDispatch}
+                              title="Assign a driver to this dispatch batch (optional)"
+                              className="px-2 py-2 rounded-xl text-[10px] font-bold uppercase tracking-wide border border-slate-600 bg-slate-800 text-white cursor-pointer disabled:opacity-60"
+                            >
+                              <option value="">Unassigned</option>
+                              {activeDrivers.map(d => (
+                                <option key={d.id} value={d.id}>{d.name}</option>
+                              ))}
+                            </select>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleBulkDispatch(selectedDrops)}
@@ -7458,6 +7757,29 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 </div>
               </div>
 
+              {/* Delivery Staff Payments §4.4 — cash a driver is still
+                  holding, awaiting back-office confirmation. Doubles as the
+                  claim-review queue: this is exactly the set of claims a
+                  driver made that haven't been Mark Paid yet. */}
+              {driverCashReconciliation.length > 0 && (
+                <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
+                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">
+                    Driver cash reconciliation — awaiting confirmation
+                  </p>
+                  <div className="divide-y divide-slate-100">
+                    {driverCashReconciliation.map(row => (
+                      <div key={`${row.staffId}::${row.date}`} className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-black text-slate-900 truncate">{row.driverName}</p>
+                          <p className="text-[10px] font-bold text-slate-400">{formatDay(row.date)} · {row.count} item{row.count !== 1 ? 's' : ''}</p>
+                        </div>
+                        <p className="text-sm font-black text-warning shrink-0">{formatCurrency(row.amount)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="bg-white border border-[#E7E0D0] rounded-2xl p-4 shadow-sm flex items-center justify-between">
                 {renderEntityFilterToggle()}
               </div>
@@ -7508,7 +7830,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                   <p className="text-sm font-black text-primary mt-1">{formatCurrency(group.total)}</p>
                                   {group.claimedMethod && (
                                     <p className="text-[11px] text-[#B4703A] font-bold mt-1 bg-[#B4703A]/5 px-2.5 py-1 rounded-lg border border-[#B4703A]/10 inline-block">
-                                      Customer claimed: {group.claimedMethod}{group.claimedReference ? ` (Ref: ${group.claimedReference})` : ''}
+                                      {group.claimedBy === 'driver' ? `Driver claimed (${driverNameById[group.claimedByStaffId || ''] || 'unknown'}): ` : 'Customer claimed: '}
+                                      {group.claimedMethod}{group.claimedReference ? ` (Ref: ${group.claimedReference})` : ''}
+                                    </p>
+                                  )}
+                                  {drop.paymentIssueNote && (
+                                    <p className="text-[11px] text-danger font-bold mt-1 bg-danger/5 px-2.5 py-1 rounded-lg border border-danger/20 inline-block">
+                                      ⚠ {drop.paymentIssueAmount != null ? `Partial: only ${formatCurrency(drop.paymentIssueAmount)} collected — ` : 'Payment issue — '}
+                                      {drop.paymentIssueNote}
                                     </p>
                                   )}
                                   {!drop.claimedMethod && drop.wasReset && (
@@ -7590,7 +7919,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                   </div>
                                   {group.claimedMethod && (
                                     <p className="text-[11px] text-[#B4703A] font-bold mt-1 bg-[#B4703A]/5 px-2.5 py-1 rounded-lg border border-[#B4703A]/10 inline-block">
-                                      Customer claimed: {group.claimedMethod}{group.claimedReference ? ` (Ref: ${group.claimedReference})` : ''}
+                                      {group.claimedBy === 'driver' ? `Driver claimed (${driverNameById[group.claimedByStaffId || ''] || 'unknown'}): ` : 'Customer claimed: '}
+                                      {group.claimedMethod}{group.claimedReference ? ` (Ref: ${group.claimedReference})` : ''}
                                     </p>
                                   )}
                                 </div>
@@ -7618,6 +7948,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                         );
                                       })}
                                     </div>
+                                    {drop.paymentIssueNote && (
+                                      <p className="text-[11px] text-danger font-bold mt-1.5 bg-danger/5 px-2.5 py-1 rounded-lg border border-danger/20 inline-block">
+                                        ⚠ {drop.paymentIssueAmount != null ? `Partial: only ${formatCurrency(drop.paymentIssueAmount)} collected — ` : 'Payment issue — '}
+                                        {drop.paymentIssueNote}
+                                      </p>
+                                    )}
                                     {!drop.claimedMethod && drop.wasReset && (
                                       <p className="text-[11px] text-slate-500 font-bold mt-1.5 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 inline-block">
                                         ↩ Sent back to customer — awaiting new payment method
@@ -7981,6 +8317,137 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   });
                 })()}
               </div>
+            </div>
+          </div>
+        </div>
+        </Portal>
+      )}
+
+      {/* Deliver & Collect Modal — Delivery Staff Payments §4.3. Driver-only,
+          three outcomes. Never writes paymentStatus: 'Paid' — this always
+          records a claim for back office to confirm in the Payments tab,
+          same as a customer's own self-claim. */}
+      {deliverCollectDrop && (
+        <Portal>
+        <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+              <h2 className="text-lg font-black text-slate-900">Deliver &amp; Collect</h2>
+              <button onClick={closeDeliverCollectModal} className="p-2 text-slate-400 hover:text-danger">
+                <X className="size-5" />
+              </button>
+            </div>
+            <div className="p-8 space-y-6">
+              <div className="text-center">
+                <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">{deliverCollectDrop.customerName}</p>
+                <p className="text-4xl font-black text-slate-900 tracking-tight">{formatCurrency(deliverCollectDrop.total)}</p>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2">
+                  This records a claim for back office to confirm — it does not mark the payment as received.
+                </p>
+              </div>
+
+              <div className="flex gap-2 rounded-2xl bg-slate-100 p-1">
+                {([
+                  { key: 'paid', label: 'Paid in full' },
+                  { key: 'partial', label: 'Partial' },
+                  { key: 'issue', label: 'Issue / dispute' },
+                ] as const).map(o => (
+                  <button
+                    key={o.key}
+                    type="button"
+                    onClick={() => setDcOutcome(o.key)}
+                    className={`flex-1 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-wide transition-all ${
+                      dcOutcome === o.key ? 'bg-white text-primary shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+
+              {(dcOutcome === 'paid' || dcOutcome === 'partial') && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    {(() => {
+                      const activeMethods = paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan'));
+                      const currentEntity = entities.find(e => e.id === deliverCollectDrop.entityId) || (entities.length === 1 ? entities[0] : undefined);
+                      const methodsToRender = (currentEntity && currentEntity.acceptedPaymentMethodIds && currentEntity.acceptedPaymentMethodIds.length > 0)
+                        ? activeMethods.filter(m => currentEntity.acceptedPaymentMethodIds!.includes(m.id))
+                        : activeMethods;
+                      return methodsToRender.map(m => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setDcMethodId(m.id)}
+                          className={`p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-1.5 ${
+                            dcMethodId === m.id
+                              ? 'border-primary text-primary bg-primary/[0.02]'
+                              : 'border-slate-100 bg-[#FAF8F5] text-slate-500 hover:border-primary hover:text-primary hover:bg-slate-50'
+                          }`}
+                        >
+                          <span className="text-xl">{m.icon}</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest">{m.name}</span>
+                        </button>
+                      ));
+                    })()}
+                  </div>
+                  {dcMethodId && paymentMethods.find(m => m.id === dcMethodId)?.type === 'Digital' && (
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Transfer reference (optional)</label>
+                      <input
+                        type="text"
+                        value={dcReference}
+                        onChange={e => setDcReference(e.target.value)}
+                        placeholder="e.g. Juice/MauCAS reference shown by customer"
+                        className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+
+              {dcOutcome === 'partial' && (
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Amount actually collected</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={dcAmount}
+                    onChange={e => setDcAmount(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                  />
+                </div>
+              )}
+
+              {(dcOutcome === 'partial' || dcOutcome === 'issue') && (
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                    {dcOutcome === 'issue' ? 'What happened? (required)' : 'Note (optional)'}
+                  </label>
+                  <textarea
+                    value={dcNote}
+                    onChange={e => setDcNote(e.target.value)}
+                    rows={2}
+                    placeholder={dcOutcome === 'issue' ? 'e.g. Customer refused to pay, disputed amount, not home...' : ''}
+                    className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                  />
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={
+                  pendingDeliverCollectKey === deliverCollectDrop.key ||
+                  ((dcOutcome === 'paid' || dcOutcome === 'partial') && !dcMethodId) ||
+                  (dcOutcome === 'issue' && !dcNote.trim())
+                }
+                onClick={() => handleDeliverAndCollect(deliverCollectDrop, dcMethodId ? paymentMethods.find(m => m.id === dcMethodId) : undefined)}
+                className="w-full px-4 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {pendingDeliverCollectKey === deliverCollectDrop.key ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                {pendingDeliverCollectKey === deliverCollectDrop.key ? 'Saving...' : 'Confirm & Mark Delivered'}
+              </button>
             </div>
           </div>
         </div>

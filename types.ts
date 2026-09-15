@@ -210,6 +210,31 @@ export interface OrderItem {
     birthday: number;
     bulk: number;
   };
+  // Delivery Staff Payments (BonManzE_DeliveryPayments_Scope.md). Set at
+  // Dispatch time (folded into the existing Dispatch/Bulk Dispatch action,
+  // not a separate screen) — a Staff.id, whichever driver this drop was
+  // handed to.
+  assignedDriverId?: string;
+  // Who actually submitted the paymentMethodName/paymentReference claim
+  // above — a customer's own self-claim (commitPayment) or a driver's
+  // combined Deliver & Collect action. Absent entirely for pre-existing
+  // claims written before this field existed. NOT a confirmation either
+  // way — paymentStatus only ever changes via staff Mark Paid, same as
+  // always. paymentClaimedByStaffId is the specific Staff.id when it's
+  // 'driver' (needed to group the reconciliation view per driver); unused
+  // for 'customer'.
+  paymentClaimedBy?: 'customer' | 'driver';
+  paymentClaimedByStaffId?: string;
+  // A driver's "Partial" or "Issue / dispute" outcome from the same
+  // combined action — never blocks marking the item Delivered. Left for
+  // back office to resolve manually in the Payments tab (chase the
+  // balance, write it off, or re-open); no automated resolution flow this
+  // round. amountCollected is only meaningful for a partial payment (what
+  // the driver actually walked away with, less than the item's full
+  // price*qty); note is required for an "Issue / dispute" outcome with no
+  // claim at all, optional context for a partial.
+  paymentIssueAmount?: number;
+  paymentIssueNote?: string;
 }
 
 export interface Order {
@@ -298,6 +323,12 @@ export interface Staff {
   createdAt: any;
   isPartner?: boolean;
   assignedEntityIds?: string[];
+  // Delivery Staff Payments (BonManzE_DeliveryPayments_Scope.md). Mirrors
+  // isPartner's shape: a plain boolean flag, checked both client-side
+  // (which UI a driver sees) and in firestore.rules (a real security
+  // boundary, same trust level as Partner accounts — see
+  // isDriverStaff()/isDriverItemAllowed() there).
+  isDriver?: boolean;
 }
 
 export type AuditLogType =

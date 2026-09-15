@@ -1251,7 +1251,7 @@ export const createStaffMember = onCall(async (request) => {
   }
 
   // 3. Validate input parameters
-  const { name, email, password, roleId: targetRoleId, isPartner, assignedEntityIds } = request.data || {};
+  const { name, email, password, roleId: targetRoleId, isPartner, assignedEntityIds, isDriver } = request.data || {};
   if (typeof name !== 'string' || !name.trim()) {
     throw new HttpsError('invalid-argument', 'Name is required.');
   }
@@ -1296,6 +1296,10 @@ export const createStaffMember = onCall(async (request) => {
       createdAt: Timestamp.now(),
       isPartner: typeof isPartner === 'boolean' ? isPartner : false,
       assignedEntityIds: Array.isArray(assignedEntityIds) ? assignedEntityIds.filter(id => typeof id === 'string') : [],
+      // Delivery Staff Payments (BonManzE_DeliveryPayments_Scope.md) — a
+      // real security flag in firestore.rules (isDriverStaff()), same
+      // shape/trust-level as isPartner above, not just a UI label.
+      isDriver: typeof isDriver === 'boolean' ? isDriver : false,
     });
   } catch (err) {
     // If the Firestore write fails, clean up the auth user to keep state consistent
