@@ -3775,7 +3775,16 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         const invoiceRefDisplay = allInvoiced
           ? Array.from(new Set(receiptTarget.lines.map(l => l.item.invoiceNumber))).join(', ')
           : orderIds.join(', ');
-        const anyReprinted = receiptTarget.lines.some(l => (l.item.invoiceReprintCount || 0) > 0);
+        // Always false here — deliberately. invoiceReprintCount is a single
+        // shared counter, bumped only by an admin/staff print (see the
+        // openReceipt comment above). Reading it here would leak admin's own
+        // printing activity onto the customer's copy: a customer opening
+        // their receipt for the very first time would see "Duplicate /
+        // Reprint" simply because staff had already printed a copy for their
+        // own records, which has nothing to do with what the customer has
+        // seen. Reprint tracking is an admin-only concept end-to-end — the
+        // badge stays admin-only too, not just the counter's write side.
+        const anyReprinted = false;
 
         const receiptData: ReceiptData = {
           entityName: receiptTarget.order.entityName,
