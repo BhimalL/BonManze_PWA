@@ -34,6 +34,7 @@
   2. `Mark Ready` (updates preparing batch items to `'Ready'`). Fixed `firestore.rules` item status update rule so setting status to `'Ready'` is authorized by `ordersByDish.edit` (previously required `deliveryList.edit`, which caused Firestore to reject writes and revert the button state).
   3. `Dispatch` (updates ready items in Delivery List tab to `'En route'`). Fixed `canDispatch` and `handleDispatchDrop` target filtering in `Operations.tsx` (`Claude outputs/dispatch-after-ready-fix.md`) so Dispatch appears after dishes are marked `'Ready'`, authorized by `deliveryList.edit` or `ordersByDish.edit`.
   4. `✓ Cooked` / `✓ Delivered` (badges displayed automatically when batch items reach ready, en-route, or delivered/completed state).
+- **Orders by Dish Default Partner Filter (`modules/Operations.tsx`)**: Updated `ordersPartnerFilter` to default to `'noPartner'` for admin/in-house staff and added `!isPartner` guard to ensure partner account sessions are never filtered down to empty.
 - **Tracked Test & Verification Helpers (`scripts/resetTestData.js`, `scripts/verifyDiscountShare.js`)**: Tracked Firestore reset script `scripts/resetTestData.js` (alias/copy of `scripts/resetTransactions.js`) and read-only discount attribution verification script `scripts/verifyDiscountShare.js` directly in git repository to preserve test utilities across `git clean -fd` resets.
 
 ### 3. Discount Stacking & Birthday Business Logic Specification

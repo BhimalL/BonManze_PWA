@@ -712,7 +712,15 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [ordersWeekFilter, setOrdersWeekFilter] = useState<'this' | 'next'>('this');
   const [ordersDayFilter, setOrdersDayFilter] = useState<string | 'all'>('all');
   const [ordersServiceFilter, setOrdersServiceFilter] = useState<'all' | 'Lunch' | 'Dinner'>('all');
-  const [ordersPartnerFilter, setOrdersPartnerFilter] = useState<'all' | 'partnerOnly' | 'noPartner'>('all');
+  // Defaults to 'noPartner' (not 'all') for admin/in-house staff: an entity
+  // with an active Partner assigned is that Partner's own kitchen to run day
+  // to day (they can already Start Cooking themselves — see
+  // BonManzE_PartnerAccounts_Scope.md), so the admin's default Orders by Dish
+  // view surfaces only the entities nobody else is covering, rather than
+  // duplicating a partner's own worklist. Still just a starting point — the
+  // checkboxes right below let admin switch to 'partnerOnly' or back to 'all'
+  // at any time, same as before.
+  const [ordersPartnerFilter, setOrdersPartnerFilter] = useState<'all' | 'partnerOnly' | 'noPartner'>('noPartner');
   // Delivery List filter state
   const [deliveryWeekFilter, setDeliveryWeekFilter] = useState<'this' | 'next'>('this');
   const [deliveryServiceFilter, setDeliveryServiceFilter] = useState<'all' | 'Lunch' | 'Dinner'>('all');
@@ -1503,8 +1511,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     lines.forEach(({ item }) => {
       const day = item.deliveryDate || '';
       if (!allOrdersDateKeys.has(day)) return;
-      if (ordersPartnerFilter === 'partnerOnly' && !entitiesWithActivePartner.has(item.entityId || '')) return;
-      if (ordersPartnerFilter === 'noPartner' && entitiesWithActivePartner.has(item.entityId || '')) return;
+      // Never applied to a Partner account's own session — the checkboxes
+      // that drive this are already hidden from Partners (see the !isPartner
+      // guard around them below), but the filter now defaults to 'noPartner'
+      // for admin/in-house staff, and a Partner's own assigned entity is
+      // always itself in entitiesWithActivePartner (they're the active
+      // partner). Without this guard a Partner login would have its entire
+      // Orders by Dish filtered down to nothing the moment their staff doc
+      // loads and isPartner flips true — the guard makes that impossible
+      // regardless of load-timing, rather than relying on the default value
+      // this state happened to start at.
+      if (!isPartner && ordersPartnerFilter === 'partnerOnly' && !entitiesWithActivePartner.has(item.entityId || '')) return;
+      if (!isPartner && ordersPartnerFilter === 'noPartner' && entitiesWithActivePartner.has(item.entityId || '')) return;
       const service: Service = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
       const key = `${service}::${item.name}`;
       if (!days[day]) days[day] = {};
@@ -1524,7 +1542,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       }
     });
     return days;
-  }, [lines, allOrdersDateKeys, ordersPartnerFilter, entitiesWithActivePartner]);
+  }, [lines, allOrdersDateKeys, ordersPartnerFilter, entitiesWithActivePartner, isPartner]);
 
   // Active days for the orders tab, based on the week filter
   const ordersDaysForWeek = useMemo(() => ordersWeekFilter === 'next' ? nextWeekDays : weekDays, [ordersWeekFilter, weekDays, nextWeekDays]);
