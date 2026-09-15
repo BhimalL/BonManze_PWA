@@ -26,7 +26,6 @@ import {
   Copy,
   Check,
   Receipt,
-  Printer,
   CalendarDays,
   UtensilsCrossed,
   Truck,
@@ -84,6 +83,8 @@ import {
   calculateTotal,
   specialPriceInfo
 } from './store';
+import { ReceiptModal, resolveStandardLabel } from './Receipt';
+import type { ReceiptData } from './Receipt';
 
 // Edits/cancels lock at SYSTEM_CONFIG.cutoffTime on a day relative to
 // delivery, given by SYSTEM_CONFIG.cutoffDayOffset (0 = delivery day itself
@@ -868,6 +869,14 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         // orderProrationFactor for every real order, even ones confirmCheckout
         // already wrote exact per-item shares for.
         discountShare: it.discountShare,
+        // Same class of bug as discountShare above: without these three,
+        // the receipt's allInvoiced/invoiceRefDisplay/anyReprinted locals
+        // never see a real invoice number even when issueInvoiceOnPayment
+        // already minted and stored one — silently falls back to showing
+        // the raw order id instead of e.g. "Inv-Rks-000000005".
+        invoiceNumber: it.invoiceNumber,
+        invoiceIssuedAt: it.invoiceIssuedAt,
+        invoiceReprintCount: it.invoiceReprintCount,
       }));
       const allPaid = items.length > 0 && items.every(i => i.paymentStatus === 'Paid');
       const createdAtIso = o.createdAt && typeof o.createdAt.toDate === 'function'
@@ -1765,17 +1774,17 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // shares this line's payment reference (paymentGroups), never just the one
   // line that was clicked and never an entire order regardless of how many
   // separate payments it was actually settled with.
+  // Reprint tracking is admin-only by design (Operations' own receipt/print
+  // button bumps invoiceReprintCount) — a customer opening or printing their
+  // own receipt from their own portal never counts as a "reprint", so this
+  // no longer bumps the counter here at all. It used to bump it on every
+  // open (not just an actual print), which meant simply viewing a receipt
+  // twice already showed the "Duplicate / Reprint" badge — a second,
+  // separate bug from the one being fixed alongside this.
   const openReceipt = (line: Line) => {
     const key = line.item.paymentReference || `solo-${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`;
     const targetLines = paymentGroups.get(key) || [line];
     setReceiptTarget({ order: line.order, lines: targetLines });
-    targetLines.forEach(l => {
-      if (l.item.invoiceNumber && l.item._fsItemId) {
-        updateDoc(doc(db, 'orders', l.order.id, 'items', l.item._fsItemId), {
-          invoiceReprintCount: increment(1),
-        }).catch(e => console.error('Reprint-count bump failed (non-fatal)', e));
-      }
-    });
   };
   const submitRating = async () => {
     if (!rateTarget || !rateStars) return;
@@ -3602,7 +3611,6 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
       {/* --- RECEIPT SHEET --- */}
       {receiptTarget && (() => {
-        const receiptTotal = receiptTarget.lines.reduce((t, l) => t + l.item.price, 0);
         // Every line in a receipt was settled in the same payment, so
         // method/reference are shown once at the top, not repeated per line.
         const first = receiptTarget.lines[0];
@@ -3618,9 +3626,6 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         // effect at checkout time isn't stored per order/item.
         const vatOn = SYSTEM_CONFIG.vatEnabled;
         const vatRate = SYSTEM_CONFIG.vatRate;
-        // Legacy fallback back-calculation from raw item sum
-        const legacyNetTotal = vatOn ? receiptTotal / (1 + vatRate / 100) : receiptTotal;
-        const legacyVatAmount = receiptTotal - legacyNetTotal;
         const billToAddress = currentUser?.addresses?.[0];
         // Same Order -> Offering -> Day nesting as My Order — a receipt can
         // span more than one order (a "Pay balance" claim settles everything
@@ -3704,188 +3709,75 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               bulk: round2(partialLineCalcs.reduce((s, c) => s + c.bulk, 0)),
             } : undefined);
 
+        const standardLabel = resolveStandardLabel(firstOrder?.discountBreakdown?.standardLabel, displayDiscountReason);
+
         const allInvoiced = receiptTarget.lines.every(l => !!l.item.invoiceNumber);
         const invoiceRefDisplay = allInvoiced
           ? Array.from(new Set(receiptTarget.lines.map(l => l.item.invoiceNumber))).join(', ')
           : orderIds.join(', ');
         const anyReprinted = receiptTarget.lines.some(l => (l.item.invoiceReprintCount || 0) > 0);
 
+        const receiptData: ReceiptData = {
+          entityName: receiptTarget.order.entityName,
+          entityId: receiptTarget.order.entityId,
+          vatLabel: vatOn ? 'Tax invoice' : 'Receipt',
+          entityDetails: receiptTarget.order.entityId ? {
+            brn: receiptTarget.order.entityBrn,
+            vatNumber: receiptTarget.order.entityVatNumber,
+            address: receiptTarget.order.entityAddress,
+            phone: receiptTarget.order.entityPhone,
+            email: receiptTarget.order.entityEmail,
+          } : undefined,
+          fallbackVatNumber: SYSTEM_CONFIG.vatNumber,
+          billToName: currentUser?.name || receiptTarget.order.customerName,
+          billToPhone: currentUser?.phone,
+          billToEmail: currentUser?.email,
+          billToAddress: billToAddress ? `${billToAddress.street}, ${billToAddress.city}` : undefined,
+          invoiceRefLabel: orderIds.length > 1 ? 'Invoice refs' : 'Invoice ref',
+          invoiceRefDisplay,
+          dateDisplay: orderIds.length === 1
+            ? new Date(receiptTarget.order.timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+            : undefined,
+          paymentMethodName: first?.item.paymentMethodName,
+          paymentReference: first?.item.paymentReference,
+          groups: receiptGroups.flatMap(og => og.services.map(sg => ({
+            key: `${og.order.id}-${sg.service}`,
+            orderLabel: receiptGroups.length > 1 ? `Order ${og.order.id}` : undefined,
+            serviceLabel: og.services.length > 1 ? (sg.service === 'Dinner' ? '🌙 Dinner' : '☀️ Lunch') : undefined,
+            items: sg.days.flatMap(d => d.items).map((line, i) => {
+              const { detail, person } = splitNotesTag(line.item.notes);
+              return {
+                key: `${og.order.id}-${sg.service}-${i}`,
+                dayLabel: line.item.deliveryDay,
+                name: line.item.name,
+                qty: line.item.qty,
+                price: line.item.price,
+                detail,
+                person,
+                extraLabel: (!!line.seq && line.seq > 0) ? `Extra ${line.seq + 1}` : undefined,
+              };
+            }),
+          }))),
+          subtotal: displaySubtotal,
+          discountLines: displayDiscountBreakdown
+            ? [
+                ...(displayDiscountBreakdown.standard > 0 ? [{ label: `${standardLabel} discount (${displayDiscountBreakdown.standardRate}%)`, amount: displayDiscountBreakdown.standard }] : []),
+                ...(displayDiscountBreakdown.birthday > 0 ? [{ label: `Birthday discount (${displayDiscountBreakdown.birthdayRate}%)`, amount: displayDiscountBreakdown.birthday }] : []),
+                ...(displayDiscountBreakdown.bulk > 0 ? [{ label: `Full-week discount (${displayDiscountBreakdown.bulkRate}%)`, amount: displayDiscountBreakdown.bulk }] : []),
+              ]
+            : (displayDiscount > 0 ? [{ label: `Discount${displayDiscountReason ? ` (${displayDiscountReason})` : ''}`, amount: displayDiscount }] : []),
+          vat: displayVat,
+          vatRate,
+          total: displayTotal,
+          anyReprinted,
+        };
+
         return (
-          <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md overflow-y-auto p-4">
-            <style>{`
-              @media print {
-                body * { visibility: hidden; }
-                .bmz-receipt-printable, .bmz-receipt-printable * { visibility: visible; }
-                .bmz-receipt-printable { position: fixed; inset: 0; margin: 0; max-width: 100%; max-height: none; overflow: visible; box-shadow: none; border-radius: 0; }
-                .bmz-no-print { display: none !important; }
-              }
-            `}</style>
-            <div className="min-h-full flex items-center justify-center py-8">
-              <div className="bmz-receipt-printable bg-white rounded-[32px] w-full max-w-sm shadow-2xl overflow-x-hidden overflow-y-auto max-h-[85vh]">
-                <div className="p-6">
-                <div className="flex items-start justify-between mb-1">
-                  <div className="flex items-center gap-2.5">
-                    {SYSTEM_CONFIG.businessLogoUrl && (
-                      <img src={SYSTEM_CONFIG.businessLogoUrl} alt={SYSTEM_CONFIG.businessName} className="size-9 rounded-lg object-cover shrink-0" />
-                    )}
-                    <div>
-                      <p className="text-lg font-black text-slate-900">{receiptTarget.order.entityName || SYSTEM_CONFIG.businessName}</p>
-                      <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{SYSTEM_CONFIG.businessTagline}</p>
-                    </div>
-                  </div>
-                  <button onClick={() => setReceiptTarget(null)} className="bmz-no-print p-1.5 text-slate-400 hover:text-danger"><X className="size-5" /></button>
-                </div>
-                <p className="text-[10px] font-black uppercase text-primary tracking-widest mt-3">{vatOn ? 'Tax invoice' : 'Receipt'}</p>
-                {anyReprinted && (
-                  <p className="text-[10px] font-black uppercase text-amber-700 tracking-widest mt-1 border border-amber-300 bg-amber-50 rounded px-1.5 py-0.5 inline-block">
-                    Duplicate / Reprint
-                  </p>
-                )}
-                {receiptTarget.order.entityId ? (
-                  <div className="text-[10px] text-slate-400 mt-1 space-y-0.5">
-                    {receiptTarget.order.entityBrn && <p>BRN: {receiptTarget.order.entityBrn}</p>}
-                    {receiptTarget.order.entityVatNumber && <p>VRN: {receiptTarget.order.entityVatNumber}</p>}
-                    {receiptTarget.order.entityAddress && <p>{receiptTarget.order.entityAddress}</p>}
-                    {receiptTarget.order.entityPhone && <p>{receiptTarget.order.entityPhone}</p>}
-                    {receiptTarget.order.entityEmail && <p>{receiptTarget.order.entityEmail}</p>}
-                  </div>
-                ) : (
-                  <>
-                    {vatOn && SYSTEM_CONFIG.vatNumber && (
-                      <p className="text-[10px] text-slate-400 mt-0.5">VRN {SYSTEM_CONFIG.vatNumber}</p>
-                    )}
-                  </>
-                )}
-
-                <div className="border-t border-dashed border-slate-300 mt-3 pt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                  <div>
-                    <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-1">Bill to</p>
-                    <p className="font-black text-slate-800">{currentUser?.name || receiptTarget.order.customerName}</p>
-                    {currentUser?.phone && <p className="text-slate-500 mt-0.5">{currentUser.phone}</p>}
-                    {currentUser?.email && <p className="text-slate-500 mt-0.5 break-all">{currentUser.email}</p>}
-                    {billToAddress && <p className="text-slate-500 mt-0.5">{billToAddress.street}, {billToAddress.city}</p>}
-                  </div>
-                  <div className="text-right">
-                    <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-1">{orderIds.length > 1 ? 'Invoice refs' : 'Invoice ref'}</p>
-                    <p className="font-mono text-slate-600">{invoiceRefDisplay}</p>
-                    {orderIds.length === 1 && (
-                      <p className="text-slate-500 mt-1">{new Date(receiptTarget.order.timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
-                    )}
-                  </div>
-                </div>
-
-                {(first?.item.paymentMethodName || first?.item.paymentReference) && (
-                  <div className="border-t border-dashed border-slate-300 mt-3 pt-3 space-y-1 text-xs">
-                    {first?.item.paymentMethodName && (
-                      <div className="flex justify-between"><span className="text-slate-400 font-bold">Payment method</span><span className="text-slate-600">{first.item.paymentMethodName}</span></div>
-                    )}
-                    {first?.item.paymentReference && (
-                      <div className="flex justify-between gap-3"><span className="text-slate-400 font-bold shrink-0">Payment ref</span><span className="text-slate-600 text-right break-all">{first.item.paymentReference}</span></div>
-                    )}
-                  </div>
-                )}
-
-                <div className="border-t border-dashed border-slate-300 mt-3 pt-3">
-                  <div className="flex text-[9px] font-black uppercase text-slate-400 tracking-widest pb-2">
-                    <span className="flex-1">Description</span>
-                    <span className="w-8 text-center shrink-0">Qty</span>
-                    <span className="w-16 text-right shrink-0">Amount</span>
-                  </div>
-                  <div className="space-y-4">
-                    {receiptGroups.map(og => (
-                      <div key={og.order.id}>
-                        {receiptGroups.length > 1 && (
-                          <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest mb-1.5">Order {og.order.id}</p>
-                        )}
-                        <div className="space-y-3">
-                          {og.services.map(sg => (
-                            <div key={sg.service}>
-                              {og.services.length > 1 && (
-                                <p className="text-[9px] font-black uppercase text-accent tracking-widest mb-1.5">{sg.service === 'Dinner' ? '🌙 Dinner' : '☀️ Lunch'}</p>
-                              )}
-                              <div className="space-y-3">
-                                {sg.days.flatMap(d => d.items).map((line, i) => {
-                                  const { detail, person } = splitNotesTag(line.item.notes);
-                                  return (
-                                    <div key={i} className={i > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
-                                      <div className="flex items-start gap-2">
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-xs font-bold text-slate-800">{line.item.deliveryDay} · {line.item.name}</p>
-                                          {detail && <p className="text-[11px] text-slate-400 mt-0.5">{detail}</p>}
-                                        </div>
-                                        <span className="w-8 text-center text-xs text-slate-600 shrink-0">{line.item.qty}</span>
-                                        <span className="w-16 text-right text-xs font-black text-slate-900 shrink-0">{formatCurrency(line.item.price)}</span>
-                                      </div>
-                                      {((!!line.seq && line.seq > 0) || person) && (
-                                        <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
-                                          {!!line.seq && line.seq > 0 && <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[9px] font-black uppercase">Extra {line.seq + 1}</span>}
-                                          {person && <PersonTag name={person} />}
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="border-t border-dashed border-slate-300 mt-3 pt-3 space-y-1.5">
-                  <div className="flex justify-between text-xs text-slate-500 font-bold"><span>Subtotal</span><span>Rs {displaySubtotal.toFixed(2)}</span></div>
-                  {displayDiscountBreakdown ? (
-                    <>
-                      {displayDiscountBreakdown.standard > 0 && (
-                        <div className="flex justify-between text-xs text-primary font-bold">
-                          <span>Standard discount ({displayDiscountBreakdown.standardRate}%)</span>
-                          <span>-Rs {displayDiscountBreakdown.standard.toFixed(2)}</span>
-                        </div>
-                      )}
-                      {displayDiscountBreakdown.birthday > 0 && (
-                        <div className="flex justify-between text-xs text-primary font-bold">
-                          <span>Birthday discount ({displayDiscountBreakdown.birthdayRate}%)</span>
-                          <span>-Rs {displayDiscountBreakdown.birthday.toFixed(2)}</span>
-                        </div>
-                      )}
-                      {displayDiscountBreakdown.bulk > 0 && (
-                        <div className="flex justify-between text-xs text-primary font-bold">
-                          <span>Full-week discount ({displayDiscountBreakdown.bulkRate}%)</span>
-                          <span>-Rs {displayDiscountBreakdown.bulk.toFixed(2)}</span>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    displayDiscount > 0 && (
-                      <div className="flex justify-between text-xs text-primary font-bold">
-                        <span>Discount{displayDiscountReason ? ` (${displayDiscountReason})` : ''}</span>
-                        <span>-Rs {displayDiscount.toFixed(2)}</span>
-                      </div>
-                    )
-                  )}
-                  {(vatOn || displayVat > 0) && (
-                    <div className="flex justify-between text-xs text-slate-500 font-bold"><span>VAT ({vatRate}%)</span><span>Rs {displayVat.toFixed(2)}</span></div>
-                  )}
-                  <div className="flex justify-between items-baseline pt-1.5 border-t border-[#E7E0D0]">
-                    <span className="text-xs font-black uppercase text-slate-400 tracking-widest">Total paid</span>
-                    <span className="text-lg font-black text-success">Rs {displayTotal.toFixed(2)}</span>
-                  </div>
-                </div>
-
-                <p className="text-center text-[10px] text-slate-400 mt-5">Thank you for ordering with {receiptTarget.order.entityName || SYSTEM_CONFIG.businessName} 🌿</p>
-
-                <div className="bmz-no-print flex gap-2 mt-5">
-                  <button onClick={() => setReceiptTarget(null)} className="flex-1 py-2.5 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Close</button>
-                  <button onClick={() => window.print()} className="flex-1 py-2.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5">
-                    <Printer className="size-3.5" /> Print / Save PDF
-                  </button>
-                </div>
-              </div>
-            </div>
-            </div>
-          </div>
+          <ReceiptModal
+            data={receiptData}
+            onClose={() => setReceiptTarget(null)}
+            onPrint={() => window.print()}
+          />
         );
       })()}
 

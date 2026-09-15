@@ -525,9 +525,20 @@ export const confirmCheckout = onCall(async (request) => {
   const vatRate = config.vatEnabled ? (config.vatRate || 0) / 100 : 0;
   const vat = round2(netTotal * vatRate);
   const total = round2(netTotal + vat);
+  // Human-readable name for whichever rate actually won the max(tier%,
+  // group%) comparison — computed once here so it can be persisted onto
+  // discountBreakdown.standardLabel (read directly by receipts/order
+  // history) AND folded into discountReason (the free-text summary), rather
+  // than only living in discountReason and having every reader re-derive it
+  // by string-parsing.
+  const standardLabel = (groupObj && groupRate > standardTierRate)
+    ? `${groupObj.name} Group`
+    : (tierObj?.name ? `${tierObj.name} Tier` : 'Standard');
+
   const discountBreakdown = {
     standard: standardDiscountRounded,
     standardRate: effectiveStandardRate,
+    standardLabel,
     birthday: birthdayDiscountRounded,
     birthdayRate: birthdayTierRate,
     bulk: bulkDiscountRounded,
@@ -538,10 +549,6 @@ export const confirmCheckout = onCall(async (request) => {
   const orderRef = db.collection('orders').doc();
 
   await db.runTransaction(async (tx) => {
-    const standardLabel = (groupObj && groupRate > standardTierRate)
-      ? `${groupObj.name} Group`
-      : (tierObj?.name ? `${tierObj.name} Tier` : 'Standard');
-
     const reasonParts = [];
     if (standardDiscountRounded > 0) reasonParts.push(`${standardLabel} (${effectiveStandardRate}%)`);
     if (birthdayDiscountRounded > 0) reasonParts.push(`Birthday (${birthdayTierRate}%)`);

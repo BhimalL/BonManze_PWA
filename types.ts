@@ -224,6 +224,14 @@ export interface Order {
   discountBreakdown?: {
     standard: number;
     standardRate: number;
+    // The human-readable name for whichever rate actually won the
+    // max(tier%, group%) comparison — e.g. "ABC Motors Co Ltd Group" or
+    // "Diamond Tier" — written once at order-creation time (confirmCheckout)
+    // so every reader (receipts, order history) shows the real name instead
+    // of a generic "Standard" label. Absent on orders placed before this
+    // field existed; readers should fall back to parsing discountReason,
+    // then to a plain "Standard" label, for those.
+    standardLabel?: string;
     birthday: number;
     birthdayRate: number;
     bulk: number;
