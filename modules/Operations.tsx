@@ -5874,7 +5874,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <button onClick={() => { setShowAddEntityModal(false); setEntityActionError(null); }} className="p-2 text-slate-400 hover:text-red-500"><X className="size-4" /></button>
                     </div>
                     <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
-                      {(['name', 'brn', 'vatNumber', 'bankReference', 'address', 'email', 'phone', 'invoicePrefix', 'paymentRefPrefix'] as const).map(f => (
+                      {(['name', 'brn', 'vatNumber', 'bankReference', 'address', 'email', 'phone', 'invoicePrefix', 'paymentRefPrefix'] as const).map(f => {
+                        const isRequired = f === 'name' || f === 'invoicePrefix' || f === 'paymentRefPrefix';
+                        return (
                         <div key={f}>
                           <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">
                             {f === 'vatNumber' ? 'VAT Number'
@@ -5886,6 +5888,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               : f === 'email' ? 'Email'
                               : f === 'phone' ? 'Phone'
                               : 'Entity Name'}
+                            {isRequired && <span className="text-red-500 ml-0.5">*</span>}
                           </label>
                           <input
                             type={f === 'email' ? 'email' : 'text'}
@@ -5894,8 +5897,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
                             placeholder={f === 'invoicePrefix' ? 'e.g. INV-A' : f === 'paymentRefPrefix' ? 'e.g. PAY-A' : undefined}
                           />
+                          {f === 'paymentRefPrefix' && (
+                            <p className="mt-1 text-[10px] text-slate-400 font-medium">Required — every entity needs its own prefix so payment references never collide across entities.</p>
+                          )}
                         </div>
-                      ))}
+                        );
+                      })}
                       <div>
                         <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">Logo (optional)</label>
                         {(() => {
@@ -6048,6 +6055,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         disabled={entityActionLoading}
                         onClick={async () => {
                           if (!entityForm.name.trim()) { setEntityActionError('Entity name is required.'); return; }
+                          if (!entityForm.invoicePrefix.trim()) { setEntityActionError('Invoice Prefix is required.'); return; }
+                          if (!entityForm.paymentRefPrefix.trim()) { setEntityActionError('Payment Ref Prefix is required.'); return; }
                           setEntityActionLoading(true); setEntityActionError(null);
                           try {
                             let logoStoragePath: string | undefined;
