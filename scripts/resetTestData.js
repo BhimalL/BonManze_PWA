@@ -1,87 +1,114 @@
-// One-off Admin SDK utility — full transaction reset for a clean persistence test.
+// scripts/resetTestData.js
 //
-// Scope (confirmed with Bhimal 2026-09-13): deletes every order + item, resets every
-// customer's loyalty stats back to their registration-time baseline (matches
-// functions/index.js's registerCustomer defaults exactly: points:0, storeCredit:0,
-// tier:'t1' (Bronze), ltv:0), and removes the transaction-linked audit log entries
-// (PaymentConfirmed/DeliveryConfirmed) that referenced the now-deleted orders.
+// Dev/test-only reset: wipes every order (and its items/invoiceAssignments
+// subcollections), resets each customer back to a clean starting state
+// (points/ltv/storeCredit zeroed, tier back to the lowest-threshold tier,
+// lastOrder cleared), and clears the auditLogs collection — so a full
+// manual QA pass can start from a genuinely clean slate with nothing left
+// pointing at deleted history. Never touches roles, staff, entities,
+// menu/catalog config, or the rest of a customer's profile (name/email/
+// phone/group/birthday/addresses/entityId/registrationStatus).
 //
-// Deliberately untouched: customers' own profile fields (name/email/phone/addresses/
-// registrationStatus/gdprConsent/referenceCode/avatar), staff, roles, entities, menu
-// data, config, and ConfigChange/RoleChange audit log entries — none of those are
-// transaction byproducts.
+// Firestore emulator only — hardcodes the emulator host, same guard
+// scripts/cleanupFixtures.js and scripts/seedCustomers.js already use, so
+// this can never accidentally run against a real project.
 //
-// Run this against a LIVE emulator only (it needs a real Firestore connection to read/
-// write against) — start it in its own terminal window while `npm run emulators` is
-// already up and showing "All emulators ready!", not before. After it finishes and you've
-// confirmed the counts below, do the usual single Ctrl+C / wait-for-"Export complete"
-// clean shutdown so this clean state is what gets persisted for the next test.
-
-import { initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+// Tier reset: picks whichever tier in loyaltyTiers/current has the lowest
+// pointsThreshold (the same "items" array shape confirmCheckout already
+// reads) and sets every customer's `tier` to that tier's id — this is the
+// "start of the loyalty ladder," not a hardcoded tier name, so it stays
+// correct even if the tier list is ever edited in Settings. If
+// loyaltyTiers/current has no tiers at all, tier is left untouched for
+// every customer and a warning is printed (nothing to reset to).
+//
+// HOW TO RUN:
+//   1. Make sure the Firebase Emulator Suite is running (npm run emulators).
+//   2. From the repo root, in a second terminal: node scripts/resetTestData.js
 
 process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
+process.env.FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9099';
+
+import { initializeApp } from 'firebase-admin/app';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
 initializeApp({ projectId: 'demo-bonmanze' });
-
 const db = getFirestore();
 
-async function run() {
-  console.log('Starting full transaction reset...\n');
-
-  // 1. Delete every order and its items subcollection.
-  const orders = await db.collection('orders').get();
-  console.log(`Found ${orders.size} order document(s).`);
-  let itemsDeleted = 0;
-  for (const orderDoc of orders.docs) {
-    const items = await orderDoc.ref.collection('items').get();
-    for (const itemDoc of items.docs) {
-      await itemDoc.ref.delete();
-      itemsDeleted++;
-      console.log(`  Deleted item: orders/${orderDoc.id}/items/${itemDoc.id}`);
+// Recursively deletes every document in a collection, including each
+// document's subcollections — Firestore doesn't cascade-delete
+// subcollections on its own, and orders/{orderId} currently has two:
+// `items` (always present) and `invoiceAssignments` (new, from the
+// invoice-numbering rebuild — only present on orders paid since c0be600).
+async function deleteCollectionDeep(collectionRef) {
+  const snap = await collectionRef.get();
+  for (const doc of snap.docs) {
+    const subcollections = await doc.ref.listCollections();
+    for (const sub of subcollections) {
+      await deleteCollectionDeep(sub);
     }
-    await orderDoc.ref.delete();
-    console.log(`Deleted order: ${orderDoc.id}`);
+    await doc.ref.delete();
   }
-  console.log(`\nOrders deleted: ${orders.size}. Items deleted: ${itemsDeleted}.\n`);
-
-  // 2. Reset every customer's loyalty stats to the registration baseline.
-  const customers = await db.collection('customers').get();
-  console.log(`Found ${customers.size} customer document(s).`);
-  for (const custDoc of customers.docs) {
-    const before = custDoc.data();
-    await custDoc.ref.update({ points: 0, storeCredit: 0, tier: 't1', ltv: 0 });
-    console.log(
-      `Reset loyalty stats: customers/${custDoc.id} (${before.name || before.email}) ` +
-      `[was points=${before.points}, ltv=${before.ltv}, tier=${before.tier}, storeCredit=${before.storeCredit}]`
-    );
-  }
-  console.log(`\nCustomers reset: ${customers.size}.\n`);
-
-  // 3. Delete transaction-linked audit log entries only.
-  const auditSnap = await db.collection('auditLog').get();
-  const targets = auditSnap.docs.filter(d =>
-    ['PaymentConfirmed', 'DeliveryConfirmed'].includes(d.data().type)
-  );
-  console.log(`Found ${targets.length} transaction-linked audit log entr(ies) out of ${auditSnap.size} total.`);
-  for (const auditDoc of targets) {
-    await auditDoc.ref.delete();
-    console.log(`Deleted audit log entry: ${auditDoc.id} (${auditDoc.data().type})`);
-  }
-  console.log(`\nAudit log entries deleted: ${targets.length}.\n`);
-
-  // Verification
-  const remainingOrders = await db.collection('orders').get();
-  const remainingCustomers = await db.collection('customers').get();
-  const remainingAudit = await db.collection('auditLog').get();
-  console.log('=== Verification ===');
-  console.log(`Remaining orders: ${remainingOrders.size} (expected 0)`);
-  console.log(`Remaining auditLog entries: ${remainingAudit.size} (ConfigChange/RoleChange only, expected unchanged)`);
-  console.log(`Customers (${remainingCustomers.size}):`);
-  remainingCustomers.forEach(d => {
-    const c = d.data();
-    console.log(`  - ${d.id} (${c.name}): points=${c.points}, ltv=${c.ltv}, tier=${c.tier}, storeCredit=${c.storeCredit}`);
-  });
+  return snap.size;
 }
 
-run().catch(console.error);
+// Flat collection, no subcollections expected — plain batched-ish delete
+// (one at a time is fine at test-data volumes; matches the simple style
+// scripts/cleanupFixtures.js already uses for its own deletes).
+async function deleteCollectionFlat(collectionRef) {
+  const snap = await collectionRef.get();
+  for (const doc of snap.docs) {
+    await doc.ref.delete();
+  }
+  return snap.size;
+}
+
+async function findBaseTierId() {
+  const tiersSnap = await db.collection('loyaltyTiers').doc('current').get();
+  const tiers = (tiersSnap.data() || {}).items || [];
+  if (tiers.length === 0) return null;
+  const lowest = tiers.reduce((min, t) =>
+    (typeof t.pointsThreshold === 'number' && t.pointsThreshold < min.pointsThreshold) ? t : min
+  , tiers[0]);
+  return lowest.id || null;
+}
+
+async function run() {
+  console.log('Deleting all orders (and items/invoiceAssignments subcollections)...');
+  const orderCount = await deleteCollectionDeep(db.collection('orders'));
+  console.log(`Deleted ${orderCount} order(s).`);
+
+  console.log('Clearing auditLogs...');
+  const auditCount = await deleteCollectionFlat(db.collection('auditLogs'));
+  console.log(`Deleted ${auditCount} audit log entr${auditCount === 1 ? 'y' : 'ies'}.`);
+
+  const baseTierId = await findBaseTierId();
+  if (!baseTierId) {
+    console.warn('loyaltyTiers/current has no tiers — customer tier will be left untouched.');
+  } else {
+    console.log(`Resetting customer tier to base tier: ${baseTierId}`);
+  }
+
+  console.log('Resetting customers: points/ltv/storeCredit to 0, lastOrder cleared' + (baseTierId ? ', tier reset to base' : '') + '...');
+  const customersSnap = await db.collection('customers').get();
+  let customerCount = 0;
+  for (const doc of customersSnap.docs) {
+    const update = {
+      points: 0,
+      ltv: 0,
+      storeCredit: 0,
+      lastOrder: FieldValue.delete(),
+    };
+    if (baseTierId) update.tier = baseTierId;
+    await doc.ref.update(update);
+    customerCount += 1;
+  }
+  console.log(`Reset ${customerCount} customer(s).`);
+
+  console.log('Done. Orders and auditLogs cleared; customer points/ltv/storeCredit/lastOrder reset' + (baseTierId ? ' and tier reset to base' : '') + '. Group, entity assignment, and registration status were left untouched.');
+  process.exit(0);
+}
+
+run().catch((e) => {
+  console.error('Reset failed:', e);
+  process.exit(1);
+});
