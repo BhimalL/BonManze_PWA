@@ -779,6 +779,58 @@ export const issueInvoiceOnPayment = onDocumentUpdated('orders/{orderId}/items/{
   });
 });
 
+// mintPaymentReference — callable. Mints a real, sequential, per-entity
+// payment reference — same shape as issueInvoiceOnPayment's invoice
+// numbers (entity.paymentRefCounter, incremented in a transaction,
+// formatted as `${prefix}-${counter.padStart(9,'0')}`) — instead of the old
+// client-side `BMZ-PAY-${random 6 digits}` string, which had no entity
+// identity and only ~900,000 possible values.
+//
+// Called the moment a customer picks a payment method in the Pay Sheet
+// (CustomerPortal.tsx's selectPayMethod), NOT when the sheet first opens
+// and NOT inside commitPayment: the customer needs to see and quote this
+// reference *before* they make their Juice/MauCAS transfer, so it has to
+// exist by the time the method is chosen — by the time commitPayment runs
+// they've already sent the money and are just confirming the claim, which
+// is too late to hand them a fresh number. This does mean a customer who
+// picks a method and then backs out (chooses a different one, or closes
+// the sheet) leaves a gap in the sequence — same tradeoff invoice numbers
+// already accept for the same reason (see issueInvoiceOnPayment's own
+// per-drop coordination doc), not a correctness issue.
+//
+// Falls back to the old random format (no Firestore write at all) whenever
+// there's no entity, or the entity has no paymentRefPrefix configured yet —
+// exactly like issueInvoiceOnPayment's own "no invoicePrefix configured
+// yet — skip" fallback — so an unconfigured entity never blocks a customer
+// from paying.
+export const mintPaymentReference = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
+  }
+  const { entityId } = request.data || {};
+  const randomFallback = () => `BMZ-PAY-${Math.floor(Math.random() * 900000 + 100000)}`;
+
+  if (!entityId || typeof entityId !== 'string') {
+    return { ref: randomFallback() };
+  }
+
+  const entityRef = db.collection('entities').doc(entityId);
+  const minted = await db.runTransaction(async (tx) => {
+    const entitySnap = await tx.get(entityRef);
+    if (!entitySnap.exists) return null;
+    const entity = entitySnap.data();
+    const prefix = entity.paymentRefPrefix;
+    if (!prefix || typeof prefix !== 'string' || !prefix.trim()) {
+      return null; // no paymentRefPrefix configured yet — fall back below
+    }
+    const nextSeq = (entity.paymentRefCounter || 0) + 1;
+    tx.update(entityRef, { paymentRefCounter: nextSeq });
+    return `${prefix.trim()}-${String(nextSeq).padStart(9, '0')}`;
+  });
+
+  return { ref: minted || randomFallback() };
+});
+
 // Helper: Calculate net order total for a list of items, replicating confirmCheckout pricing rules
 function calculateItemsTotal(items, customer, tiersArr, groupsArr, config) {
   if (items.length === 0) {

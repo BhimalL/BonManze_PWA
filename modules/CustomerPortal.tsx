@@ -630,6 +630,17 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     kind: 'item'; orderId: string; date: string; slot: string; amount: number; what: string; ref: string; fsItemId?: string;
   } | { kind: 'balance'; items: { orderId: string; date: string; slot: string; amount: number; fsItemId?: string }[]; amount: number; what: string; ref: string; } | null>(null);
   const [payMethod, setPayMethod] = useState<PaymentMethod | null>(null);
+  // True while selectPayMethod's mintPaymentReference call is in flight —
+  // guards the Confirm button and the copy button so the customer can't
+  // act on the provisional/fallback ref before the real one (if the entity
+  // has a paymentRefPrefix configured) replaces it in payTarget.ref.
+  const [refMinting, setRefMinting] = useState(false);
+  // Bumped on every selectPayMethod call so an in-flight mint that's no
+  // longer the latest one (sheet closed and a different target opened
+  // before it resolved) can tell it's stale and skip touching state —
+  // otherwise it could flip refMinting back off, or attach its ref, while a
+  // newer mint for a different target is still running.
+  const payRefMintSeq = useRef(0);
   // The customer's own transaction reference (from their Juice/MauCAS app),
   // entered on top of the reference we generate — both get stored so
   // Operations has whatever's most useful for matching against a statement.
@@ -1616,9 +1627,15 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     return activeMethods;
   }, [paymentMethods, entities, currentPayEntityId]);
 
-  // A fresh reference per payment attempt — shown to the customer to quote
-  // when they make the Juice/MauCAS transfer, and stored on the item(s) so
-  // Operations can match it against a bank/wallet statement later.
+  // A placeholder reference, set the moment the Pay Sheet opens (before the
+  // customer has even chosen a method) purely so payTarget.ref is never
+  // empty. It's never actually shown at this point — the reference box only
+  // renders once a method is picked (see selectPayMethod below), by which
+  // time this has almost always already been replaced by a real, entity-
+  // sequenced number from mintPaymentReference. This is also the fallback
+  // selectPayMethod keeps if that call fails (offline, or the entity has no
+  // paymentRefPrefix configured) — the customer isn't blocked from paying
+  // either way, they just don't get a formatted business reference.
   const generateRef = () => `BMZ-PAY-${Math.floor(Math.random() * 900000 + 100000)}`;
 
   const openPayItem = (line: Line) => {
@@ -1686,6 +1703,41 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       what: `${dayLabel} · ${pending.length} meal${pending.length !== 1 ? 's' : ''}`,
       ref: generateRef()
     });
+  };
+
+  // Picking a method is the moment the customer commits to actually making
+  // an external transfer, so it's also the moment we mint the real
+  // reference they'll quote for it — mintPaymentReference (Cloud Function)
+  // atomically increments the entity's paymentRefCounter and returns a
+  // formatted `${prefix}-${counter}` reference, same pattern as invoice
+  // numbers. payTarget.ref already holds the random placeholder set when
+  // the sheet opened, so the UI never shows nothing — this just swaps it
+  // for the real one once minting resolves (or leaves the placeholder if
+  // minting fails or the entity has no paymentRefPrefix configured).
+  const selectPayMethod = async (m: PaymentMethod) => {
+    // Captured by closure so the resolution below can confirm the customer
+    // is still looking at *this* target before writing into it — otherwise
+    // closing this sheet and opening a different pay target while the mint
+    // is still in flight could attach this ref to the wrong item once it
+    // resolves.
+    const targetAtStart = payTarget;
+    const mySeq = ++payRefMintSeq.current;
+    setPayMethod(m);
+    setRefMinting(true);
+    try {
+      const mintFn = httpsCallable(functions, 'mintPaymentReference');
+      const result = await mintFn({ entityId: currentPayEntityId || null });
+      const ref = (result.data as { ref?: string } | undefined)?.ref;
+      if (ref && mySeq === payRefMintSeq.current) {
+        setPayTarget(prev => (prev === targetAtStart && prev ? { ...prev, ref } : prev));
+      }
+    } catch (err) {
+      console.error('mintPaymentReference failed — keeping placeholder ref', err);
+    } finally {
+      if (mySeq === payRefMintSeq.current) {
+        setRefMinting(false);
+      }
+    }
   };
 
   // Choosing a method here only records a claim — it never marks anything
@@ -3487,7 +3539,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               {!payMethod ? (
                 <div className="space-y-2">
                   {applicablePaymentMethods.map(m => (
-                    <button key={m.id} onClick={() => setPayMethod(m)} className="w-full flex items-center gap-3 p-4 rounded-2xl border border-[#E7E0D0] hover:border-primary/40 transition-all">
+                    <button key={m.id} onClick={() => selectPayMethod(m)} className="w-full flex items-center gap-3 p-4 rounded-2xl border border-[#E7E0D0] hover:border-primary/40 transition-all">
                       <span className="text-2xl">{m.icon}</span>
                       <div className="flex-1 text-left">
                         <p className="text-sm font-bold text-slate-900">{m.name}</p>
@@ -3529,11 +3581,16 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       <div className="bg-[#F4EFE4] rounded-xl p-4 flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Quote this reference</p>
-                          <p className="font-mono font-black text-slate-900 text-sm truncate">{payTarget.ref}</p>
+                          {refMinting ? (
+                            <p className="flex items-center gap-1.5 text-slate-400 text-sm mt-0.5"><Loader2 className="size-3.5 animate-spin" /> Generating…</p>
+                          ) : (
+                            <p className="font-mono font-black text-slate-900 text-sm truncate">{payTarget.ref}</p>
+                          )}
                         </div>
                         <button
+                          disabled={refMinting}
                           onClick={() => navigator.clipboard?.writeText(payTarget.ref).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); })}
-                          className="p-2 text-primary hover:bg-white rounded-lg shrink-0"
+                          className="p-2 text-primary hover:bg-white rounded-lg shrink-0 disabled:opacity-40"
                         >
                           {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
                         </button>
@@ -3557,9 +3614,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       <span>{paymentError}</span>
                     </div>
                   )}
-                  <button onClick={commitPayment} disabled={paymentSubmitting} className="w-full py-4 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-primary/20 disabled:opacity-60 flex items-center justify-center gap-2">
-                    {paymentSubmitting && <Loader2 className="size-4 animate-spin" />}
-                    {paymentSubmitting ? 'Recording...' : (isPayNowMethod(payMethod.name) ? "I've approved payment" : `Confirm — ${payMethod.name}`)}
+                  <button onClick={commitPayment} disabled={paymentSubmitting || refMinting} className="w-full py-4 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-primary/20 disabled:opacity-60 flex items-center justify-center gap-2">
+                    {(paymentSubmitting || refMinting) && <Loader2 className="size-4 animate-spin" />}
+                    {paymentSubmitting ? 'Recording...' : refMinting ? 'Generating reference…' : (isPayNowMethod(payMethod.name) ? "I've approved payment" : `Confirm — ${payMethod.name}`)}
                   </button>
                   <button disabled={paymentSubmitting} onClick={() => { setPayMethod(null); setCustomerRef(''); setPaymentError(null); }} className="w-full py-2 text-slate-400 text-xs font-bold disabled:opacity-40">← Choose a different method</button>
                 </div>

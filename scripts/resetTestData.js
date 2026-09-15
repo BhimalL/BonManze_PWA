@@ -3,7 +3,7 @@
 // Dev/test-only reset: wipes every order (and its items/invoiceAssignments
 // subcollections), resets each customer back to a clean starting state
 // (points/ltv/storeCredit zeroed, tier back to the lowest-threshold tier,
-// lastOrder cleared), and clears the auditLogs collection — so a full
+// lastOrder cleared), and clears the auditLog collection — so a full
 // manual QA pass can start from a genuinely clean slate with nothing left
 // pointing at deleted history. Never touches roles, staff, entities,
 // menu/catalog config, or the rest of a customer's profile (name/email/
@@ -77,8 +77,8 @@ async function run() {
   const orderCount = await deleteCollectionDeep(db.collection('orders'));
   console.log(`Deleted ${orderCount} order(s).`);
 
-  console.log('Clearing auditLogs...');
-  const auditCount = await deleteCollectionFlat(db.collection('auditLogs'));
+  console.log('Clearing auditLog...');
+  const auditCount = await deleteCollectionFlat(db.collection('auditLog'));
   console.log(`Deleted ${auditCount} audit log entr${auditCount === 1 ? 'y' : 'ies'}.`);
 
   const baseTierId = await findBaseTierId();
@@ -104,7 +104,7 @@ async function run() {
   }
   console.log(`Reset ${customerCount} customer(s).`);
 
-  console.log('Done. Orders and auditLogs cleared; customer points/ltv/storeCredit/lastOrder reset' + (baseTierId ? ' and tier reset to base' : '') + '. Group, entity assignment, and registration status were left untouched.');
+  console.log('Done. Orders and auditLog cleared; customer points/ltv/storeCredit/lastOrder reset' + (baseTierId ? ' and tier reset to base' : '') + '. Group, entity assignment, and registration status were left untouched.');
   process.exit(0);
 }
 

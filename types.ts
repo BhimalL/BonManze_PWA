@@ -114,6 +114,14 @@ export interface Entity {
   phone?: string;
   invoicePrefix?: string;
   invoiceNumberCounter?: number;
+  // Same pattern as invoicePrefix/invoiceNumberCounter above, for the
+  // customer-facing payment reference (what they're shown to quote on a
+  // Juice/MauCAS transfer) instead of the old random BMZ-PAY-XXXXXX string.
+  // Minted transactionally by the mintPaymentReference Cloud Function —
+  // see CustomerPortal.tsx's selectPayMethod. Blank/absent falls back to the
+  // old random format, same "not configured yet" fallback invoicePrefix has.
+  paymentRefPrefix?: string;
+  paymentRefCounter?: number;
   acceptedPaymentMethodIds?: string[];
   paymentMethodConfig?: Record<string, Record<string, string>>;
   logoStoragePath?: string;
