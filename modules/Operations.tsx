@@ -278,6 +278,29 @@ interface DropTask {
   entityName?: string;
 }
 
+// A group of one or more paymentDrops that share a single, non-empty
+// claimedReference — i.e. one Pay Sheet action on the customer side that
+// covered several drops (different dates/slots, possibly different
+// orderIds) at once. References are minted once per payment session
+// (mintPaymentReference, or its random fallback) so two different
+// customers' claims can never collide onto the same reference — safe to
+// group purely on the reference string. A drop whose reference isn't
+// shared by any other pending drop still gets a PaymentGroup, just one
+// with a single entry in `drops` (rendered identically to the old
+// single-drop card).
+interface PaymentGroup {
+  key: string; // `ref-${claimedReference}` when shared, else `solo-${drop.key}`
+  drops: DropTask[];
+  total: number;
+  customerName: string;
+  claimedMethod?: string;
+  claimedReference?: string;
+  entityId?: string;
+  entityName?: string;
+  earliestDate?: string; // for date-section placement and sorting
+  latestDate?: string;   // for the date-range badge on a multi-date group
+}
+
 interface OpsWeekDay { key: WeekdayKey; date: string; label: string; short: string; }
 
 const getThisWeekDays = (systemDateStr: string): OpsWeekDay[] => {
@@ -393,7 +416,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Which week the Menu tab is currently browsing/editing — matches the
   // Customer App's own This week/Next week switcher.
   const [activeMenuWeek, setActiveMenuWeek] = useState<WeekChoice>('This');
-  const [paymentDrop, setPaymentDrop] = useState<DropTask | null>(null);
+  const [paymentGroup, setPaymentGroup] = useState<PaymentGroup | null>(null);
   const [reuseWeekIndex, setReuseWeekIndex] = useState<number>(0);
 
   // In-flight/error state for the real Firestore writes behind Mark
@@ -1673,19 +1696,61 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     return Object.values(map);
   }, [orders, entityFilter]);
 
-  // Unpaid grouped by delivery date, oldest (most overdue) first — grouping
-  // by date is what actually makes the claimed-reference feature useful: you
-  // can scan down a date-ordered list and match it against a bank statement
-  // in the same order the statement lists transactions.
+  // Merge pending drops that share one claimed payment reference into a
+  // single PaymentGroup — see the PaymentGroup interface for why grouping
+  // purely on the reference string is safe. A reference used by only one
+  // drop still gets its own group (a "solo" group), so the card for that
+  // case renders exactly like the old single-drop card.
+  const paymentGroups = useMemo(() => {
+    const pending = paymentDrops.filter(d => d.paymentStatus === 'Pending');
+    const refCounts: Record<string, number> = {};
+    pending.forEach(d => {
+      if (d.claimedReference) refCounts[d.claimedReference] = (refCounts[d.claimedReference] || 0) + 1;
+    });
+    const map: Record<string, PaymentGroup> = {};
+    const order: string[] = [];
+    pending.forEach(d => {
+      const groupKey = (d.claimedReference && refCounts[d.claimedReference] > 1) ? `ref-${d.claimedReference}` : `solo-${d.key}`;
+      if (!map[groupKey]) {
+        map[groupKey] = {
+          key: groupKey,
+          drops: [],
+          total: 0,
+          customerName: d.customerName,
+          claimedMethod: d.claimedMethod,
+          claimedReference: d.claimedReference,
+          entityId: d.entityId,
+          entityName: d.entityName,
+          earliestDate: d.date,
+          latestDate: d.date,
+        };
+        order.push(groupKey);
+      }
+      const g = map[groupKey];
+      g.drops.push(d);
+      g.total += d.total;
+      if (d.date && (!g.earliestDate || d.date < g.earliestDate)) g.earliestDate = d.date;
+      if (d.date && (!g.latestDate || d.date > g.latestDate)) g.latestDate = d.date;
+    });
+    return order.map(k => map[k]);
+  }, [paymentDrops]);
+
+  // Groups bucketed by delivery date, oldest (most overdue) first — a group
+  // spanning several dates is placed under its earliest date, with a date
+  // range badge on the card itself so the section headers stay simple.
+  // Grouping by date is what makes the claimed-reference feature useful in
+  // the first place: you can scan down a date-ordered list and match it
+  // against a bank statement in the same order the statement lists
+  // transactions.
   const unpaidByDate = useMemo(() => {
-    const map: Record<string, DropTask[]> = {};
-    paymentDrops.filter(d => d.paymentStatus === 'Pending').forEach(d => {
-      const key = d.date || 'Unscheduled';
+    const map: Record<string, PaymentGroup[]> = {};
+    paymentGroups.forEach(g => {
+      const key = g.earliestDate || 'Unscheduled';
       if (!map[key]) map[key] = [];
-      map[key].push(d);
+      map[key].push(g);
     });
     return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [paymentDrops]);
+  }, [paymentGroups]);
 
   const paidDrops = useMemo(() => paymentDrops.filter(d => d.paymentStatus === 'Paid'), [paymentDrops]);
 
@@ -1864,36 +1929,48 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // status/paymentStatus live from its items every time the items listener
   // fires, so once these item writes land, the derived order flips to Paid
   // on its own.
-  const markPaid = async (drop: DropTask, method: PaymentMethod) => {
+  // Handles both a solo drop and a multi-drop reference group in one code
+  // path — a solo group is just a PaymentGroup with one entry in `drops`,
+  // so there's no separate single-drop function anymore. Writes every item
+  // across every drop/order in the group in one batch, then a single
+  // consolidated audit log entry rather than one per drop.
+  const markPaidGroup = async (group: PaymentGroup, method: PaymentMethod) => {
     if (currentPermissions?.payments?.edit !== true) {
       setOpsActionError('Access Denied: You do not have permission to mark payments paid.');
-      setPaymentDrop(null);
+      setPaymentGroup(null);
       return;
     }
-    const targets = drop.items.filter(i => !!i._fsItemId);
+    const targets: { orderId: string; itemId: string }[] = [];
+    group.drops.forEach(drop => {
+      drop.items.forEach(i => {
+        if (i._fsItemId) targets.push({ orderId: drop.orderId, itemId: i._fsItemId });
+      });
+    });
     if (targets.length === 0) {
       setOpsActionError('Could not mark this paid — no Firestore item ids found on this order. Try refreshing.');
-      setPaymentDrop(null);
+      setPaymentGroup(null);
       return;
     }
     setOpsActionError(null);
-    setPendingPaymentKey(drop.key);
+    setPendingPaymentKey(group.key);
     try {
       const batch = writeBatch(db);
-      targets.forEach(i => {
-        batch.update(doc(db, 'orders', drop.orderId, 'items', i._fsItemId as string), {
+      targets.forEach(t => {
+        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), {
           paymentStatus: 'Paid',
           paymentMethodName: method.name,
         });
       });
       await batch.commit();
-      writeAuditLog('PaymentConfirmed', `Marked ${targets.length} item(s) paid via ${method.name} for order ${drop.orderId} (${drop.customerName})`);
+      const orderCount = new Set(targets.map(t => t.orderId)).size;
+      const refSuffix = group.claimedReference ? ` (ref ${group.claimedReference})` : '';
+      writeAuditLog('PaymentConfirmed', `Marked ${targets.length} item(s) across ${orderCount} order(s) paid via ${method.name} for ${group.customerName}${refSuffix}`);
     } catch (e) {
       console.error('Mark Paid failed', e);
       setOpsActionError('Mark Paid failed — please try again.');
     } finally {
       setPendingPaymentKey(null);
-      setPaymentDrop(null);
+      setPaymentGroup(null);
     }
   };
 
@@ -6153,7 +6230,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   };
 
   const closePaymentModal = () => {
-    setPaymentDrop(null);
+    setPaymentGroup(null);
     setConfirmPaymentId(null);
   };
 
@@ -7183,94 +7260,212 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 <EmptyState icon={<Wallet className="size-10" />} label="Nothing outstanding" />
               ) : (
                 <div className="space-y-5">
-                  {unpaidByDate.map(([date, dateDrops]) => (
+                  {unpaidByDate.map(([date, dateGroups]) => (
                     <div key={date}>
                       <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">{formatDay(date)}</p>
                       <div className="space-y-3">
-                        {dateDrops.map(drop => (
-                          <div key={drop.key} className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
-                                {drop.entityId && (
-                                  <span
-                                    title={drop.entityName || (entities.find(e => e.id === drop.entityId)?.name) || drop.entityId}
-                                    className="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[8px] font-bold uppercase shrink-0 truncate max-w-[180px]"
+                        {dateGroups.map(group => {
+                          const isGrouped = group.drops.length > 1;
+                          if (!isGrouped) {
+                            // Solo group — renders identically to the original single-drop card.
+                            const drop = group.drops[0];
+                            return (
+                              <div key={group.key} className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <h3 className="text-base font-black text-slate-900">{group.customerName}</h3>
+                                    {group.entityId && (
+                                      <span
+                                        title={group.entityName || (entities.find(e => e.id === group.entityId)?.name) || group.entityId}
+                                        className="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[8px] font-bold uppercase shrink-0 truncate max-w-[180px]"
+                                      >
+                                        {group.entityName || (entities.find(e => e.id === group.entityId)?.name) || group.entityId}
+                                      </span>
+                                    )}
+                                    {drop.slot && <span className="text-[10px] font-bold text-slate-400">{drop.slot}</span>}
+                                  </div>
+                                  <div className="space-y-1.5 pt-1">
+                                    {drop.items.map((item, idx) => {
+                                      const { detail, person, instructions } = splitNotesTag(item.notes);
+                                      return (
+                                        <div key={idx} className="text-xs text-slate-700 font-medium">
+                                          <span className="font-bold text-slate-900">{item.qty}x {item.name}</span>
+                                          {detail && <span className="text-slate-400 text-[11px] block pl-2">↳ {detail}</span>}
+                                          <div className="flex flex-wrap gap-1.5 mt-1 pl-2">
+                                            {person && <PersonTag name={person} />}
+                                            {instructions && <InstructionsTag text={instructions} />}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                  <p className="text-sm font-black text-primary mt-1">{formatCurrency(group.total)}</p>
+                                  {group.claimedMethod && (
+                                    <p className="text-[11px] text-[#B4703A] font-bold mt-1 bg-[#B4703A]/5 px-2.5 py-1 rounded-lg border border-[#B4703A]/10 inline-block">
+                                      Customer claimed: {group.claimedMethod}{group.claimedReference ? ` (Ref: ${group.claimedReference})` : ''}
+                                    </p>
+                                  )}
+                                  {!drop.claimedMethod && drop.wasReset && (
+                                    <p className="text-[11px] text-slate-500 font-bold mt-1 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 inline-block">
+                                      ↩ Sent back to customer — awaiting new payment method
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2.5 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => setActivePrintDrop(drop)}
+                                    className="px-4 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-pointer"
+                                    title="Print order ticket"
                                   >
-                                    {drop.entityName || (entities.find(e => e.id === drop.entityId)?.name) || drop.entityId}
-                                  </span>
-                                )}
-                                {drop.slot && <span className="text-[10px] font-bold text-slate-400">{drop.slot}</span>}
+                                    <Printer className="size-4" /> Print
+                                  </button>
+                                  {drop.claimedMethod ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => resetPaymentClaim(drop)}
+                                      disabled={pendingResetPaymentKey === drop.key}
+                                      className="px-4 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                                      title="Send back to the customer to pick a payment method again — use this if they claimed a method but never actually paid."
+                                    >
+                                      {pendingResetPaymentKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                                      {pendingResetPaymentKey === drop.key ? 'Resetting...' : 'Send back'}
+                                    </button>
+                                  ) : drop.wasReset ? (
+                                    <button
+                                      type="button"
+                                      disabled
+                                      className="px-4 py-3 bg-slate-100 text-slate-400 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-default opacity-70"
+                                      title="Sent back to the customer — waiting for them to pick a payment method again."
+                                    >
+                                      <RefreshCw className="size-4" /> Re-Sent
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    onClick={() => setPaymentGroup(group)}
+                                    disabled={pendingPaymentKey === group.key}
+                                    className="px-6 py-3 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-warning/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                                  >
+                                    {pendingPaymentKey === group.key ? <Loader2 className="size-4 animate-spin" /> : <Banknote className="size-4" />}
+                                    {pendingPaymentKey === group.key ? 'Marking...' : 'Mark Paid'}
+                                  </button>
+                                </div>
                               </div>
-                              <div className="space-y-1.5 pt-1">
-                                {drop.items.map((item, idx) => {
-                                  const { detail, person, instructions } = splitNotesTag(item.notes);
-                                  return (
-                                    <div key={idx} className="text-xs text-slate-700 font-medium">
-                                      <span className="font-bold text-slate-900">{item.qty}x {item.name}</span>
-                                      {detail && <span className="text-slate-400 text-[11px] block pl-2">↳ {detail}</span>}
-                                      <div className="flex flex-wrap gap-1.5 mt-1 pl-2">
-                                        {person && <PersonTag name={person} />}
-                                        {instructions && <InstructionsTag text={instructions} />}
-                                      </div>
+                            );
+                          }
+
+                          // Grouped card — several drops sharing one claimed reference,
+                          // collapsed into one payment action. Each constituent drop still
+                          // gets its own date/slot heading, item list, Print and Send back
+                          // buttons; only Mark Paid is combined into a single action for
+                          // the whole group.
+                          const dateRangeLabel = group.earliestDate && group.latestDate && group.earliestDate !== group.latestDate
+                            ? `${formatDay(group.earliestDate)} – ${formatDay(group.latestDate)}`
+                            : null;
+                          return (
+                            <div key={group.key} className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6 flex flex-col gap-4">
+                              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                    <h3 className="text-base font-black text-slate-900">{group.customerName}</h3>
+                                    {group.entityId && (
+                                      <span
+                                        title={group.entityName || (entities.find(e => e.id === group.entityId)?.name) || group.entityId}
+                                        className="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/15 text-[8px] font-bold uppercase shrink-0 truncate max-w-[180px]"
+                                      >
+                                        {group.entityName || (entities.find(e => e.id === group.entityId)?.name) || group.entityId}
+                                      </span>
+                                    )}
+                                    <span className="px-2 py-0.5 rounded bg-warning/10 text-[#B4703A] border border-warning/20 text-[8px] font-bold uppercase shrink-0">
+                                      {group.drops.length} drops · 1 payment
+                                    </span>
+                                    {dateRangeLabel && <span className="text-[10px] font-bold text-slate-400">{dateRangeLabel}</span>}
+                                  </div>
+                                  {group.claimedMethod && (
+                                    <p className="text-[11px] text-[#B4703A] font-bold mt-1 bg-[#B4703A]/5 px-2.5 py-1 rounded-lg border border-[#B4703A]/10 inline-block">
+                                      Customer claimed: {group.claimedMethod}{group.claimedReference ? ` (Ref: ${group.claimedReference})` : ''}
+                                    </p>
+                                  )}
+                                </div>
+                                <p className="text-sm font-black text-primary shrink-0">{formatCurrency(group.total)}</p>
+                              </div>
+
+                              <div className="divide-y divide-slate-100">
+                                {group.drops.map(drop => (
+                                  <div key={drop.key} className="py-3 first:pt-0 last:pb-0">
+                                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1.5">
+                                      {formatDay(drop.date)}{drop.slot ? ` · ${drop.slot}` : ''}
+                                    </p>
+                                    <div className="space-y-1.5">
+                                      {drop.items.map((item, idx) => {
+                                        const { detail, person, instructions } = splitNotesTag(item.notes);
+                                        return (
+                                          <div key={idx} className="text-xs text-slate-700 font-medium">
+                                            <span className="font-bold text-slate-900">{item.qty}x {item.name}</span>
+                                            {detail && <span className="text-slate-400 text-[11px] block pl-2">↳ {detail}</span>}
+                                            <div className="flex flex-wrap gap-1.5 mt-1 pl-2">
+                                              {person && <PersonTag name={person} />}
+                                              {instructions && <InstructionsTag text={instructions} />}
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
                                     </div>
-                                  );
-                                })}
+                                    {!drop.claimedMethod && drop.wasReset && (
+                                      <p className="text-[11px] text-slate-500 font-bold mt-1.5 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 inline-block">
+                                        ↩ Sent back to customer — awaiting new payment method
+                                      </p>
+                                    )}
+                                    <div className="flex items-center gap-2 mt-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => setActivePrintDrop(drop)}
+                                        className="px-3 py-2 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-pointer"
+                                        title="Print order ticket"
+                                      >
+                                        <Printer className="size-3.5" /> Print
+                                      </button>
+                                      {drop.claimedMethod ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => resetPaymentClaim(drop)}
+                                          disabled={pendingResetPaymentKey === drop.key}
+                                          className="px-3 py-2 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                                          title="Send back to the customer to pick a payment method again — use this if they claimed a method but never actually paid. Only detaches this one drop from the group; the rest stay grouped on the shared reference."
+                                        >
+                                          {pendingResetPaymentKey === drop.key ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+                                          {pendingResetPaymentKey === drop.key ? 'Resetting...' : 'Send back'}
+                                        </button>
+                                      ) : drop.wasReset ? (
+                                        <button
+                                          type="button"
+                                          disabled
+                                          className="px-3 py-2 bg-slate-100 text-slate-400 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-default opacity-70"
+                                          title="Sent back to the customer — waiting for them to pick a payment method again."
+                                        >
+                                          <RefreshCw className="size-3.5" /> Re-Sent
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                ))}
                               </div>
-                              <p className="text-sm font-black text-primary mt-1">{formatCurrency(drop.total)}</p>
-                              {drop.claimedMethod && (
-                                <p className="text-[11px] text-[#B4703A] font-bold mt-1 bg-[#B4703A]/5 px-2.5 py-1 rounded-lg border border-[#B4703A]/10 inline-block">
-                                  Customer claimed: {drop.claimedMethod}{drop.claimedReference ? ` (Ref: ${drop.claimedReference})` : ''}
-                                </p>
-                              )}
-                              {!drop.claimedMethod && drop.wasReset && (
-                                <p className="text-[11px] text-slate-500 font-bold mt-1 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 inline-block">
-                                  ↩ Sent back to customer — awaiting new payment method
-                                </p>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2.5 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => setActivePrintDrop(drop)}
-                                className="px-4 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-pointer"
-                                title="Print order ticket"
-                              >
-                                <Printer className="size-4" /> Print
-                              </button>
-                              {drop.claimedMethod ? (
+
+                              <div className="flex items-center justify-end pt-1">
                                 <button
                                   type="button"
-                                  onClick={() => resetPaymentClaim(drop)}
-                                  disabled={pendingResetPaymentKey === drop.key}
-                                  className="px-4 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
-                                  title="Send back to the customer to pick a payment method again — use this if they claimed a method but never actually paid."
+                                  onClick={() => setPaymentGroup(group)}
+                                  disabled={pendingPaymentKey === group.key}
+                                  className="px-6 py-3 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-warning/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
                                 >
-                                  {pendingResetPaymentKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                                  {pendingResetPaymentKey === drop.key ? 'Resetting...' : 'Send back'}
+                                  {pendingPaymentKey === group.key ? <Loader2 className="size-4 animate-spin" /> : <Banknote className="size-4" />}
+                                  {pendingPaymentKey === group.key ? 'Marking...' : `Mark All Paid (${group.drops.length})`}
                                 </button>
-                              ) : drop.wasReset ? (
-                                <button
-                                  type="button"
-                                  disabled
-                                  className="px-4 py-3 bg-slate-100 text-slate-400 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-default opacity-70"
-                                  title="Sent back to the customer — waiting for them to pick a payment method again."
-                                >
-                                  <RefreshCw className="size-4" /> Re-Sent
-                                </button>
-                              ) : null}
-                              <button
-                                type="button"
-                                onClick={() => setPaymentDrop(drop)}
-                                disabled={pendingPaymentKey === drop.key}
-                                className="px-6 py-3 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-warning/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
-                              >
-                                {pendingPaymentKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <Banknote className="size-4" />}
-                                {pendingPaymentKey === drop.key ? 'Marking...' : 'Mark Paid'}
-                              </button>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
@@ -7511,7 +7706,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
       {/* Collect Payment Modal — portaled to <body>, same clipping issue as
           the Meal Library modals (see Portal.tsx). */}
-      {paymentDrop && (
+      {paymentGroup && (
         <Portal>
         <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
@@ -7523,34 +7718,37 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </div>
             <div className="p-8 space-y-6">
               <div className="text-center">
-                <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">{paymentDrop.customerName}</p>
-                <p className="text-4xl font-black text-slate-900 tracking-tight">{formatCurrency(paymentDrop.total)}</p>
-                {paymentDrop.claimedMethod && (
+                <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">{paymentGroup.customerName}</p>
+                <p className="text-4xl font-black text-slate-900 tracking-tight">{formatCurrency(paymentGroup.total)}</p>
+                {paymentGroup.drops.length > 1 && (
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">{paymentGroup.drops.length} drops, 1 payment</p>
+                )}
+                {paymentGroup.claimedMethod && (
                   <div className="mt-3 inline-block bg-warning/10 text-[#B4703A] rounded-xl px-4 py-2 text-xs font-bold">
-                    Customer says: {paymentDrop.claimedMethod}
-                    {paymentDrop.claimedReference && <><br /><span className="font-mono">{paymentDrop.claimedReference}</span></>}
+                    Customer says: {paymentGroup.claimedMethod}
+                    {paymentGroup.claimedReference && <><br /><span className="font-mono">{paymentGroup.claimedReference}</span></>}
                   </div>
                 )}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 {(() => {
                   const activeMethods = paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan'));
-                  const dropEntityId = paymentDrop.entityId || orders.find(o => o.id === paymentDrop.orderId)?.entityId;
-                  const currentEntity = entities.find(e => e.id === dropEntityId) || (entities.length === 1 ? entities[0] : undefined);
+                  const groupEntityId = paymentGroup.entityId || orders.find(o => o.id === paymentGroup.drops[0]?.orderId)?.entityId;
+                  const currentEntity = entities.find(e => e.id === groupEntityId) || (entities.length === 1 ? entities[0] : undefined);
                   const methodsToRender = (currentEntity && currentEntity.acceptedPaymentMethodIds && currentEntity.acceptedPaymentMethodIds.length > 0)
                     ? activeMethods.filter(m => currentEntity.acceptedPaymentMethodIds!.includes(m.id))
                     : activeMethods;
 
                   return methodsToRender.map(m => {
                     const isConfirming = confirmPaymentId === m.id;
-                    const isSubmitting = pendingPaymentKey === paymentDrop.key;
+                    const isSubmitting = pendingPaymentKey === paymentGroup.key;
                     return (
                       <button
                         key={m.id}
                         disabled={isSubmitting || currentPermissions?.payments?.edit !== true}
                         onClick={() => {
                           if (isConfirming) {
-                            markPaid(paymentDrop, m);
+                            markPaidGroup(paymentGroup, m);
                             setConfirmPaymentId(null);
                           } else {
                             setConfirmPaymentId(m.id);
@@ -7559,7 +7757,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         className={`p-5 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 disabled:opacity-60 disabled:cursor-wait ${
                           isConfirming
                             ? 'border-warning bg-warning/10 text-warning-700 animate-pulse'
-                            : paymentDrop.claimedMethod === m.name
+                            : paymentGroup.claimedMethod === m.name
                             ? 'border-primary text-primary bg-primary/[0.02]'
                             : 'border-slate-100 bg-[#FAF8F5] text-slate-500 hover:border-primary hover:text-primary hover:bg-slate-50'
                         }`}
