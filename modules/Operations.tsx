@@ -429,6 +429,15 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [pendingCookingKey, setPendingCookingKey] = useState<string | null>(null);
   const [pendingPaymentKey, setPendingPaymentKey] = useState<string | null>(null);
   const [pendingResetPaymentKey, setPendingResetPaymentKey] = useState<string | null>(null);
+  // Checkbox-based multi-select for the Delivery List tab's bulk Dispatch /
+  // Mark Delivered actions — a Set of drop.key. Scoped to whatever's
+  // currently visible (day/week/service/entity filters), so it's cleared
+  // whenever any of those change rather than silently carrying over
+  // selections for drops that have scrolled out of view (see the effect
+  // near activeDeliveryDayDate below).
+  const [selectedDeliveryKeys, setSelectedDeliveryKeys] = useState<Set<string>>(new Set());
+  const [pendingBulkDispatch, setPendingBulkDispatch] = useState(false);
+  const [pendingBulkDelivery, setPendingBulkDelivery] = useState(false);
   const [opsActionError, setOpsActionError] = useState<string | null>(null);
   const [activePrintDrop, setActivePrintDrop] = useState<DropTask | null>(null);
   const [activePrintService, setActivePrintService] = useState<{ date: string; service: 'Lunch' | 'Dinner'; drops: DropTask[] } | null>(null);
@@ -1655,6 +1664,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     return result;
   }, [drops, activeDeliveryDayDate, deliveryServiceFilter]);
 
+  // Clear the Delivery List checkbox selection whenever the visible set of
+  // drops could change out from under it — switching day/week/service, or
+  // the entity filter (which drops itself is scoped by) — rather than
+  // leaving stale keys selected for drops no longer on screen.
+  useEffect(() => {
+    setSelectedDeliveryKeys(new Set());
+  }, [activeDeliveryDayDate, deliveryServiceFilter, entityFilter]);
+
   // --- Payments: every open balance regardless of delivery date — an unpaid
   // meal from three days ago is still owed, so unlike Orders/Delivery this
   // intentionally isn't scoped to the current week. Same dead-branch removal
@@ -1917,6 +1934,87 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setOpsActionError('Dispatch failed — please try again.');
     } finally {
       setPendingDispatchKey(null);
+    }
+  };
+
+  // Bulk sibling of handleDispatchDrop — checkbox-selected drops in the
+  // Delivery List tab, one writeBatch across all of them. Same per-drop
+  // eligibility rule as the single-drop version (only items currently
+  // 'Ready' flip to 'En route'); a selected drop with nothing Ready simply
+  // contributes zero targets rather than erroring the whole batch. No audit
+  // log here, matching handleDispatchDrop above (dispatch has never been
+  // audit-logged in this console — only delivery confirmation and payment
+  // actions are).
+  const handleBulkDispatch = async (selectedDrops: DropTask[]) => {
+    if (currentPermissions?.ordersByDish?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to dispatch orders.');
+      return;
+    }
+    const targets: { orderId: string; itemId: string }[] = [];
+    selectedDrops.forEach(drop => {
+      drop.items.forEach(i => {
+        if (i._fsItemId && i.status === 'Ready') targets.push({ orderId: drop.orderId, itemId: i._fsItemId });
+      });
+    });
+    if (targets.length === 0) {
+      setOpsActionError('None of the selected drops have items ready to dispatch.');
+      return;
+    }
+    setOpsActionError(null);
+    setPendingBulkDispatch(true);
+    try {
+      const batch = writeBatch(db);
+      targets.forEach(t => {
+        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), { status: 'En route' });
+      });
+      await batch.commit();
+      setSelectedDeliveryKeys(new Set());
+    } catch (e) {
+      console.error('Bulk dispatch failed', e);
+      setOpsActionError('Bulk dispatch failed — please try again.');
+    } finally {
+      setPendingBulkDispatch(false);
+    }
+  };
+
+  // Bulk sibling of handleMarkDelivered. Deliberately stricter than the
+  // single-drop button: that one will complete any undelivered item
+  // regardless of whether it was ever dispatched, but bulk-completing a
+  // whole checkbox selection is a bigger blast radius, so this only ever
+  // touches items already 'En route' — a selected drop that was never
+  // dispatched contributes nothing here rather than silently jumping
+  // straight from Ready/Active to Completed.
+  const handleBulkMarkDelivered = async (selectedDrops: DropTask[]) => {
+    if (currentPermissions?.deliveryList?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to mark orders delivered.');
+      return;
+    }
+    const targets: { orderId: string; itemId: string }[] = [];
+    selectedDrops.forEach(drop => {
+      drop.items.forEach(i => {
+        if (i._fsItemId && i.status === 'En route') targets.push({ orderId: drop.orderId, itemId: i._fsItemId });
+      });
+    });
+    if (targets.length === 0) {
+      setOpsActionError('None of the selected drops have items currently En route.');
+      return;
+    }
+    setOpsActionError(null);
+    setPendingBulkDelivery(true);
+    try {
+      const batch = writeBatch(db);
+      targets.forEach(t => {
+        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), { status: 'Completed' });
+      });
+      await batch.commit();
+      const orderCount = new Set(targets.map(t => t.orderId)).size;
+      writeAuditLog('DeliveryConfirmed', `Marked ${targets.length} item(s) across ${orderCount} order(s) delivered (bulk)`);
+      setSelectedDeliveryKeys(new Set());
+    } catch (e) {
+      console.error('Bulk mark delivered failed', e);
+      setOpsActionError('Bulk mark delivered failed — please try again.');
+    } finally {
+      setPendingBulkDelivery(false);
     }
   };
 
@@ -7088,6 +7186,21 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   return <EmptyState icon={<Truck className="size-10" />} label={`No deliveries for the selected filters`} />;
                 }
 
+                const toggleDeliverySelect = (key: string) => {
+                  setSelectedDeliveryKeys(prev => {
+                    const next = new Set(prev);
+                    if (next.has(key)) next.delete(key); else next.add(key);
+                    return next;
+                  });
+                };
+                const setSectionSelected = (sectionDrops: DropTask[], checked: boolean) => {
+                  setSelectedDeliveryKeys(prev => {
+                    const next = new Set(prev);
+                    sectionDrops.forEach(d => { if (checked) next.add(d.key); else next.delete(d.key); });
+                    return next;
+                  });
+                };
+
                 const renderDropCard = (drop: DropTask) => {
                   const cust = getCustomer(drop.customerName);
                   const addr = cust?.addresses[0];
@@ -7097,6 +7210,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
                   return (
                     <div key={drop.key} className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-6 hover:shadow-md transition-all">
+                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                      <div className="pt-1 shrink-0 w-4">
+                        {!allCompleted && (
+                          <input
+                            type="checkbox"
+                            checked={selectedDeliveryKeys.has(drop.key)}
+                            onChange={() => toggleDeliverySelect(drop.key)}
+                            className="size-4 accent-primary cursor-pointer"
+                            aria-label={`Select ${drop.customerName}'s drop for bulk actions`}
+                          />
+                        )}
+                      </div>
                       <div className="min-w-0 flex-1 space-y-2">
                         <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="text-base font-black text-slate-900 leading-none">{drop.customerName}</h3>
@@ -7148,6 +7273,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           </p>
                         )}
                       </div>
+                      </div>
                       <div className="flex items-center gap-2.5 shrink-0">
                         {allCompleted ? (
                           <div className="px-4 py-2 bg-success/10 text-success rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5">
@@ -7195,12 +7321,70 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   );
                 };
 
+                // Only non-completed drops are selectable (a completed drop has no
+                // actions left to bulk-apply), so "select all" and the bulk toolbar's
+                // counts are scoped to those.
+                const lunchEligible = lunchDrops.filter(d => !d.items.every(i => i.status === 'Completed'));
+                const dinnerEligible = dinnerDrops.filter(d => !d.items.every(i => i.status === 'Completed'));
+                const selectedDrops = filteredDrops.filter(d => selectedDeliveryKeys.has(d.key));
+                const dispatchTargetCount = selectedDrops.reduce((n, d) => n + d.items.filter(i => i._fsItemId && i.status === 'Ready').length, 0);
+                const deliverTargetCount = selectedDrops.reduce((n, d) => n + d.items.filter(i => i._fsItemId && i.status === 'En route').length, 0);
+
                 return (
                   <div className="space-y-4">
+                    {selectedDrops.length > 0 && (
+                      <div className="sticky top-2 z-20 bg-slate-900 text-white rounded-2xl px-5 py-3 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-black uppercase tracking-widest">{selectedDrops.length} selected</span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedDeliveryKeys(new Set())}
+                            className="text-[10px] font-bold text-slate-300 hover:text-white underline cursor-pointer"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleBulkDispatch(selectedDrops)}
+                            disabled={pendingBulkDispatch || dispatchTargetCount === 0 || currentPermissions?.ordersByDish?.edit !== true}
+                            title={dispatchTargetCount === 0 ? 'None of the selected drops have items ready to dispatch' : undefined}
+                            className="px-4 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            {pendingBulkDispatch ? <Loader2 className="size-3.5 animate-spin" /> : <Truck className="size-3.5" />}
+                            {pendingBulkDispatch ? 'Dispatching...' : `Dispatch (${dispatchTargetCount})`}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleBulkMarkDelivered(selectedDrops)}
+                            disabled={pendingBulkDelivery || deliverTargetCount === 0 || currentPermissions?.deliveryList?.edit !== true}
+                            title={deliverTargetCount === 0 ? 'None of the selected drops are currently En route' : undefined}
+                            className="px-4 py-2 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            {pendingBulkDelivery ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                            {pendingBulkDelivery ? 'Marking...' : `Mark Delivered (${deliverTargetCount})`}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {showLunch && (
                       <div className="bg-primary/5 rounded-2xl p-4 space-y-3">
                         <div className="flex items-center justify-between gap-4 flex-wrap border-b border-primary/10 pb-2">
-                          <p className="text-[10px] font-black uppercase text-primary tracking-widest">☀️ Lunch · {lunchDrops.length} drop{lunchDrops.length !== 1 ? 's' : ''}</p>
+                          <div className="flex items-center gap-3">
+                            <p className="text-[10px] font-black uppercase text-primary tracking-widest">☀️ Lunch · {lunchDrops.length} drop{lunchDrops.length !== 1 ? 's' : ''}</p>
+                            {lunchEligible.length > 0 && (
+                              <label className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-primary cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={lunchEligible.every(d => selectedDeliveryKeys.has(d.key))}
+                                  onChange={(e) => setSectionSelected(lunchEligible, e.target.checked)}
+                                  className="size-3.5 accent-primary cursor-pointer"
+                                />
+                                Select all
+                              </label>
+                            )}
+                          </div>
                           <button
                             type="button"
                             onClick={() => setActivePrintService({ date: activeDeliveryDayDate as string, service: 'Lunch', drops: lunchDrops })}
@@ -7215,7 +7399,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     {showDinner && (
                       <div className="bg-accent/5 rounded-2xl p-4 space-y-3">
                         <div className="flex items-center justify-between gap-4 flex-wrap border-b border-accent/10 pb-2">
-                          <p className="text-[10px] font-black uppercase text-accent tracking-widest">🌙 Dinner · {dinnerDrops.length} drop{dinnerDrops.length !== 1 ? 's' : ''}</p>
+                          <div className="flex items-center gap-3">
+                            <p className="text-[10px] font-black uppercase text-accent tracking-widest">🌙 Dinner · {dinnerDrops.length} drop{dinnerDrops.length !== 1 ? 's' : ''}</p>
+                            {dinnerEligible.length > 0 && (
+                              <label className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-accent cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={dinnerEligible.every(d => selectedDeliveryKeys.has(d.key))}
+                                  onChange={(e) => setSectionSelected(dinnerEligible, e.target.checked)}
+                                  className="size-3.5 accent-accent cursor-pointer"
+                                />
+                                Select all
+                              </label>
+                            )}
+                          </div>
                           <button
                             type="button"
                             onClick={() => setActivePrintService({ date: activeDeliveryDayDate as string, service: 'Dinner', drops: dinnerDrops })}
