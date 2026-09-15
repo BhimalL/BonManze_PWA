@@ -1478,17 +1478,26 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const weekOrders = useMemo(() => buildWeekOrders(thisWeekDateSet), [thisWeekLinesWithSeq, thisWeekDateSet]);
   const nextWeekOrders = useMemo(() => buildWeekOrders(nextWeekDateSet), [thisWeekLinesWithSeq, nextWeekDateSet]);
 
-  // A receipt corresponds to one payment, not to one order or one meal —
-  // "Pay order"/"Pay balance" claim several lines under a single generated
-  // reference, so those lines are one payment and belong on one receipt;
-  // a lone "Pay" on a single meal generates its own reference, so that meal
-  // gets its own receipt. Lines without a reference (shouldn't happen once
-  // Paid, but just in case) fall back to being their own single-line group.
+  // A receipt corresponds to one invoice, and one invoice is issued per drop
+  // — one order + one delivery date + one service slot (matching DropTask's
+  // own key in Operations.tsx, and issueInvoiceOnPayment's dropDocId in
+  // functions/index.js, which is what actually decides whether two items
+  // share one invoice number). This used to group by paymentReference
+  // instead ("Pay order"/"Pay Day" claim several drops under one shared
+  // reference, so it seemed natural to show them on one combined receipt) —
+  // but that let a customer's receipt page silently merge two *different*
+  // invoice numbers onto one page just because they'd been paid off
+  // together, which never happens on the admin side (Operations/Transactions
+  // Ledger always keeps one drop = one receipt, however it was paid).
+  // Decided 2026-09-15: the payment reference is a reconciliation aid, not a
+  // receipt boundary, so drop this back to matching admin exactly. Two items
+  // that genuinely share one drop (e.g. two dishes for the same day+slot)
+  // still combine here, because they also share one real invoice number.
   const paymentGroups = useMemo(() => {
     const map = new Map<string, typeof thisWeekLinesWithSeq>();
     thisWeekLinesWithSeq.forEach(l => {
       if (l.item.paymentStatus !== 'Paid') return;
-      const key = l.item.paymentReference || `solo-${l.order.id}-${l.item.itemId}-${l.item.deliveryDate}`;
+      const key = `${l.order.id}-${l.item.deliveryDate || ''}-${l.item.serviceSlot || ''}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(l);
     });
@@ -1822,10 +1831,11 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     setRateComment('');
   };
 
-  // A receipt always represents one payment — resolve to every line that
-  // shares this line's payment reference (paymentGroups), never just the one
-  // line that was clicked and never an entire order regardless of how many
-  // separate payments it was actually settled with.
+  // A receipt always represents one drop (one invoice) — resolve to every
+  // line that shares this line's drop (paymentGroups, keyed by
+  // order+date+slot — see its own comment), never the whole payment
+  // reference and never an entire order regardless of how many separate
+  // drops it actually contains.
   // Reprint tracking is admin-only by design (Operations' own receipt/print
   // button bumps invoiceReprintCount) — a customer opening or printing their
   // own receipt from their own portal never counts as a "reprint", so this
@@ -1834,7 +1844,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // twice already showed the "Duplicate / Reprint" badge — a second,
   // separate bug from the one being fixed alongside this.
   const openReceipt = (line: Line) => {
-    const key = line.item.paymentReference || `solo-${line.order.id}-${line.item.itemId}-${line.item.deliveryDate}`;
+    const key = `${line.order.id}-${line.item.deliveryDate || ''}-${line.item.serviceSlot || ''}`;
     const targetLines = paymentGroups.get(key) || [line];
     setReceiptTarget({ order: line.order, lines: targetLines });
   };
@@ -2825,14 +2835,13 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     const orderPaid = lines.every(l => l.item.paymentStatus === 'Paid');
                     const orderUnclaimed = lines.filter(l => isUnclaimed(l.item));
                     const orderUnclaimedTotal = buildPayItemsAndAmount(orderUnclaimed).amount;
-                    // Only offer one receipt for the whole order when it was
-                    // actually settled as one payment (every line shares the
-                    // same reference) — if some meals were paid individually
-                    // and others together, that's more than one receipt, so
-                    // fall back to "Paid" with no combined receipt button;
-                    // each meal's own Receipt button still opens the right one.
-                    const orderPaymentRefs = new Set(lines.map(l => l.item.paymentReference || `solo-${l.order.id}-${l.item.itemId}-${l.item.deliveryDate}`));
-                    const orderIsOnePayment = orderPaid && orderPaymentRefs.size === 1;
+                    // No combined "Paid · Receipt" button at the order level —
+                    // an order can span several drops, each with its own
+                    // invoice number (see paymentGroups above), so there's no
+                    // single receipt to open here even when every line in the
+                    // order is Paid. Each meal's own Receipt button below
+                    // always opens the right one (or the right shared one, if
+                    // that meal's drop-mate is also in this list).
 
                     // Meals within an order are grouped by offering first,
                     // then by day — an order can cover more than one
@@ -2848,11 +2857,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">{gi === 0 ? 'Your order' : `Additional order ${gi + 1}`} · {lines.length} meal{lines.length !== 1 ? 's' : ''}</p>
                             <p className="text-[10px] text-slate-400 mt-0.5">Placed {new Date(order.timestamp).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</p>
                           </div>
-                          {orderIsOnePayment ? (
-                            <button onClick={() => openReceipt(lines[0])} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success flex items-center gap-1">
-                              <Receipt className="size-3" /> Paid · Receipt
-                            </button>
-                          ) : orderPaid ? (
+                          {orderPaid ? (
                             <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success">Paid</span>
                           ) : orderUnclaimed.length > 0 ? (
                             <button onClick={() => openPayOrder(lines)} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger">
@@ -2977,8 +2982,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     const orderPaid = lines.every(l => l.item.paymentStatus === 'Paid');
                     const orderUnclaimed = lines.filter(l => isUnclaimed(l.item));
                     const orderUnclaimedTotal = buildPayItemsAndAmount(orderUnclaimed).amount;
-                    const orderPaymentRefs = new Set(lines.map(l => l.item.paymentReference || `solo-${l.order.id}-${l.item.itemId}-${l.item.deliveryDate}`));
-                    const orderIsOnePayment = orderPaid && orderPaymentRefs.size === 1;
+                    // No combined "Paid · Receipt" button here either — see the
+                    // matching comment in the This Week block above.
                     const serviceGroups = groupByOrderServiceDay(lines)[0]?.services || [];
                     return (
                       <div key={order.id} className="bg-white rounded-2xl border border-[#E7E0D0] overflow-hidden">
@@ -2987,9 +2992,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">{gi === 0 ? 'Your order' : `Additional order ${gi + 1}`} · {lines.length} meal{lines.length !== 1 ? 's' : ''}</p>
                             <p className="text-[10px] text-slate-400 mt-0.5">Placed {new Date(order.timestamp).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</p>
                           </div>
-                          {orderIsOnePayment ? (
-                            <button onClick={() => openReceipt(lines[0])} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success flex items-center gap-1"><Receipt className="size-3" /> Paid · Receipt</button>
-                          ) : orderPaid ? (
+                          {orderPaid ? (
                             <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success">Paid</span>
                           ) : orderUnclaimed.length > 0 ? (
                             <button onClick={() => openPayOrder(lines)} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger">Pay order · {formatCurrency(orderUnclaimedTotal)}</button>
