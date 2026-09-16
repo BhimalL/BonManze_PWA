@@ -460,6 +460,21 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [pendingCookingKey, setPendingCookingKey] = useState<string | null>(null);
   const [pendingPaymentKey, setPendingPaymentKey] = useState<string | null>(null);
   const [pendingResetPaymentKey, setPendingResetPaymentKey] = useState<string | null>(null);
+  // Delivery Staff Payments §9 — cashier "Reconcile" section: which driver's
+  // handover the Payments tab is currently showing. Cleared automatically
+  // (see the effect near reconcileDrivers below) whenever the selected
+  // driver no longer has any pending full claims to reconcile.
+  const [reconcileDriverId, setReconcileDriverId] = useState<string>('');
+  // Arms a bulk "Confirm all [Method]" button — first click arms it (button
+  // flips to a "click to confirm" warning state), second click on the same
+  // bucket actually fires markPaidBulk. Same two-step-click safety the
+  // Collect Payment modal already uses for a single claim, just applied to
+  // a bulk, irreversible, no-modal action.
+  const [confirmBulkKey, setConfirmBulkKey] = useState<string | null>(null);
+  // Driver's own "Claimed" card (replaces the org-wide Collected figure on
+  // a driver's own dashboard) — whether its handover breakdown modal is
+  // open.
+  const [showClaimedBreakdown, setShowClaimedBreakdown] = useState(false);
   // Checkbox-based multi-select for the Delivery List tab's bulk Dispatch /
   // Mark Delivered actions — a Set of drop.key. Scoped to whatever's
   // currently visible (day/week/service/entity filters), so it's cleared
@@ -804,6 +819,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Delivery List filter state
   const [deliveryWeekFilter, setDeliveryWeekFilter] = useState<'this' | 'next'>('this');
   const [deliveryServiceFilter, setDeliveryServiceFilter] = useState<'all' | 'Lunch' | 'Dinner'>('all');
+  // Payments filter state — its own week/day/service filters, independent
+  // of Orders/Delivery's (a cashier reconciling this week's payments might
+  // still want another tab browsing next week's deliveries). Explicit
+  // decision: unlike before (Payments intentionally showed every
+  // outstanding balance regardless of date), the whole tab — summary
+  // cards, Reconcile section, driver cash panel and the itemized list —
+  // now scopes to the selected week/day/service, matching how
+  // Orders/Delivery already behave. No partner-assignment checkboxes here
+  // (explicit decision) — that split isn't a payments concept.
+  const [paymentsWeekFilter, setPaymentsWeekFilter] = useState<'this' | 'next'>('this');
+  const [paymentsDayFilter, setPaymentsDayFilter] = useState<string | 'all'>('all');
+  const [paymentsServiceFilter, setPaymentsServiceFilter] = useState<'all' | 'Lunch' | 'Dinner'>('all');
 
   // VAT can only legally be charged once BonManzE is actually VAT-registered
   // with the MRA (Mauritius's registration threshold is MUR 3M/yr turnover,
@@ -1753,10 +1780,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setSelectedDeliveryKeys(new Set());
   }, [activeDeliveryDayDate, deliveryServiceFilter, entityFilter]);
 
-  // --- Payments: every open balance regardless of delivery date — an unpaid
-  // meal from three days ago is still owed, so unlike Orders/Delivery this
-  // intentionally isn't scoped to the current week. Same dead-branch removal
-  // as drops above.
+  // Payments tab's own active days, mirroring Orders by Dish's
+  // ordersDaysForWeek/ordersVisibleDays pattern — 'all' means every day in
+  // the selected week, a specific date narrows to just that day.
+  const paymentsDaysForWeek = useMemo(() => paymentsWeekFilter === 'next' ? nextWeekDays : weekDays, [paymentsWeekFilter, weekDays, nextWeekDays]);
+  const paymentsAllowedDates = useMemo(
+    () => paymentsDayFilter === 'all' ? new Set(paymentsDaysForWeek.map(d => d.date)) : new Set([paymentsDayFilter]),
+    [paymentsDaysForWeek, paymentsDayFilter]
+  );
+
+  // --- Payments: was previously every open balance regardless of delivery
+  // date ("an unpaid meal from three days ago is still owed"); now scoped
+  // to the Payments tab's own week/day/service filter by explicit request,
+  // matching how Orders/Delivery already work. Same dead-branch removal as
+  // drops above.
   const paymentDrops = useMemo(() => {
     const map: Record<string, DropTask> = {};
     orders.forEach(o => {
@@ -1764,6 +1801,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       if (entityFilter !== 'all' && o.entityId !== entityFilter) return;
       o.items.forEach(item => {
         if (item.status === 'Cancelled') return;
+        if (!paymentsAllowedDates.has(item.deliveryDate || '')) return;
+        if (paymentsServiceFilter !== 'all') {
+          const service = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
+          if (service !== paymentsServiceFilter) return;
+        }
         const key = `${o.id}-${item.deliveryDate || ''}-${item.serviceSlot || ''}`;
         if (!map[key]) {
           map[key] = {
@@ -1799,7 +1841,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       });
     });
     return Object.values(map);
-  }, [orders, entityFilter]);
+  }, [orders, entityFilter, paymentsAllowedDates, paymentsServiceFilter]);
 
   // Merge pending drops that share one claimed payment reference into a
   // single PaymentGroup — see the PaymentGroup interface for why grouping
@@ -1861,6 +1903,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const paidDrops = useMemo(() => paymentDrops.filter(d => d.paymentStatus === 'Paid'), [paymentDrops]);
 
+  // `lines` further narrowed to the Payments tab's own week/day/service
+  // filter — everything below that used to read straight from `lines`
+  // (driverCashReconciliation, paymentSummary, myClaimedSummary, the new
+  // Driver Claimed total) now reads from this instead, so the whole tab
+  // scopes together. `lines` itself already applies entityFilter.
+  const paymentsLines = useMemo(() => lines.filter(({ item }) => {
+    if (!paymentsAllowedDates.has(item.deliveryDate || '')) return false;
+    if (paymentsServiceFilter !== 'all') {
+      const service = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
+      if (service !== paymentsServiceFilter) return false;
+    }
+    return true;
+  }), [lines, paymentsAllowedDates, paymentsServiceFilter]);
+
   // Delivery Staff Payments §4.4 — cash reconciliation, derived straight
   // from OrderItem documents (no separate collection/audit-log change
   // needed, per the scope doc's own correction there). Only ever counts a
@@ -1871,35 +1927,184 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // "handed over at end of day" unit; a driver holding cash across
   // multiple days shows up as multiple rows, which is intentional.
   const driverCashReconciliation = useMemo(() => {
-    const map: Record<string, { staffId: string; driverName: string; date: string; amount: number; count: number }> = {};
-    lines.forEach(({ order, item }) => {
+    // "Cash" here means the *type* of the payment method the driver claimed
+    // against, not its display name — `item.paymentMethodName` stores the
+    // configured method's free-text `name` (e.g. "Cash on Delivery"), which
+    // this used to compare directly against the literal string 'cash' and
+    // so never matched, silently leaving this panel empty. Look the claimed
+    // name up against the actual configured methods instead, same as every
+    // other Cash-vs-Digital distinction in this file goes through
+    // `PaymentMethod.type`, not a guess at the name.
+    const cashMethodNames = new Set(
+      paymentMethods.filter(m => m.type === 'Cash').map(m => m.name)
+    );
+    const map: Record<string, { staffId: string; driverName: string; date: string; amount: number; count: number; partialCount: number }> = {};
+    paymentsLines.forEach(({ order, item }) => {
       if (
         item.paymentStatus !== 'Paid' &&
         item.paymentClaimedBy === 'driver' &&
         item.paymentClaimedByStaffId &&
-        (item.paymentMethodName || '').toLowerCase() === 'cash'
+        !!item.paymentMethodName &&
+        cashMethodNames.has(item.paymentMethodName)
       ) {
         const staffId = item.paymentClaimedByStaffId;
         const date = item.deliveryDate || 'Unscheduled';
         const key = `${staffId}::${date}`;
         if (!map[key]) {
-          map[key] = { staffId, driverName: driverNameById[staffId] || 'Unknown driver', date, amount: 0, count: 0 };
+          map[key] = { staffId, driverName: driverNameById[staffId] || 'Unknown driver', date, amount: 0, count: 0, partialCount: 0 };
         }
-        map[key].amount += itemNetAmount(order, item);
+        // A Partial claim means the driver only actually has
+        // `paymentIssueAmount` in hand, not the item's full price — this
+        // panel is "what the driver should be handing over," so it has to
+        // use what was really collected, not what was owed. (Previously
+        // this always summed the full item value, which overstated a
+        // partial-paying driver's actual cash on hand — caught by Bhimal.)
+        const isPartial = item.paymentIssueAmount != null && !Number.isNaN(item.paymentIssueAmount);
+        map[key].amount += isPartial ? (item.paymentIssueAmount as number) : itemNetAmount(order, item);
         map[key].count += 1;
+        if (isPartial) map[key].partialCount += 1;
       }
     });
     return Object.values(map).sort((a, b) => a.date.localeCompare(b.date) || a.driverName.localeCompare(b.driverName));
-  }, [lines, driverNameById]);
+  }, [paymentsLines, driverNameById, paymentMethods]);
+
+  // Delivery Staff Payments §9 — cashier "Reconcile" section. Distinct from
+  // driverCashReconciliation above (a read-only, Cash-only "what should the
+  // driver be holding" indicator): this is the actionable handover screen,
+  // covering every payment method a driver has claimed against, with a
+  // per-claim Confirm and a per-method-type bulk Confirm. Deliberately
+  // excludes any claim with a paymentIssueNote (Partial or Issue/dispute) —
+  // those need the existing Mark Paid dialog's manual method confirmation,
+  // since what was actually collected can differ from the claimed method's
+  // face value; only a clean, full "driver claimed and holds the full
+  // amount" claim is safe to reconcile in bulk. Gated purely on
+  // currentPermissions?.payments?.edit wherever it's rendered/acted on
+  // below — never on isDriver — per Bhimal's explicit directive that access
+  // to Mark Paid/Reconcile is controlled only through the Roles permission,
+  // not a hardcoded role check.
+  const reconcileGroups = useMemo(
+    () => paymentGroups.filter(g =>
+      g.claimedBy === 'driver' &&
+      !!g.claimedByStaffId &&
+      !!g.claimedMethod &&
+      !g.drops.some(d => !!d.paymentIssueNote)
+    ),
+    [paymentGroups]
+  );
+
+  // Driver picker is scoped to only drivers who currently have something
+  // pending to reconcile (explicit decision — a full driver list would make
+  // the cashier hunt through mostly-empty entries every time).
+  const reconcileDrivers = useMemo(() => {
+    const staffIds = new Set(reconcileGroups.map(g => g.claimedByStaffId as string));
+    return activeDrivers
+      .filter(d => staffIds.has(d.id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [reconcileGroups, activeDrivers]);
+
+  const reconcileGroupsForDriver = useMemo(
+    () => reconcileGroups.filter(g => g.claimedByStaffId === reconcileDriverId),
+    [reconcileGroups, reconcileDriverId]
+  );
+
+  // Sub-grouped by the claimed method's display name (e.g. "Cash on
+  // Delivery", "Juice / Transfer") so the cashier can bulk-confirm one
+  // method type at a time, matching how they'd actually reconcile a
+  // physical handover against a bank/e-wallet statement.
+  const reconcileByMethod = useMemo(() => {
+    const map: Record<string, { method: string; groups: PaymentGroup[]; total: number }> = {};
+    const order: string[] = [];
+    reconcileGroupsForDriver.forEach(g => {
+      const method = g.claimedMethod as string;
+      if (!map[method]) { map[method] = { method, groups: [], total: 0 }; order.push(method); }
+      map[method].groups.push(g);
+      map[method].total += g.total;
+    });
+    return order.map(m => map[m]);
+  }, [reconcileGroupsForDriver]);
+
+  // If the selected driver's last pending claim just got confirmed (or they
+  // were removed/deactivated), fall back to the first driver who still has
+  // something pending rather than showing a picked-but-empty driver.
+  useEffect(() => {
+    if (reconcileDriverId && !reconcileDrivers.some(d => d.id === reconcileDriverId)) {
+      setReconcileDriverId(reconcileDrivers[0]?.id || '');
+      setConfirmBulkKey(null);
+    }
+  }, [reconcileDrivers, reconcileDriverId]);
+
+  // Driver-facing "Claimed" card — a driver's own dashboard swaps the
+  // org-wide "Collected" figure (not personally meaningful to them) for
+  // what THEY personally have claimed and still need to hand over to the
+  // cashier, across every payment method, not just Cash — per the locked
+  // decision "Everything claimed, still awaiting cashier confirmation".
+  // Same actually-collected-amount handling for Partial claims as
+  // driverCashReconciliation above (a driver who only collected part of an
+  // item's price never has the full amount to hand over).
+  const myClaimedSummary = useMemo(() => {
+    const myUid = staffAuthUser?.uid;
+    const breakdown: { key: string; customerName: string; date: string; method: string; reference?: string; amount: number; isPartial: boolean }[] = [];
+    let total = 0;
+    if (myUid) {
+      paymentsLines.forEach(({ order, item }) => {
+        if (
+          item.paymentStatus !== 'Paid' &&
+          item.paymentClaimedBy === 'driver' &&
+          item.paymentClaimedByStaffId === myUid &&
+          !!item.paymentMethodName
+        ) {
+          const isPartial = item.paymentIssueAmount != null && !Number.isNaN(item.paymentIssueAmount);
+          const amount = isPartial ? (item.paymentIssueAmount as number) : itemNetAmount(order, item);
+          total += amount;
+          breakdown.push({
+            key: `${order.id}-${(item as FsOrderItem)._fsItemId || ''}`,
+            customerName: order.customerName,
+            date: item.deliveryDate || 'Unscheduled',
+            method: item.paymentMethodName as string,
+            reference: item.paymentReference,
+            amount,
+            isPartial,
+          });
+        }
+      });
+      breakdown.sort((a, b) => a.date.localeCompare(b.date));
+    }
+    return { total, count: breakdown.length, breakdown };
+  }, [paymentsLines, staffAuthUser]);
 
   const paymentSummary = useMemo(() => {
     let collected = 0, outstanding = 0;
-    lines.forEach(({ order, item }) => {
+    paymentsLines.forEach(({ order, item }) => {
       const amt = itemNetAmount(order, item);
       if (item.paymentStatus === 'Paid') collected += amt; else outstanding += amt;
     });
     return { collected, outstanding };
-  }, [lines]);
+  }, [paymentsLines]);
+
+  // Third summary card — "Driver Claimed": the total currently sitting in
+  // any driver's hands, unconfirmed, org-wide. By explicit decision this
+  // includes Partial and Issue/dispute claims too (using the actually-
+  // collected amount for Partials, same as driverCashReconciliation and
+  // myClaimedSummary above) — it's meant to answer "how much money is
+  // currently out with drivers," not just what's immediately reconcilable
+  // via the Reconcile section's bulk-confirm (which deliberately excludes
+  // Partial/Issue).
+  const allDriversClaimedSummary = useMemo(() => {
+    let total = 0;
+    let count = 0;
+    paymentsLines.forEach(({ order, item }) => {
+      if (
+        item.paymentStatus !== 'Paid' &&
+        item.paymentClaimedBy === 'driver' &&
+        !!item.paymentMethodName
+      ) {
+        const isPartial = item.paymentIssueAmount != null && !Number.isNaN(item.paymentIssueAmount);
+        total += isPartial ? (item.paymentIssueAmount as number) : itemNetAmount(order, item);
+        count += 1;
+      }
+    });
+    return { total, count };
+  }, [paymentsLines]);
 
   const pendingCustomers = useMemo(() => {
     return customers.filter(c => c.registrationStatus === 'Pending');
@@ -2210,6 +2415,58 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     } finally {
       setPendingPaymentKey(null);
       setPaymentGroup(null);
+    }
+  };
+
+  // Delivery Staff Payments §9 — the Reconcile section's "Confirm all
+  // [Method] for this driver" action. Explicit user decision: this writes
+  // every item across every matching claim in ONE atomic batch — all
+  // claims confirmed or none — rather than looping markPaidGroup calls one
+  // group at a time, so a mid-way failure can never leave the handover
+  // half-reconciled. Same permission gate, target-resolution and audit
+  // pattern as markPaidGroup, just spanning multiple groups.
+  const markPaidBulk = async (groups: PaymentGroup[], methodName: string) => {
+    if (currentPermissions?.payments?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to mark payments paid.');
+      return;
+    }
+    const method = paymentMethods.find(m => m.name === methodName);
+    if (!method) {
+      setOpsActionError(`Could not find the "${methodName}" payment method — try refreshing.`);
+      return;
+    }
+    const targets: { orderId: string; itemId: string }[] = [];
+    groups.forEach(group => {
+      group.drops.forEach(drop => {
+        drop.items.forEach(i => {
+          if (i._fsItemId) targets.push({ orderId: drop.orderId, itemId: i._fsItemId });
+        });
+      });
+    });
+    if (targets.length === 0) {
+      setOpsActionError('Could not reconcile — no Firestore item ids found on these claims. Try refreshing.');
+      return;
+    }
+    const bulkKey = `bulk-${groups.map(g => g.key).join(',')}`;
+    setOpsActionError(null);
+    setPendingPaymentKey(bulkKey);
+    try {
+      const batch = writeBatch(db);
+      targets.forEach(t => {
+        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), {
+          paymentStatus: 'Paid',
+          paymentMethodName: method.name,
+        });
+      });
+      await batch.commit();
+      const orderCount = new Set(targets.map(t => t.orderId)).size;
+      const driverName = driverNameById[groups[0]?.claimedByStaffId || ''] || 'driver';
+      writeAuditLog('PaymentConfirmed', `Reconciled ${targets.length} item(s) across ${orderCount} order(s) and ${groups.length} claim(s) via ${method.name}, handed over by ${driverName}`);
+    } catch (e) {
+      console.error('Bulk reconcile failed', e);
+      setOpsActionError('Reconcile failed — please try again.');
+    } finally {
+      setPendingPaymentKey(null);
     }
   };
 
@@ -7745,16 +8002,105 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <AlertCircle className="size-4 shrink-0" /> {opsActionError}
                 </div>
               )}
-              {/* Collected vs Outstanding totals */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
-                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Collected</p>
-                  <p className="text-2xl font-black text-success">{formatCurrency(paymentSummary.collected)}</p>
+
+              {/* Payments filter bar — same This week/Next week + day +
+                  service pattern as Orders by Dish, minus the partner
+                  checkboxes (not a payments concept). Scopes everything
+                  below: the summary cards, the driver cash panel, the
+                  Reconcile section, and the itemized unpaid list. */}
+              <div className="bg-white border border-[#E7E0D0] rounded-2xl p-4 shadow-sm space-y-3">
+                <div className="flex gap-1 bg-slate-100 rounded-xl p-1">
+                  {(['this', 'next'] as const).map(w => (
+                    <button
+                      key={w}
+                      onClick={() => { setPaymentsWeekFilter(w); setPaymentsDayFilter('all'); }}
+                      className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        paymentsWeekFilter === w ? 'bg-primary text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      {w === 'this' ? 'This week' : 'Next week'}
+                    </button>
+                  ))}
                 </div>
+                <div className="flex gap-1 overflow-x-auto">
+                  <button
+                    onClick={() => setPaymentsDayFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${
+                      paymentsDayFilter === 'all' ? 'bg-slate-700 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                    }`}
+                  >All days</button>
+                  {paymentsDaysForWeek.map(d => (
+                    <button
+                      key={d.key}
+                      onClick={() => setPaymentsDayFilter(d.date)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${
+                        paymentsDayFilter === d.date ? 'bg-slate-700 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                      }`}
+                    >{d.short}{d.key === todayKey ? ' · Today' : ''}</button>
+                  ))}
+                </div>
+                {dinnerEnabled && (
+                  <div className="flex gap-1 bg-slate-100 rounded-xl p-1">
+                    {(['all', 'Lunch', 'Dinner'] as const).map(s => (
+                      <button
+                        key={s}
+                        onClick={() => setPaymentsServiceFilter(s)}
+                        className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                          paymentsServiceFilter === s ? 'bg-accent text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'
+                        }`}
+                      >
+                        {s === 'all' ? 'All services' : s === 'Lunch' ? '☀️ Lunch' : '🌙 Dinner'}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="pt-2 border-t border-slate-100 mt-2">
+                  {renderEntityFilterToggle()}
+                </div>
+              </div>
+
+              {/* Collected / Outstanding / Driver Claimed totals — a driver
+                  sees their own "Claimed" figure instead of the org-wide
+                  Collected number, since Collected isn't personally
+                  meaningful to them; it's clickable and opens the handover
+                  breakdown below. Back office instead gets a third card,
+                  "Driver Claimed" — the org-wide total currently sitting
+                  with drivers, unconfirmed (a quick-glance number; the
+                  Reconcile section below is where it's actually actioned). */}
+              <div className={`grid grid-cols-1 sm:grid-cols-2 ${!isDriver ? 'lg:grid-cols-3' : ''} gap-4`}>
+                {isDriver ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowClaimedBreakdown(true)}
+                    disabled={myClaimedSummary.count === 0}
+                    title={myClaimedSummary.count === 0 ? 'Nothing claimed yet' : 'See the breakdown to hand over to the cashier'}
+                    className="text-left bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6 hover:border-warning/40 active:scale-[0.99] transition-all cursor-pointer disabled:cursor-default disabled:hover:border-[#E7E0D0]"
+                  >
+                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Claimed</p>
+                    <p className="text-2xl font-black text-warning">{formatCurrency(myClaimedSummary.total)}</p>
+                    <p className="text-[10px] font-bold text-slate-400 mt-1">
+                      {myClaimedSummary.count > 0 ? `${myClaimedSummary.count} to hand over · tap for breakdown` : 'Awaiting cashier confirmation'}
+                    </p>
+                  </button>
+                ) : (
+                  <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
+                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Collected</p>
+                    <p className="text-2xl font-black text-success">{formatCurrency(paymentSummary.collected)}</p>
+                  </div>
+                )}
                 <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Outstanding</p>
                   <p className="text-2xl font-black text-danger">{formatCurrency(paymentSummary.outstanding)}</p>
                 </div>
+                {!isDriver && (
+                  <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
+                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Driver Claimed</p>
+                    <p className="text-2xl font-black text-warning">{formatCurrency(allDriversClaimedSummary.total)}</p>
+                    <p className="text-[10px] font-bold text-slate-400 mt-1">
+                      {allDriversClaimedSummary.count > 0 ? `${allDriversClaimedSummary.count} claim${allDriversClaimedSummary.count !== 1 ? 's' : ''} awaiting confirmation` : 'Nothing pending'}
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Delivery Staff Payments §4.4 — cash a driver is still
@@ -7771,7 +8117,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <div key={`${row.staffId}::${row.date}`} className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <p className="text-xs font-black text-slate-900 truncate">{row.driverName}</p>
-                          <p className="text-[10px] font-bold text-slate-400">{formatDay(row.date)} · {row.count} item{row.count !== 1 ? 's' : ''}</p>
+                          <p className="text-[10px] font-bold text-slate-400">
+                            {formatDay(row.date)} · {row.count} item{row.count !== 1 ? 's' : ''}
+                            {row.partialCount > 0 && ` (${row.partialCount} partial)`}
+                          </p>
                         </div>
                         <p className="text-sm font-black text-warning shrink-0">{formatCurrency(row.amount)}</p>
                       </div>
@@ -7780,9 +8129,105 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 </div>
               )}
 
-              <div className="bg-white border border-[#E7E0D0] rounded-2xl p-4 shadow-sm flex items-center justify-between">
-                {renderEntityFilterToggle()}
-              </div>
+              {/* Delivery Staff Payments §9 — Reconcile: the actionable
+                  driver-handover screen. Kept as its own section rather
+                  than folded into the read-only cash panel above (explicit
+                  decision) — covers every payment method a driver has
+                  claimed (not just Cash), with a per-claim Confirm and a
+                  per-method-type bulk Confirm. Visible whenever any driver
+                  has something pending, same as the rest of this tab;
+                  every action inside is gated purely on
+                  currentPermissions?.payments?.edit, never on isDriver. */}
+              {reconcileDrivers.length > 0 && (
+                <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
+                  <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                    <div>
+                      <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Reconcile — driver handover</p>
+                      <p className="text-[10px] font-bold text-slate-400 mt-0.5">Select a driver to confirm what they've collected</p>
+                    </div>
+                    <select
+                      value={reconcileDriverId}
+                      onChange={(e) => { setReconcileDriverId(e.target.value); setConfirmBulkKey(null); }}
+                      className="px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-700 cursor-pointer"
+                    >
+                      <option value="">Select a driver…</option>
+                      {reconcileDrivers.map(d => (
+                        <option key={d.id} value={d.id}>{d.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {!reconcileDriverId ? (
+                    <p className="text-xs font-bold text-slate-400 py-4 text-center">Select a driver to see what they need to hand over.</p>
+                  ) : reconcileByMethod.length === 0 ? (
+                    <p className="text-xs font-bold text-slate-400 py-4 text-center">Nothing pending for this driver right now.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {reconcileByMethod.map(bucket => {
+                        const bulkKey = `bulk-${bucket.groups.map(g => g.key).join(',')}`;
+                        const isBulkPending = pendingPaymentKey === bulkKey;
+                        const isArmed = confirmBulkKey === bulkKey;
+                        return (
+                          <div key={bucket.method} className="border border-slate-100 rounded-2xl p-4">
+                            <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                              <div>
+                                <p className="text-xs font-black text-slate-900">{bucket.method}</p>
+                                <p className="text-[10px] font-bold text-slate-400">{bucket.groups.length} claim{bucket.groups.length !== 1 ? 's' : ''}</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-black text-slate-900">{formatCurrency(bucket.total)}</p>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isArmed) {
+                                      markPaidBulk(bucket.groups, bucket.method);
+                                      setConfirmBulkKey(null);
+                                    } else {
+                                      setConfirmBulkKey(bulkKey);
+                                    }
+                                  }}
+                                  disabled={isBulkPending || currentPermissions?.payments?.edit !== true}
+                                  title={currentPermissions?.payments?.edit !== true ? 'Requires Payments — Edit permission' : undefined}
+                                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer transition-all ${
+                                    isArmed ? 'bg-danger text-white animate-pulse' : 'bg-success text-white hover:bg-success/90'
+                                  }`}
+                                >
+                                  {isBulkPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                                  {isBulkPending ? 'Confirming...' : isArmed ? 'Click to confirm' : `Confirm all (${bucket.groups.length})`}
+                                </button>
+                              </div>
+                            </div>
+                            <div className="divide-y divide-slate-100">
+                              {bucket.groups.map(group => (
+                                <div key={group.key} className="py-2 flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-bold text-slate-700 truncate">{group.customerName}</p>
+                                    <p className="text-[10px] font-bold text-slate-400">
+                                      {formatDay(group.earliestDate || '')}{group.claimedReference ? ` · ${group.claimedReference}` : ''}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <p className="text-xs font-black text-slate-900">{formatCurrency(group.total)}</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => setPaymentGroup(group)}
+                                      disabled={pendingPaymentKey === group.key || currentPermissions?.payments?.edit !== true}
+                                      title={currentPermissions?.payments?.edit !== true ? 'Requires Payments — Edit permission' : undefined}
+                                      className="px-3 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary/20 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                                    >
+                                      {pendingPaymentKey === group.key ? '...' : 'Confirm'}
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {unpaidByDate.length === 0 ? (
                 <EmptyState icon={<Wallet className="size-10" />} label="Nothing outstanding" />
@@ -8246,6 +8691,43 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Driver's own "Claimed" breakdown — what they need to hand over to
+          the cashier. Read-only: a driver never confirms their own
+          payments (that stays back office's job via Reconcile/Mark Paid),
+          this is purely the checklist for the handover conversation. */}
+      {showClaimedBreakdown && (
+        <Portal>
+          <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 max-h-[85vh] flex flex-col">
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between shrink-0">
+                <div>
+                  <h2 className="text-lg font-black text-slate-900">Hand over to cashier</h2>
+                  <p className="text-[10px] font-bold text-slate-400 mt-0.5">{myClaimedSummary.count} claim{myClaimedSummary.count !== 1 ? 's' : ''} · {formatCurrency(myClaimedSummary.total)} total</p>
+                </div>
+                <button onClick={() => setShowClaimedBreakdown(false)} className="p-2 text-slate-400 hover:text-danger">
+                  <X className="size-5" />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto divide-y divide-slate-100">
+                {myClaimedSummary.breakdown.length === 0 ? (
+                  <p className="text-xs font-bold text-slate-400 text-center py-6">Nothing claimed yet.</p>
+                ) : myClaimedSummary.breakdown.map(row => (
+                  <div key={row.key} className="py-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-black text-slate-900 truncate">{row.customerName}</p>
+                      <p className="text-[10px] font-bold text-slate-400">
+                        {formatDay(row.date)} · {row.method}{row.reference ? ` · ${row.reference}` : ''}{row.isPartial ? ' · Partial' : ''}
+                      </p>
+                    </div>
+                    <p className="text-sm font-black text-warning shrink-0">{formatCurrency(row.amount)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Portal>
       )}
 
       {/* Collect Payment Modal — portaled to <body>, same clipping issue as
