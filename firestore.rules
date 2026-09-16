@@ -36,13 +36,26 @@ service cloud.firestore {
     // Resolves the signed-in staff member's role live (never trust a copy —
     // see the schema doc's note on why roleId stays a pointer, not a
     // denormalized permission snapshot) and checks a granular permission.
+    // 2026-09: rewritten to fetch roles/{roleId} once via `let` instead of
+    // four separate get() calls per invocation — with the items/{itemId}
+    // update rule below now calling isStaffAllowed() several times in one
+    // write, the old 4x-get version was a major contributor to that rule
+    // tripping Firestore's "maximum of 1000 expressions" per-write cap.
     function isStaffAllowed(groupName, permissionType) {
-      return isActiveStaff()
-        && exists(/databases/$(database)/documents/roles/$(staffDoc().data.roleId))
-        && 'permissions' in get(/databases/$(database)/documents/roles/$(staffDoc().data.roleId)).data
-        && groupName in get(/databases/$(database)/documents/roles/$(staffDoc().data.roleId)).data.permissions
-        && permissionType in get(/databases/$(database)/documents/roles/$(staffDoc().data.roleId)).data.permissions[groupName]
-        && get(/databases/$(database)/documents/roles/$(staffDoc().data.roleId)).data.permissions[groupName][permissionType] == true;
+      return isActiveStaff() && staffAllowedForRole(staffDoc().data.roleId, groupName, permissionType);
+    }
+
+    function staffAllowedForRole(roleId, groupName, permissionType) {
+      return exists(/databases/$(database)/documents/roles/$(roleId))
+        && staffHasPermission(roleId, groupName, permissionType);
+    }
+
+    function staffHasPermission(roleId, groupName, permissionType) {
+      let role = get(/databases/$(database)/documents/roles/$(roleId)).data;
+      return ('permissions' in role)
+        && (groupName in role.permissions)
+        && (permissionType in role.permissions[groupName])
+        && (role.permissions[groupName][permissionType] == true);
     }
 
     // Partner accounts (BonManzE_PartnerAccounts_Scope.md): unlike the
@@ -270,9 +283,22 @@ service cloud.firestore {
           || isStaffAllowed('deliveryList', 'view')
           || isStaffAllowed('payments', 'view'));
       allow create: if false; // Cloud Function only — see confirmCheckout
-      allow update: if isPartnerEntityAllowed(resource.data.get('entityId', null))
-        && isDriverItemAllowed(resource.data.get('assignedDriverId', null))
-        && (
+
+      // 2026-09 fix: this rule started throwing PERMISSION_DENIED
+      // ("maximum of 1000 expressions to evaluate has been reached") once
+      // clause 4 (Driver deliver + claim) was added on top of the existing
+      // three — isStaffAllowed('deliveryList','edit') and
+      // isCustomer(resource.data.customerId) were each being evaluated
+      // twice per write (once in clause 1 or 3, again in clause 2 or 4),
+      // and isStaffAllowed itself re-fetched roles/{roleId} four times per
+      // call (see the 2026-09 note on isStaffAllowed above). Both are now
+      // fixed: the role doc is fetched once per isStaffAllowed call, and
+      // the two genuinely-repeated checks below are computed once via
+      // `let` and reused, instead of being re-evaluated inline.
+      function canUpdateItem() {
+        let isCust = isCustomer(resource.data.customerId);
+        let canEditDeliveryList = isStaffAllowed('deliveryList', 'edit');
+        return (
           // 1. Staff update
           (
             (
@@ -287,8 +313,8 @@ service cloud.firestore {
               request.resource.data.status != resource.data.status
               && (
                 (request.resource.data.status == 'Preparing' || request.resource.data.status == 'Ready' || request.resource.data.status == 'Active')
-                  ? (isStaffAllowed('ordersByDish', 'edit') || isStaffAllowed('deliveryList', 'edit'))
-                  : isStaffAllowed('deliveryList', 'edit')
+                  ? (isStaffAllowed('ordersByDish', 'edit') || canEditDeliveryList)
+                  : canEditDeliveryList
               )
               && request.resource.data.paymentStatus == resource.data.paymentStatus
               && request.resource.data.get('paymentMethodName', null) == resource.data.get('paymentMethodName', null)
@@ -302,7 +328,7 @@ service cloud.firestore {
           && request.resource.data.get('entityId', null) == resource.data.get('entityId', null)
         ) || (
           // 2. Customer update (pay claim)
-          isCustomer(resource.data.customerId)
+          isCust
           && request.resource.data.paymentStatus == resource.data.paymentStatus
           && request.resource.data.price == resource.data.price
           && request.resource.data.qty == resource.data.qty
@@ -324,7 +350,7 @@ service cloud.firestore {
           // may change; invoiceNumber/invoiceIssuedAt themselves are set
           // only by issueInvoiceOnPayment's Admin SDK write, never by a
           // client, so both are pinned equal here too.
-          (isStaffAllowed('payments', 'view') || isCustomer(resource.data.customerId))
+          (isStaffAllowed('payments', 'view') || isCust)
           && request.resource.data.get('invoiceReprintCount', null) != resource.data.get('invoiceReprintCount', null)
           && request.resource.data.paymentStatus == resource.data.paymentStatus
           && request.resource.data.get('paymentMethodName', null) == resource.data.get('paymentMethodName', null)
@@ -352,7 +378,7 @@ service cloud.firestore {
           // Paid) is never granted to a Driver role.
           isDriverStaff()
           && resource.data.get('assignedDriverId', null) == request.auth.uid
-          && isStaffAllowed('deliveryList', 'edit')
+          && canEditDeliveryList
           && resource.data.status == 'En route'
           // Client writes 'Completed' for a delivered item everywhere else
           // in this app (handleMarkDelivered/handleBulkMarkDelivered) —
@@ -382,6 +408,11 @@ service cloud.firestore {
                 && request.resource.data.get('paymentClaimedByStaffId', null) == request.auth.uid)
           )
         );
+      }
+
+      allow update: if isPartnerEntityAllowed(resource.data.get('entityId', null))
+        && isDriverItemAllowed(resource.data.get('assignedDriverId', null))
+        && canUpdateItem();
       allow delete: if false;
     }
 
