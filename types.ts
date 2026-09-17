@@ -235,6 +235,25 @@ export interface OrderItem {
   // claim at all, optional context for a partial.
   paymentIssueAmount?: number;
   paymentIssueNote?: string;
+  // Resolution of a Partial/Issue claim (Payments tab "Resolve" action,
+  // 2026-09) — the automated resolution flow explicitly deferred when
+  // paymentIssueAmount/paymentIssueNote were introduced above. Tracks how
+  // much has actually been confirmed collected against this item,
+  // independent of paymentStatus: set to the item's full net amount
+  // whenever paymentStatus flips to 'Paid' (via Mark Paid, bulk Reconcile,
+  // or a Resolve that happens to cover the whole remaining balance), or to
+  // a lesser amount when Resolve confirms only part of it — leaving a
+  // genuine remainder that re-enters the normal unclaimed-balance flow
+  // (customer self-pay, or a later ordinary Mark Paid), no longer flagged
+  // as Partial/Issue. paymentWrittenOff marks the remaining balance (full
+  // amount minus paymentPaidAmount) as a deliberate write-off instead of a
+  // future collection — excluded from Outstanding, tracked in its own
+  // "Written off" total, never counted as Collected.
+  paymentPaidAmount?: number;
+  paymentWrittenOff?: boolean;
+  paymentWriteOffNote?: string;
+  paymentWriteOffBy?: string;
+  paymentWriteOffAt?: any;
 }
 
 export interface Order {
@@ -338,6 +357,7 @@ export type AuditLogType =
   | 'EntityReassignment'
   | 'PaymentConfirmed'
   | 'PaymentClaimReset'
+  | 'PaymentWrittenOff'
   | 'DeliveryConfirmed';
 
 export interface AuditLog {

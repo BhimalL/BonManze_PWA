@@ -302,10 +302,17 @@ service cloud.firestore {
           // 1. Staff update
           (
             (
-              // Payment edit
+              // Payment edit — an amount-aware Mark Paid/Reconcile confirm
+              // (a Partial claim that doesn't cover the full price also
+              // clears paymentMethodName/paymentReference without changing
+              // paymentStatus) or a Write Off need these two fields
+              // recognized here too, or the write falls through every
+              // clause below and gets rejected.
               (request.resource.data.paymentStatus != resource.data.paymentStatus
                || request.resource.data.get('paymentMethodName', null) != resource.data.get('paymentMethodName', null)
-               || request.resource.data.get('paymentReference', null) != resource.data.get('paymentReference', null))
+               || request.resource.data.get('paymentReference', null) != resource.data.get('paymentReference', null)
+               || request.resource.data.get('paymentPaidAmount', null) != resource.data.get('paymentPaidAmount', null)
+               || request.resource.data.get('paymentWrittenOff', null) != resource.data.get('paymentWrittenOff', null))
               && isStaffAllowed('payments', 'edit')
               && request.resource.data.status == resource.data.status
             ) || (
@@ -341,6 +348,13 @@ service cloud.firestore {
           && request.resource.data.get('tierAtOrder', null) == resource.data.get('tierAtOrder', null)
           && request.resource.data.get('isReconciled', null) == resource.data.get('isReconciled', null)
           && request.resource.data.get('notes', null) == resource.data.get('notes', null)
+          // 2026-09: paymentPaidAmount/paymentWrittenOff are Resolve-only
+          // fields (Operations Payments tab, payments.edit staff only) —
+          // pin them equal here so a customer's own pay-claim write can
+          // never touch them, same reasoning as every other pinned field
+          // in this clause.
+          && request.resource.data.get('paymentPaidAmount', null) == resource.data.get('paymentPaidAmount', null)
+          && request.resource.data.get('paymentWrittenOff', null) == resource.data.get('paymentWrittenOff', null)
           && (resource.data.paymentStatus != 'Paid'
               || (request.resource.data.get('paymentMethodName', null) == resource.data.get('paymentMethodName', null)
                   && request.resource.data.get('paymentReference', null) == resource.data.get('paymentReference', null)))
@@ -363,6 +377,11 @@ service cloud.firestore {
           && request.resource.data.get('entityId', null) == resource.data.get('entityId', null)
           && request.resource.data.get('invoiceNumber', null) == resource.data.get('invoiceNumber', null)
           && request.resource.data.get('invoiceIssuedAt', null) == resource.data.get('invoiceIssuedAt', null)
+          // 2026-09: defense-in-depth, matching clause 2 — a reprint-count
+          // bump (staff view-only, or the customer's own receipt re-view)
+          // has no business touching the Resolve-only fields either.
+          && request.resource.data.get('paymentPaidAmount', null) == resource.data.get('paymentPaidAmount', null)
+          && request.resource.data.get('paymentWrittenOff', null) == resource.data.get('paymentWrittenOff', null)
         ) || (
           // 4. Driver deliver + claim (BonManzE_DeliveryPayments_Scope.md).
           // A driver marks their own assigned drop Delivered and, in the
@@ -398,6 +417,11 @@ service cloud.firestore {
           && request.resource.data.get('invoiceNumber', null) == resource.data.get('invoiceNumber', null)
           && request.resource.data.get('invoiceIssuedAt', null) == resource.data.get('invoiceIssuedAt', null)
           && request.resource.data.get('invoiceReprintCount', null) == resource.data.get('invoiceReprintCount', null)
+          // 2026-09: defense-in-depth, matching clause 2 — a driver's
+          // deliver+claim write records a claim/note only, never a
+          // confirmed Resolve outcome, so pin these here too.
+          && request.resource.data.get('paymentPaidAmount', null) == resource.data.get('paymentPaidAmount', null)
+          && request.resource.data.get('paymentWrittenOff', null) == resource.data.get('paymentWrittenOff', null)
           && (
             // Either no claim at all (the "Issue / dispute" outcome — a
             // note is required client-side, but the rule only needs to

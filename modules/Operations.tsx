@@ -35,6 +35,7 @@ import {
   ImagePlus,
   Loader2,
   AlertCircle,
+  AlertTriangle,
   Printer,
   Receipt,
   FileSpreadsheet,
@@ -448,6 +449,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [dcAmount, setDcAmount] = useState<string>('');
   const [dcNote, setDcNote] = useState<string>('');
   const [pendingDeliverCollectKey, setPendingDeliverCollectKey] = useState<string | null>(null);
+  // Bulk sibling of the block above — the Delivery List's multi-select
+  // "Deliver & Collect (N)" action (2026-09, Bhimal: group it the same way
+  // as the customer app's own grouped payments, not one drop at a time).
+  // bulkDcGroups is null when the modal is closed; each group in it gets
+  // its own row/form in bulkDcForms, keyed by PaymentGroup.key.
+  const [bulkDcGroups, setBulkDcGroups] = useState<PaymentGroup[] | null>(null);
+  const [bulkDcForms, setBulkDcForms] = useState<Record<string, { outcome: 'paid' | 'partial' | 'issue'; methodId: string; amount: string; note: string; reference: string }>>({});
+  const [pendingBulkDeliverCollect, setPendingBulkDeliverCollect] = useState(false);
   const [reuseWeekIndex, setReuseWeekIndex] = useState<number>(0);
 
   // In-flight/error state for the real Firestore writes behind Mark
@@ -460,6 +469,22 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [pendingCookingKey, setPendingCookingKey] = useState<string | null>(null);
   const [pendingPaymentKey, setPendingPaymentKey] = useState<string | null>(null);
   const [pendingResetPaymentKey, setPendingResetPaymentKey] = useState<string | null>(null);
+  // Delivery Staff Payments — the "Write Off" action (2026-09), available
+  // on ANY pending drop (not just a flagged Partial/Issue claim — Bhimal's
+  // explicit call: an ordinary stale unpaid balance can need writing off
+  // too, and confirming what a driver already claimed to have collected is
+  // Mark Paid/Reconcile's job now, not this one). This only ever decides
+  // the fate of what's still outstanding: optionally record a bit more as
+  // actually collected right now, then write off whatever remains, with a
+  // required reason. resolveAmount seeds from the drop's own claimed
+  // partial figure when one exists (see the modal's open handler) so the
+  // common case — writing off exactly the shortfall a driver already
+  // flagged — is a single click, not a re-typed number.
+  const [resolveDrop, setResolveDrop] = useState<DropTask | null>(null);
+  const [resolveMethodId, setResolveMethodId] = useState<string>('');
+  const [resolveAmount, setResolveAmount] = useState<string>('');
+  const [resolveNote, setResolveNote] = useState<string>('');
+  const [pendingResolveKey, setPendingResolveKey] = useState<string | null>(null);
   // Delivery Staff Payments §9 — cashier "Reconcile" section: which driver's
   // handover the Payments tab is currently showing. Cleared automatically
   // (see the effect near reconcileDrivers below) whenever the selected
@@ -475,6 +500,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // a driver's own dashboard) — whether its handover breakdown modal is
   // open.
   const [showClaimedBreakdown, setShowClaimedBreakdown] = useState(false);
+  // Back office's "Driver Claimed" card — whether the modal holding the
+  // read-only Driver Cash Reconciliation panel and the actionable
+  // Reconcile section is open. Moved out of the main Payments tab flow
+  // into this modal (explicit decision) to keep the default view focused
+  // on the summary cards and the itemized unpaid list.
+  const [showDriverReconcileModal, setShowDriverReconcileModal] = useState(false);
   // Checkbox-based multi-select for the Delivery List tab's bulk Dispatch /
   // Mark Delivered actions — a Set of drop.key. Scoped to whatever's
   // currently visible (day/week/service/entity filters), so it's cleared
@@ -1637,6 +1668,38 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
 
   const itemNetAmount = (order: Order, item: OrderItem) => itemAmountBreakdown(order, item).net;
 
+  // Delivery Staff Payments — payment resolution (2026-09). itemPaidAmount
+  // is the amount actually confirmed collected against this item,
+  // independent of paymentStatus. A Paid item reports paymentPaidAmount
+  // when the write that Paid it recorded one (ordinary Mark Paid/Reconcile
+  // now do, per confirmUpdateForItem below, and Write Off does too) — or
+  // falls back to the item's full net amount for the many pre-existing
+  // Paid items written before this field existed, since nothing else could
+  // have happened to a Paid item back then. A still-Pending item reports
+  // whatever a Partial claim's Mark Paid/Reconcile confirmed so far (0 if
+  // it's never been through either).
+  const itemPaidAmount = (order: Order, item: OrderItem): number => {
+    if (item.paymentStatus === 'Paid') {
+      return item.paymentPaidAmount != null ? item.paymentPaidAmount : itemNetAmount(order, item);
+    }
+    return item.paymentPaidAmount != null ? item.paymentPaidAmount : 0;
+  };
+
+  // What's still genuinely owed on this item — always 0 once Paid (whether
+  // that was an ordinary full payment or a written-off remainder, neither
+  // leaves anything left to collect), otherwise the true shortfall: the
+  // full amount for an untouched Pending item, or a smaller genuine
+  // remainder after a partial Mark Paid/Reconcile confirmed only some of
+  // it.
+  const itemOutstandingAmount = (order: Order, item: OrderItem): number =>
+    item.paymentStatus === 'Paid' ? 0 : Math.max(0, itemNetAmount(order, item) - itemPaidAmount(order, item));
+
+  // The portion of this item's price that was deliberately written off
+  // (confirmed never collectible, never re-opened) — 0 unless
+  // paymentWrittenOff is set on it.
+  const itemWriteOffAmount = (order: Order, item: OrderItem): number =>
+    item.paymentWrittenOff ? Math.max(0, itemNetAmount(order, item) - itemPaidAmount(order, item)) : 0;
+
   // --- Orders by Dish — scoped to the current week only. This tab answers
   // "what do I need to cook," not "show me every order ever placed"; without
   // this scope it would silently accumulate every past and future week's
@@ -1748,6 +1811,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         map[key].items.push(item);
         map[key].total += itemNetAmount(o, item);
         if (item.paymentStatus === 'Pending') map[key].paymentStatus = 'Pending';
+        // 2026-09 — same claim-derivation as the paymentDrops memo below.
+        // Needed here too now that the Deliver & Collect modal prefills
+        // from a drop's already-claimed method, so customer, driver and
+        // ops stay in sync instead of the driver re-picking blind.
+        if (item.paymentStatus !== 'Paid' && item.paymentMethodName && !map[key].claimedMethod) {
+          map[key].claimedMethod = item.paymentMethodName;
+          map[key].claimedReference = item.paymentReference;
+          map[key].claimedBy = item.paymentClaimedBy;
+          map[key].claimedByStaffId = item.paymentClaimedByStaffId;
+        }
       });
     });
     return Object.values(map).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
@@ -1834,9 +1907,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         if (item.paymentStatus !== 'Paid' && !item.paymentMethodName && item.paymentResetAt) {
           map[key].wasReset = true;
         }
-        if (item.paymentIssueNote && !map[key].paymentIssueNote) {
-          map[key].paymentIssueAmount = item.paymentIssueAmount;
-          map[key].paymentIssueNote = item.paymentIssueNote;
+        if (item.paymentIssueNote) {
+          // Sum across every item in the drop that has a note — a drop can
+          // have several items each carrying their own apportioned share of
+          // one combined claim, and the drop-level figure needs to reflect
+          // the true total, not just whichever item happened to be first.
+          map[key].paymentIssueAmount = (map[key].paymentIssueAmount || 0) + (item.paymentIssueAmount || 0);
+          if (!map[key].paymentIssueNote) map[key].paymentIssueNote = item.paymentIssueNote;
         }
       });
     });
@@ -1972,25 +2049,48 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // driverCashReconciliation above (a read-only, Cash-only "what should the
   // driver be holding" indicator): this is the actionable handover screen,
   // covering every payment method a driver has claimed against, with a
-  // per-claim Confirm and a per-method-type bulk Confirm. Deliberately
-  // excludes any claim with a paymentIssueNote (Partial or Issue/dispute) —
-  // those need the existing Mark Paid dialog's manual method confirmation,
-  // since what was actually collected can differ from the claimed method's
-  // face value; only a clean, full "driver claimed and holds the full
-  // amount" claim is safe to reconcile in bulk. Gated purely on
-  // currentPermissions?.payments?.edit wherever it's rendered/acted on
-  // below — never on isDriver — per Bhimal's explicit directive that access
-  // to Mark Paid/Reconcile is controlled only through the Roles permission,
-  // not a hardcoded role check.
+  // per-claim Confirm and a per-method-type bulk Confirm.
+  // 2026-09: a Partial claim used to be excluded here entirely (it needed
+  // the old blind-full-price Mark Paid dialog instead) — Bhimal correctly
+  // called this out as backwards: the amount a driver claims to have
+  // actually collected is exactly the kind of thing this handover screen
+  // exists to confirm, it shouldn't have to go through a separate flow
+  // first. Confirm/Mark Paid is amount-aware now (see markPaidGroup/
+  // markPaidBulk's confirmUpdateForItem), so a Partial claim is safe to
+  // include: confirming it only ever books the claimed amount, and the
+  // true remainder automatically re-opens as an ordinary unclaimed balance
+  // — never the full face value silently recorded as collected. Only a
+  // pure Issue/dispute (no claimed method at all — nothing to hand over)
+  // never reaches here, which the !!g.claimedMethod check below already
+  // guarantees on its own. Gated purely on currentPermissions?.payments
+  // ?.edit wherever it's rendered/acted on below — never on isDriver — per
+  // Bhimal's explicit directive that access to Mark Paid/Reconcile is
+  // controlled only through the Roles permission, not a hardcoded role
+  // check.
   const reconcileGroups = useMemo(
     () => paymentGroups.filter(g =>
       g.claimedBy === 'driver' &&
       !!g.claimedByStaffId &&
-      !!g.claimedMethod &&
-      !g.drops.some(d => !!d.paymentIssueNote)
+      !!g.claimedMethod
     ),
     [paymentGroups]
   );
+
+  // A group's "face value" (g.total, the full net price) vs what confirming
+  // it will actually book — its constituent items' claimed/partial amounts.
+  // Used to show the cashier the real figure being confirmed whenever it
+  // differs from the total already printed on the card (a Partial claim
+  // inside an otherwise-clean group).
+  const groupCollectedAmount = (group: PaymentGroup): number =>
+    group.drops.reduce((sum, drop) => {
+      const order = orders.find(o => o.id === drop.orderId);
+      if (!order) return sum + drop.total;
+      return sum + drop.items.reduce((s, item) => {
+        const net = itemNetAmount(order, item);
+        const isPartial = item.paymentIssueAmount != null && !Number.isNaN(item.paymentIssueAmount);
+        return s + (isPartial ? Math.min(item.paymentIssueAmount as number, net) : net);
+      }, 0);
+    }, 0);
 
   // Driver picker is scoped to only drivers who currently have something
   // pending to reconcile (explicit decision — a full driver list would make
@@ -2012,16 +2112,17 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // method type at a time, matching how they'd actually reconcile a
   // physical handover against a bank/e-wallet statement.
   const reconcileByMethod = useMemo(() => {
-    const map: Record<string, { method: string; groups: PaymentGroup[]; total: number }> = {};
+    const map: Record<string, { method: string; groups: PaymentGroup[]; total: number; collected: number }> = {};
     const order: string[] = [];
     reconcileGroupsForDriver.forEach(g => {
       const method = g.claimedMethod as string;
-      if (!map[method]) { map[method] = { method, groups: [], total: 0 }; order.push(method); }
+      if (!map[method]) { map[method] = { method, groups: [], total: 0, collected: 0 }; order.push(method); }
       map[method].groups.push(g);
       map[method].total += g.total;
+      map[method].collected += groupCollectedAmount(g);
     });
     return order.map(m => map[m]);
-  }, [reconcileGroupsForDriver]);
+  }, [reconcileGroupsForDriver, orders]);
 
   // If the selected driver's last pending claim just got confirmed (or they
   // were removed/deactivated), fall back to the first driver who still has
@@ -2072,13 +2173,24 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     return { total, count: breakdown.length, breakdown };
   }, [paymentsLines, staffAuthUser]);
 
+  // 2026-09: Collected/Outstanding now go through itemPaidAmount/
+  // itemOutstandingAmount instead of a binary "full price if Paid, else
+  // owed" split — a written-off item's actually-collected sliver still
+  // counts as Collected (it really was banked), its unrecovered remainder
+  // shows up in writtenOff instead of vanishing or inflating Outstanding,
+  // and a partially-Resolved-but-still-Pending item's genuine remainder is
+  // exactly what Outstanding reports, not its full original price.
   const paymentSummary = useMemo(() => {
-    let collected = 0, outstanding = 0;
+    let collected = 0, outstanding = 0, writtenOff = 0;
     paymentsLines.forEach(({ order, item }) => {
-      const amt = itemNetAmount(order, item);
-      if (item.paymentStatus === 'Paid') collected += amt; else outstanding += amt;
+      if (item.paymentStatus === 'Paid') {
+        collected += itemPaidAmount(order, item);
+        writtenOff += itemWriteOffAmount(order, item);
+      } else {
+        outstanding += itemOutstandingAmount(order, item);
+      }
     });
-    return { collected, outstanding };
+    return { collected, outstanding, writtenOff };
   }, [paymentsLines]);
 
   // Third summary card — "Driver Claimed": the total currently sitting in
@@ -2373,6 +2485,41 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // status/paymentStatus live from its items every time the items listener
   // fires, so once these item writes land, the derived order flips to Paid
   // on its own.
+  // 2026-09 — the ordinary "cashier confirms this claim" write, now amount-
+  // aware. Bhimal's correction: a driver's Partial claim should be
+  // confirmable through this exact same Mark Paid/Reconcile action, not a
+  // separate re-confirmation step — it should just never blindly book the
+  // item's full price for a claim that said less was collected. A clean
+  // claim (no paymentIssueAmount) behaves exactly as before. A Partial
+  // claim only ever books the claimed amount (paymentPaidAmount); if that
+  // covers the full net price the item resolves completely (paymentStatus
+  // -> 'Paid'), otherwise the true remainder re-opens as a completely
+  // ordinary unclaimed balance — claim/issue fields cleared, method/
+  // reference cleared too, paymentStatus left untouched (still Pending).
+  // Also clears any leftover paymentIssueNote/paymentIssueAmount/
+  // paymentClaimedBy(ByStaffId) on a clean claim too (harmless no-op there,
+  // consistent everywhere this fires from).
+  const confirmUpdateForItem = (order: Order, item: FsOrderItem, method: PaymentMethod): Record<string, any> => {
+    const net = itemNetAmount(order, item);
+    const isPartial = item.paymentIssueAmount != null && !Number.isNaN(item.paymentIssueAmount);
+    const collected = isPartial ? Math.min(item.paymentIssueAmount as number, net) : net;
+    const update: Record<string, any> = {
+      paymentPaidAmount: collected,
+      paymentIssueNote: null,
+      paymentIssueAmount: null,
+      paymentClaimedBy: null,
+      paymentClaimedByStaffId: null,
+    };
+    if (collected >= net - 0.005) {
+      update.paymentStatus = 'Paid';
+      update.paymentMethodName = method.name;
+    } else {
+      update.paymentMethodName = null;
+      update.paymentReference = null;
+    }
+    return update;
+  };
+
   // Handles both a solo drop and a multi-drop reference group in one code
   // path — a solo group is just a PaymentGroup with one entry in `drops`,
   // so there's no separate single-drop function anymore. Writes every item
@@ -2384,10 +2531,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setPaymentGroup(null);
       return;
     }
-    const targets: { orderId: string; itemId: string }[] = [];
+    const targets: { orderId: string; itemId: string; update: Record<string, any>; isPartial: boolean }[] = [];
     group.drops.forEach(drop => {
+      const order = orders.find(o => o.id === drop.orderId);
       drop.items.forEach(i => {
-        if (i._fsItemId) targets.push({ orderId: drop.orderId, itemId: i._fsItemId });
+        if (!i._fsItemId) return;
+        const update = order ? confirmUpdateForItem(order, i, method) : { paymentStatus: 'Paid', paymentMethodName: method.name };
+        targets.push({ orderId: drop.orderId, itemId: i._fsItemId, update, isPartial: update.paymentStatus !== 'Paid' });
       });
     });
     if (targets.length === 0) {
@@ -2400,15 +2550,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     try {
       const batch = writeBatch(db);
       targets.forEach(t => {
-        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), {
-          paymentStatus: 'Paid',
-          paymentMethodName: method.name,
-        });
+        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), t.update);
       });
       await batch.commit();
       const orderCount = new Set(targets.map(t => t.orderId)).size;
       const refSuffix = group.claimedReference ? ` (ref ${group.claimedReference})` : '';
-      writeAuditLog('PaymentConfirmed', `Marked ${targets.length} item(s) across ${orderCount} order(s) paid via ${method.name} for ${group.customerName}${refSuffix}`);
+      const partialCount = targets.filter(t => t.isPartial).length;
+      const partialSuffix = partialCount > 0 ? ` (${partialCount} partial — remainder re-opened as still owed)` : '';
+      writeAuditLog('PaymentConfirmed', `Marked ${targets.length} item(s) across ${orderCount} order(s) paid via ${method.name} for ${group.customerName}${refSuffix}${partialSuffix}`);
     } catch (e) {
       console.error('Mark Paid failed', e);
       setOpsActionError('Mark Paid failed — please try again.');
@@ -2435,11 +2584,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setOpsActionError(`Could not find the "${methodName}" payment method — try refreshing.`);
       return;
     }
-    const targets: { orderId: string; itemId: string }[] = [];
+    const targets: { orderId: string; itemId: string; update: Record<string, any>; isPartial: boolean }[] = [];
     groups.forEach(group => {
       group.drops.forEach(drop => {
+        const order = orders.find(o => o.id === drop.orderId);
         drop.items.forEach(i => {
-          if (i._fsItemId) targets.push({ orderId: drop.orderId, itemId: i._fsItemId });
+          if (!i._fsItemId) return;
+          const update = order ? confirmUpdateForItem(order, i, method) : { paymentStatus: 'Paid', paymentMethodName: method.name };
+          targets.push({ orderId: drop.orderId, itemId: i._fsItemId, update, isPartial: update.paymentStatus !== 'Paid' });
         });
       });
     });
@@ -2453,15 +2605,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     try {
       const batch = writeBatch(db);
       targets.forEach(t => {
-        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), {
-          paymentStatus: 'Paid',
-          paymentMethodName: method.name,
-        });
+        batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), t.update);
       });
       await batch.commit();
       const orderCount = new Set(targets.map(t => t.orderId)).size;
       const driverName = driverNameById[groups[0]?.claimedByStaffId || ''] || 'driver';
-      writeAuditLog('PaymentConfirmed', `Reconciled ${targets.length} item(s) across ${orderCount} order(s) and ${groups.length} claim(s) via ${method.name}, handed over by ${driverName}`);
+      const partialCount = targets.filter(t => t.isPartial).length;
+      const partialSuffix = partialCount > 0 ? ` (${partialCount} partial — remainder re-opened as still owed)` : '';
+      writeAuditLog('PaymentConfirmed', `Reconciled ${targets.length} item(s) across ${orderCount} order(s) and ${groups.length} claim(s) via ${method.name}, handed over by ${driverName}${partialSuffix}`);
     } catch (e) {
       console.error('Bulk reconcile failed', e);
       setOpsActionError('Reconcile failed — please try again.');
@@ -2508,6 +2659,100 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     }
   };
 
+  const openResolveModal = (drop: DropTask) => {
+    setResolveDrop(drop);
+    setResolveMethodId('');
+    setResolveAmount(drop.paymentIssueAmount != null ? String(drop.paymentIssueAmount) : '');
+    setResolveNote('');
+  };
+
+  const closeResolveModal = () => {
+    setResolveDrop(null);
+    setResolveMethodId('');
+    setResolveAmount('');
+    setResolveNote('');
+  };
+
+  // Delivery Staff Payments — the "Write Off" action (2026-09, redesigned
+  // after Bhimal's correction). Available on ANY pending drop — not gated
+  // on paymentIssueNote — because a plain stale unpaid balance can need
+  // writing off too, same as one that came from a driver's shortfall. This
+  // only ever concerns the OUTSTANDING remainder (itemOutstandingAmount),
+  // never the portion already confirmed collected via Mark Paid/Reconcile:
+  // `amountInput` is an optional bit more collected right now (defaults to
+  // 0, or to the drop's still-unreconciled paymentIssueAmount when one
+  // exists), and whatever of the remainder that doesn't cover is written
+  // off with a required reason. Always resolves the item completely
+  // (paymentStatus -> 'Paid') — a write-off is a decision that nothing
+  // further will ever be collected, tracked in its own figure
+  // (paymentSummary.writtenOff), never counted as Collected. A drop can
+  // hold several items with different amounts already paid on each (e.g.
+  // one already partially Reconciled, another untouched); the newly-
+  // collected amount is apportioned across items by each one's OWN
+  // outstanding share, not a flat split, with the last item absorbing any
+  // rounding remainder so the shares sum exactly.
+  const writeOffClaim = async (drop: DropTask, amountInput: number, method: PaymentMethod | null, note: string) => {
+    if (currentPermissions?.payments?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to write off a balance.');
+      return;
+    }
+    const order = orders.find(o => o.id === drop.orderId);
+    const targets = drop.items.filter(i => !!i._fsItemId);
+    if (!order || targets.length === 0) {
+      setOpsActionError('Could not write this off — no Firestore item ids found on this order. Try refreshing.');
+      return;
+    }
+    if (!note.trim()) {
+      setOpsActionError('A reason is required to write off a balance.');
+      return;
+    }
+    const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const outstandingTotal = targets.reduce((sum, i) => sum + itemOutstandingAmount(order, i), 0);
+    const amount = Math.max(0, Math.min(amountInput, outstandingTotal));
+    if (amount > 0 && !method) {
+      setOpsActionError('Pick a payment method for the amount actually collected.');
+      return;
+    }
+    setOpsActionError(null);
+    setPendingResolveKey(drop.key);
+    try {
+      const batch = writeBatch(db);
+      let allocated = 0;
+      targets.forEach((i, idx) => {
+        const outstanding = itemOutstandingAmount(order, i);
+        const alreadyPaid = itemPaidAmount(order, i);
+        const share = idx === targets.length - 1
+          ? r2(amount - allocated)
+          : r2(outstandingTotal > 0 ? amount * (outstanding / outstandingTotal) : 0);
+        allocated += share;
+        batch.update(doc(db, 'orders', drop.orderId, 'items', i._fsItemId as string), {
+          paymentStatus: 'Paid',
+          paymentPaidAmount: r2(alreadyPaid + share),
+          paymentWrittenOff: true,
+          paymentWriteOffNote: note.trim(),
+          paymentWriteOffBy: staffDocRaw?.name || staffAuthUser?.uid || 'unknown',
+          paymentWriteOffAt: serverTimestamp(),
+          paymentMethodName: share > 0 ? (method?.name || null) : null,
+          paymentReference: null,
+          paymentIssueNote: null,
+          paymentIssueAmount: null,
+          paymentClaimedBy: null,
+          paymentClaimedByStaffId: null,
+        });
+      });
+      await batch.commit();
+      const writtenOff = r2(outstandingTotal - amount);
+      const summary = `wrote off ${formatCurrency(writtenOff)}${amount > 0 ? ` (${formatCurrency(amount)} collected first via ${method?.name || 'n/a'})` : ''} — ${note.trim()}`;
+      writeAuditLog('PaymentWrittenOff', `Wrote off balance for ${targets.length} item(s), order ${drop.orderId} (${drop.customerName}) — ${summary}`);
+      closeResolveModal();
+    } catch (e) {
+      console.error('Write off failed', e);
+      setOpsActionError('Could not write this off — please try again.');
+    } finally {
+      setPendingResolveKey(null);
+    }
+  };
+
   const closeDeliverCollectModal = () => {
     setDeliverCollectDrop(null);
     setDcOutcome('paid');
@@ -2515,6 +2760,185 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setDcReference('');
     setDcAmount('');
     setDcNote('');
+  };
+
+  // 2026-09 — opens the Deliver & Collect modal prefilled from whatever the
+  // customer already claimed on this drop (drop.claimedMethod), instead of
+  // always starting blank. Still fully editable: the driver can pick a
+  // different method or outcome if what they actually collect at the door
+  // differs from the claim.
+  const openDeliverCollectModal = (drop: DropTask) => {
+    setDeliverCollectDrop(drop);
+    const preId = drop.claimedMethod ? paymentMethods.find(m => m.name === drop.claimedMethod)?.id : undefined;
+    setDcOutcome('paid');
+    setDcMethodId(preId || '');
+    setDcReference(drop.claimedReference || '');
+    setDcAmount('');
+    setDcNote('');
+  };
+
+  // Same grouping rule as the paymentGroups memo above (merge drops sharing
+  // one non-empty claimedReference into a single PaymentGroup) — factored
+  // out so the Delivery List's bulk Deliver & Collect can group an
+  // arbitrary checkbox selection the same way, without depending on the
+  // Payments tab's own date-filtered paymentDrops memo.
+  const groupDropsByReference = (list: DropTask[]): PaymentGroup[] => {
+    const refCounts: Record<string, number> = {};
+    list.forEach(d => {
+      if (d.claimedReference) refCounts[d.claimedReference] = (refCounts[d.claimedReference] || 0) + 1;
+    });
+    const map: Record<string, PaymentGroup> = {};
+    const order: string[] = [];
+    list.forEach(d => {
+      const groupKey = (d.claimedReference && refCounts[d.claimedReference] > 1) ? `ref-${d.claimedReference}` : `solo-${d.key}`;
+      if (!map[groupKey]) {
+        map[groupKey] = {
+          key: groupKey,
+          drops: [],
+          total: 0,
+          customerName: d.customerName,
+          claimedMethod: d.claimedMethod,
+          claimedReference: d.claimedReference,
+          claimedBy: d.claimedBy,
+          claimedByStaffId: d.claimedByStaffId,
+          entityId: d.entityId,
+          entityName: d.entityName,
+          earliestDate: d.date,
+          latestDate: d.date,
+        };
+        order.push(groupKey);
+      }
+      const g = map[groupKey];
+      g.drops.push(d);
+      g.total += d.total;
+      if (d.date && (!g.earliestDate || d.date < g.earliestDate)) g.earliestDate = d.date;
+      if (d.date && (!g.latestDate || d.date > g.latestDate)) g.latestDate = d.date;
+    });
+    return order.map(k => map[k]);
+  };
+
+  const openBulkDeliverCollectModal = (list: DropTask[]) => {
+    const groups = groupDropsByReference(list);
+    const forms: Record<string, { outcome: 'paid' | 'partial' | 'issue'; methodId: string; amount: string; note: string; reference: string }> = {};
+    groups.forEach(g => {
+      const preId = g.claimedMethod ? paymentMethods.find(m => m.name === g.claimedMethod)?.id : undefined;
+      forms[g.key] = { outcome: 'paid', methodId: preId || '', amount: '', note: '', reference: g.claimedReference || '' };
+    });
+    setBulkDcForms(forms);
+    setBulkDcGroups(groups);
+  };
+
+  const closeBulkDeliverCollectModal = () => {
+    setBulkDcGroups(null);
+    setBulkDcForms({});
+  };
+
+  const setBulkDcForm = (groupKey: string, patch: Partial<{ outcome: 'paid' | 'partial' | 'issue'; methodId: string; amount: string; note: string; reference: string }>) => {
+    setBulkDcForms(prev => ({ ...prev, [groupKey]: { ...prev[groupKey], ...patch } }));
+  };
+
+  // Bulk sibling of handleDeliverAndCollect — one batch write across every
+  // group's drops, each group keeping its own outcome/method/amount/note
+  // the same way the single-drop modal does. Validates every group first
+  // so a batch never partially applies.
+  const handleBulkDeliverAndCollect = async () => {
+    if (!isDriver) {
+      setOpsActionError('Access Denied: this action is for driver accounts only.');
+      return;
+    }
+    if (currentPermissions?.deliveryList?.edit !== true) {
+      setOpsActionError('Access Denied: You do not have permission to mark orders delivered.');
+      return;
+    }
+    const groups = bulkDcGroups || [];
+    if (groups.length === 0) return;
+    for (const g of groups) {
+      if (g.drops.some(d => d.items.some(i => i.assignedDriverId && i.assignedDriverId !== staffAuthUser?.uid))) {
+        setOpsActionError(`Access Denied: ${g.customerName}'s drop is not assigned to you.`);
+        return;
+      }
+      const f = bulkDcForms[g.key];
+      if (!f) continue;
+      const method = f.methodId ? paymentMethods.find(m => m.id === f.methodId) : undefined;
+      if (f.outcome !== 'issue' && !method) {
+        setOpsActionError(`Pick a payment method for ${g.customerName} before confirming.`);
+        return;
+      }
+      if (f.outcome === 'issue' && !f.note.trim()) {
+        setOpsActionError(`A short note is required for ${g.customerName}'s payment issue.`);
+        return;
+      }
+    }
+    setOpsActionError(null);
+    setPendingBulkDeliverCollect(true);
+    try {
+      const batch = writeBatch(db);
+      let itemCount = 0;
+      let paidGroups = 0, partialGroups = 0, issueGroups = 0;
+      const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+      groups.forEach(g => {
+        const f = bulkDcForms[g.key];
+        if (!f) return;
+        const method = f.methodId ? paymentMethods.find(m => m.id === f.methodId) : undefined;
+        const baseUpdate: Record<string, any> = { status: 'Completed' };
+        if (f.outcome === 'paid' || f.outcome === 'partial') {
+          baseUpdate.paymentMethodName = method!.name;
+          baseUpdate.paymentReference = f.reference.trim() || null;
+          baseUpdate.paymentClaimedBy = 'driver';
+          baseUpdate.paymentClaimedByStaffId = staffAuthUser?.uid || null;
+        }
+        if (f.outcome === 'issue') {
+          baseUpdate.paymentIssueNote = f.note.trim();
+        }
+        if (f.outcome === 'paid') paidGroups++; else if (f.outcome === 'partial') partialGroups++; else issueGroups++;
+
+        // 2026-09 fix — flatten every item across every drop in this group
+        // so one "amount collected" figure for the group is apportioned by
+        // net price share, never written identically onto each item (that
+        // duplication is exactly what let a Rs 515 partial claim on a
+        // 2-item group get double-counted as Rs 1,030).
+        const flat: { drop: DropTask; item: FsOrderItem }[] = [];
+        g.drops.forEach(drop => {
+          drop.items.filter(i => !!i._fsItemId).forEach(item => flat.push({ drop, item }));
+        });
+        const netFor = (entry: { drop: DropTask; item: FsOrderItem }) => {
+          const order = orders.find(o => o.id === entry.drop.orderId);
+          return order ? itemNetAmount(order, entry.item) : 0;
+        };
+        const netTotal = flat.reduce((sum, entry) => sum + netFor(entry), 0);
+        const safeAmt = f.outcome === 'partial' ? Math.max(0, isNaN(parseFloat(f.amount)) ? 0 : parseFloat(f.amount)) : 0;
+        let allocated = 0;
+        flat.forEach((entry, idx) => {
+          const update: Record<string, any> = { ...baseUpdate };
+          if (f.outcome === 'partial') {
+            const net = netFor(entry);
+            const share = idx === flat.length - 1
+              ? r2(safeAmt - allocated)
+              : r2(netTotal > 0 ? safeAmt * (net / netTotal) : 0);
+            allocated += share;
+            update.paymentIssueAmount = share;
+            update.paymentIssueNote = f.note.trim() || 'Partial payment collected at the door.';
+          }
+          batch.update(doc(db, 'orders', entry.drop.orderId, 'items', entry.item._fsItemId as string), update);
+          itemCount++;
+        });
+      });
+      if (itemCount === 0) {
+        setOpsActionError('No deliverable items found in this selection.');
+        setPendingBulkDeliverCollect(false);
+        return;
+      }
+      await batch.commit();
+      const orderCount = new Set(groups.flatMap(g => g.drops.map(d => d.orderId))).size;
+      writeAuditLog('DeliveryConfirmed', `Driver ${staffDocRaw?.name || staffAuthUser?.uid} marked ${itemCount} item(s) across ${groups.length} group(s) / ${orderCount} order(s) delivered (bulk) — ${paidGroups} paid, ${partialGroups} partial, ${issueGroups} issue`);
+      closeBulkDeliverCollectModal();
+      setSelectedDeliveryKeys(new Set());
+    } catch (e) {
+      console.error('Bulk Deliver & Collect failed', e);
+      setOpsActionError('Bulk Deliver & Collect failed — please try again.');
+    } finally {
+      setPendingBulkDeliverCollect(false);
+    }
   };
 
   // Delivery Staff Payments §4.3 — the driver-facing combined action. This
@@ -2558,24 +2982,38 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     }
     setOpsActionError(null);
     setPendingDeliverCollectKey(drop.key);
+    const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
     try {
       const batch = writeBatch(db);
-      const update: Record<string, any> = { status: 'Completed' };
+      const baseUpdate: Record<string, any> = { status: 'Completed' };
       if (dcOutcome === 'paid' || dcOutcome === 'partial') {
-        update.paymentMethodName = method!.name;
-        update.paymentReference = dcReference.trim() || null;
-        update.paymentClaimedBy = 'driver';
-        update.paymentClaimedByStaffId = staffAuthUser?.uid || null;
-      }
-      if (dcOutcome === 'partial') {
-        const amt = parseFloat(dcAmount);
-        update.paymentIssueAmount = isNaN(amt) ? null : amt;
-        update.paymentIssueNote = dcNote.trim() || 'Partial payment collected at the door.';
+        baseUpdate.paymentMethodName = method!.name;
+        baseUpdate.paymentReference = dcReference.trim() || null;
+        baseUpdate.paymentClaimedBy = 'driver';
+        baseUpdate.paymentClaimedByStaffId = staffAuthUser?.uid || null;
       }
       if (dcOutcome === 'issue') {
-        update.paymentIssueNote = dcNote.trim();
+        baseUpdate.paymentIssueNote = dcNote.trim();
       }
-      targets.forEach(i => {
+      // 2026-09 fix — a drop can carry more than one item (several dishes
+      // for the same customer/slot); one "amount collected" figure needs
+      // to be apportioned across them by net price share, never written
+      // identically onto each one (same bug/fix as handleBulkDeliverAndCollect).
+      const order = orders.find(o => o.id === drop.orderId);
+      const netTotal = order ? targets.reduce((sum, i) => sum + itemNetAmount(order, i), 0) : 0;
+      const safeAmt = dcOutcome === 'partial' ? Math.max(0, isNaN(parseFloat(dcAmount)) ? 0 : parseFloat(dcAmount)) : 0;
+      let allocated = 0;
+      targets.forEach((i, idx) => {
+        const update: Record<string, any> = { ...baseUpdate };
+        if (dcOutcome === 'partial') {
+          const net = order ? itemNetAmount(order, i) : 0;
+          const share = idx === targets.length - 1
+            ? r2(safeAmt - allocated)
+            : r2(netTotal > 0 ? safeAmt * (net / netTotal) : 0);
+          allocated += share;
+          update.paymentIssueAmount = share;
+          update.paymentIssueNote = dcNote.trim() || 'Partial payment collected at the door.';
+        }
         batch.update(doc(db, 'orders', drop.orderId, 'items', i._fsItemId as string), update);
       });
       await batch.commit();
@@ -7847,7 +8285,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               // unassigned has to be dispatched first.
                               <button
                                 type="button"
-                                onClick={() => setDeliverCollectDrop(drop)}
+                                onClick={() => openDeliverCollectModal(drop)}
                                 disabled={!allEnRoute || currentPermissions?.deliveryList?.edit !== true}
                                 title={!allEnRoute ? 'Waiting to be dispatched' : undefined}
                                 className="px-6 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
@@ -7920,16 +8358,35 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             {pendingBulkDispatch ? <Loader2 className="size-3.5 animate-spin" /> : <Truck className="size-3.5" />}
                             {pendingBulkDispatch ? 'Dispatching...' : `Dispatch (${dispatchTargetCount})`}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => handleBulkMarkDelivered(selectedDrops)}
-                            disabled={pendingBulkDelivery || deliverTargetCount === 0 || currentPermissions?.deliveryList?.edit !== true}
-                            title={deliverTargetCount === 0 ? 'None of the selected drops are currently En route' : undefined}
-                            className="px-4 py-2 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                          >
-                            {pendingBulkDelivery ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
-                            {pendingBulkDelivery ? 'Marking...' : `Mark Delivered (${deliverTargetCount})`}
-                          </button>
+                          {isDriver ? (
+                            // 2026-09 — a driver's bulk action needs to claim
+                            // payment too, not just flip status (Bhimal: "no
+                            // bulk Delivery & Collect button ... instead there
+                            // is a Mark Delivered button"). Groups the
+                            // selection by shared claimed reference, same as
+                            // the customer app's own grouped payments.
+                            <button
+                              type="button"
+                              onClick={() => openBulkDeliverCollectModal(selectedDrops.filter(d => d.items.some(i => i._fsItemId && i.status === 'En route')))}
+                              disabled={deliverTargetCount === 0 || currentPermissions?.deliveryList?.edit !== true}
+                              title={deliverTargetCount === 0 ? 'None of the selected drops are currently En route' : undefined}
+                              className="px-4 py-2 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                            >
+                              <CheckCircle2 className="size-3.5" />
+                              {`Deliver & Collect (${deliverTargetCount})`}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleBulkMarkDelivered(selectedDrops)}
+                              disabled={pendingBulkDelivery || deliverTargetCount === 0 || currentPermissions?.deliveryList?.edit !== true}
+                              title={deliverTargetCount === 0 ? 'None of the selected drops are currently En route' : undefined}
+                              className="px-4 py-2 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                            >
+                              {pendingBulkDelivery ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                              {pendingBulkDelivery ? 'Marking...' : `Mark Delivered (${deliverTargetCount})`}
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}
@@ -8065,9 +8522,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   meaningful to them; it's clickable and opens the handover
                   breakdown below. Back office instead gets a third card,
                   "Driver Claimed" — the org-wide total currently sitting
-                  with drivers, unconfirmed (a quick-glance number; the
-                  Reconcile section below is where it's actually actioned). */}
-              <div className={`grid grid-cols-1 sm:grid-cols-2 ${!isDriver ? 'lg:grid-cols-3' : ''} gap-4`}>
+                  with drivers, unconfirmed. Clicking it opens the modal
+                  holding the read-only cash panel and the actionable
+                  Reconcile section (moved out of the main flow to keep
+                  this view focused). */}
+              <div className={`grid grid-cols-1 sm:grid-cols-2 ${!isDriver ? 'lg:grid-cols-4' : ''} gap-4`}>
                 {isDriver ? (
                   <button
                     type="button"
@@ -8092,142 +8551,41 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Outstanding</p>
                   <p className="text-2xl font-black text-danger">{formatCurrency(paymentSummary.outstanding)}</p>
                 </div>
+                {/* Its own tracked figure, per explicit decision — a written-off
+                    balance is neither still Outstanding nor real Collected
+                    revenue, so it gets a card of its own rather than being
+                    folded into (or silently vanishing from) either one. */}
                 {!isDriver && (
                   <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
+                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Written Off</p>
+                    <p className="text-2xl font-black text-slate-400">{formatCurrency(paymentSummary.writtenOff)}</p>
+                  </div>
+                )}
+                {!isDriver && (
+                  <button
+                    type="button"
+                    onClick={() => setShowDriverReconcileModal(true)}
+                    disabled={allDriversClaimedSummary.count === 0}
+                    title={allDriversClaimedSummary.count === 0 ? 'Nothing pending' : 'See the driver cash panel and reconcile claims'}
+                    className={`relative text-left rounded-3xl shadow-sm p-6 active:scale-[0.99] transition-all ${
+                      allDriversClaimedSummary.count > 0
+                        ? 'bg-red-50/80 border border-red-200/60 shadow-[0_0_15px_rgba(220,38,38,0.2)] animate-pulse hover:bg-red-100 cursor-pointer'
+                        : 'bg-white border border-[#E7E0D0] cursor-default'
+                    }`}
+                  >
+                    {allDriversClaimedSummary.count > 0 && (
+                      <span className="absolute -top-2 -right-2 inline-flex items-center justify-center bg-red-600 text-white font-black text-[9px] rounded-full shadow-[0_0_8px_rgba(220,38,38,0.4)] px-1.5 py-0.5 min-w-5 h-5">
+                        {allDriversClaimedSummary.count}
+                      </span>
+                    )}
                     <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Driver Claimed</p>
                     <p className="text-2xl font-black text-warning">{formatCurrency(allDriversClaimedSummary.total)}</p>
                     <p className="text-[10px] font-bold text-slate-400 mt-1">
-                      {allDriversClaimedSummary.count > 0 ? `${allDriversClaimedSummary.count} claim${allDriversClaimedSummary.count !== 1 ? 's' : ''} awaiting confirmation` : 'Nothing pending'}
+                      {allDriversClaimedSummary.count > 0 ? `${allDriversClaimedSummary.count} claim${allDriversClaimedSummary.count !== 1 ? 's' : ''} · tap to reconcile` : 'Nothing pending'}
                     </p>
-                  </div>
+                  </button>
                 )}
               </div>
-
-              {/* Delivery Staff Payments §4.4 — cash a driver is still
-                  holding, awaiting back-office confirmation. Doubles as the
-                  claim-review queue: this is exactly the set of claims a
-                  driver made that haven't been Mark Paid yet. */}
-              {driverCashReconciliation.length > 0 && (
-                <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
-                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">
-                    Driver cash reconciliation — awaiting confirmation
-                  </p>
-                  <div className="divide-y divide-slate-100">
-                    {driverCashReconciliation.map(row => (
-                      <div key={`${row.staffId}::${row.date}`} className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-xs font-black text-slate-900 truncate">{row.driverName}</p>
-                          <p className="text-[10px] font-bold text-slate-400">
-                            {formatDay(row.date)} · {row.count} item{row.count !== 1 ? 's' : ''}
-                            {row.partialCount > 0 && ` (${row.partialCount} partial)`}
-                          </p>
-                        </div>
-                        <p className="text-sm font-black text-warning shrink-0">{formatCurrency(row.amount)}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Delivery Staff Payments §9 — Reconcile: the actionable
-                  driver-handover screen. Kept as its own section rather
-                  than folded into the read-only cash panel above (explicit
-                  decision) — covers every payment method a driver has
-                  claimed (not just Cash), with a per-claim Confirm and a
-                  per-method-type bulk Confirm. Visible whenever any driver
-                  has something pending, same as the rest of this tab;
-                  every action inside is gated purely on
-                  currentPermissions?.payments?.edit, never on isDriver. */}
-              {reconcileDrivers.length > 0 && (
-                <div className="bg-white rounded-3xl border border-[#E7E0D0] shadow-sm p-6">
-                  <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-                    <div>
-                      <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Reconcile — driver handover</p>
-                      <p className="text-[10px] font-bold text-slate-400 mt-0.5">Select a driver to confirm what they've collected</p>
-                    </div>
-                    <select
-                      value={reconcileDriverId}
-                      onChange={(e) => { setReconcileDriverId(e.target.value); setConfirmBulkKey(null); }}
-                      className="px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-700 cursor-pointer"
-                    >
-                      <option value="">Select a driver…</option>
-                      {reconcileDrivers.map(d => (
-                        <option key={d.id} value={d.id}>{d.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {!reconcileDriverId ? (
-                    <p className="text-xs font-bold text-slate-400 py-4 text-center">Select a driver to see what they need to hand over.</p>
-                  ) : reconcileByMethod.length === 0 ? (
-                    <p className="text-xs font-bold text-slate-400 py-4 text-center">Nothing pending for this driver right now.</p>
-                  ) : (
-                    <div className="space-y-4">
-                      {reconcileByMethod.map(bucket => {
-                        const bulkKey = `bulk-${bucket.groups.map(g => g.key).join(',')}`;
-                        const isBulkPending = pendingPaymentKey === bulkKey;
-                        const isArmed = confirmBulkKey === bulkKey;
-                        return (
-                          <div key={bucket.method} className="border border-slate-100 rounded-2xl p-4">
-                            <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-                              <div>
-                                <p className="text-xs font-black text-slate-900">{bucket.method}</p>
-                                <p className="text-[10px] font-bold text-slate-400">{bucket.groups.length} claim{bucket.groups.length !== 1 ? 's' : ''}</p>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <p className="text-sm font-black text-slate-900">{formatCurrency(bucket.total)}</p>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (isArmed) {
-                                      markPaidBulk(bucket.groups, bucket.method);
-                                      setConfirmBulkKey(null);
-                                    } else {
-                                      setConfirmBulkKey(bulkKey);
-                                    }
-                                  }}
-                                  disabled={isBulkPending || currentPermissions?.payments?.edit !== true}
-                                  title={currentPermissions?.payments?.edit !== true ? 'Requires Payments — Edit permission' : undefined}
-                                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer transition-all ${
-                                    isArmed ? 'bg-danger text-white animate-pulse' : 'bg-success text-white hover:bg-success/90'
-                                  }`}
-                                >
-                                  {isBulkPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
-                                  {isBulkPending ? 'Confirming...' : isArmed ? 'Click to confirm' : `Confirm all (${bucket.groups.length})`}
-                                </button>
-                              </div>
-                            </div>
-                            <div className="divide-y divide-slate-100">
-                              {bucket.groups.map(group => (
-                                <div key={group.key} className="py-2 flex items-center justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <p className="text-xs font-bold text-slate-700 truncate">{group.customerName}</p>
-                                    <p className="text-[10px] font-bold text-slate-400">
-                                      {formatDay(group.earliestDate || '')}{group.claimedReference ? ` · ${group.claimedReference}` : ''}
-                                    </p>
-                                  </div>
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    <p className="text-xs font-black text-slate-900">{formatCurrency(group.total)}</p>
-                                    <button
-                                      type="button"
-                                      onClick={() => setPaymentGroup(group)}
-                                      disabled={pendingPaymentKey === group.key || currentPermissions?.payments?.edit !== true}
-                                      title={currentPermissions?.payments?.edit !== true ? 'Requires Payments — Edit permission' : undefined}
-                                      className="px-3 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary/20 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-wait cursor-pointer"
-                                    >
-                                      {pendingPaymentKey === group.key ? '...' : 'Confirm'}
-                                    </button>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
 
               {unpaidByDate.length === 0 ? (
                 <EmptyState icon={<Wallet className="size-10" />} label="Nothing outstanding" />
@@ -8285,6 +8643,21 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                       {drop.paymentIssueNote}
                                     </p>
                                   )}
+                                  {/* 2026-09 — a prior partial Mark Paid/Reconcile
+                                      leaves this as an ordinary outstanding balance
+                                      with no claim flag at all; without this note
+                                      the card would look completely untouched even
+                                      though most of it was already collected. */}
+                                  {!drop.paymentIssueNote && (() => {
+                                    const order = orders.find(o => o.id === drop.orderId);
+                                    const collected = order ? drop.items.reduce((sum, i) => sum + itemPaidAmount(order, i), 0) : 0;
+                                    if (collected <= 0.005) return null;
+                                    return (
+                                      <p className="text-[11px] text-slate-500 font-bold mt-1 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 inline-block">
+                                        {formatCurrency(collected)} already collected — {formatCurrency(Math.max(0, group.total - collected))} still outstanding
+                                      </p>
+                                    );
+                                  })()}
                                   {!drop.claimedMethod && drop.wasReset && (
                                     <p className="text-[11px] text-slate-500 font-bold mt-1 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 inline-block">
                                       ↩ Sent back to customer — awaiting new payment method
@@ -8300,7 +8673,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                   >
                                     <Printer className="size-4" /> Print
                                   </button>
-                                  {drop.claimedMethod ? (
+                                  {/* Send Back never applies once a claim is
+                                      flagged Partial/Issue — real (or
+                                      partial) cash may already be with the
+                                      driver, so blindly asking the customer
+                                      to re-claim a method is unsafe. Mark
+                                      Paid (amount-aware) and Write Off are
+                                      the only two paths off a flagged claim. */}
+                                  {drop.claimedMethod && !drop.paymentIssueNote ? (
                                     <button
                                       type="button"
                                       onClick={() => resetPaymentClaim(drop)}
@@ -8311,7 +8691,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                       {pendingResetPaymentKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
                                       {pendingResetPaymentKey === drop.key ? 'Resetting...' : 'Send back'}
                                     </button>
-                                  ) : drop.wasReset ? (
+                                  ) : !drop.paymentIssueNote && drop.wasReset ? (
                                     <button
                                       type="button"
                                       disabled
@@ -8321,6 +8701,22 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                       <RefreshCw className="size-4" /> Re-Sent
                                     </button>
                                   ) : null}
+                                  {/* Write Off — available on any pending
+                                      drop (2026-09, per Bhimal's correction):
+                                      confirming what's already been claimed
+                                      as collected is Mark Paid/Reconcile's
+                                      job now; this only ever decides the
+                                      fate of what's still outstanding. */}
+                                  <button
+                                    type="button"
+                                    onClick={() => openResolveModal(drop)}
+                                    disabled={pendingResolveKey === drop.key || currentPermissions?.payments?.edit !== true}
+                                    className="px-4 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                                    title={currentPermissions?.payments?.edit !== true ? 'Requires Payments — Edit permission' : 'Write off some or all of what remains outstanding'}
+                                  >
+                                    {pendingResolveKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <AlertTriangle className="size-4" />}
+                                    {pendingResolveKey === drop.key ? 'Saving...' : 'Write Off'}
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={() => setPaymentGroup(group)}
@@ -8400,6 +8796,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                         {drop.paymentIssueNote}
                                       </p>
                                     )}
+                                    {!drop.paymentIssueNote && (() => {
+                                      const order = orders.find(o => o.id === drop.orderId);
+                                      const collected = order ? drop.items.reduce((sum, i) => sum + itemPaidAmount(order, i), 0) : 0;
+                                      if (collected <= 0.005) return null;
+                                      return (
+                                        <p className="text-[11px] text-slate-500 font-bold mt-1.5 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 inline-block">
+                                          {formatCurrency(collected)} already collected — {formatCurrency(Math.max(0, drop.total - collected))} still outstanding
+                                        </p>
+                                      );
+                                    })()}
                                     {!drop.claimedMethod && drop.wasReset && (
                                       <p className="text-[11px] text-slate-500 font-bold mt-1.5 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 inline-block">
                                         ↩ Sent back to customer — awaiting new payment method
@@ -8414,7 +8820,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                       >
                                         <Printer className="size-3.5" /> Print
                                       </button>
-                                      {drop.claimedMethod ? (
+                                      {drop.claimedMethod && !drop.paymentIssueNote ? (
                                         <button
                                           type="button"
                                           onClick={() => resetPaymentClaim(drop)}
@@ -8425,7 +8831,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                           {pendingResetPaymentKey === drop.key ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
                                           {pendingResetPaymentKey === drop.key ? 'Resetting...' : 'Send back'}
                                         </button>
-                                      ) : drop.wasReset ? (
+                                      ) : !drop.paymentIssueNote && drop.wasReset ? (
                                         <button
                                           type="button"
                                           disabled
@@ -8435,6 +8841,21 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                           <RefreshCw className="size-3.5" /> Re-Sent
                                         </button>
                                       ) : null}
+                                      {/* Write Off — per-drop, available regardless
+                                          of paymentIssueNote (2026-09). The rest of
+                                          the group can still go through the combined
+                                          Mark All Paid below independently of this
+                                          one drop's decision. */}
+                                      <button
+                                        type="button"
+                                        onClick={() => openResolveModal(drop)}
+                                        disabled={pendingResolveKey === drop.key || currentPermissions?.payments?.edit !== true}
+                                        className="px-3 py-2 bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                                        title={currentPermissions?.payments?.edit !== true ? 'Requires Payments — Edit permission' : 'Write off some or all of what remains outstanding'}
+                                      >
+                                        {pendingResolveKey === drop.key ? <Loader2 className="size-3.5 animate-spin" /> : <AlertTriangle className="size-3.5" />}
+                                        {pendingResolveKey === drop.key ? 'Saving...' : 'Write Off'}
+                                      </button>
                                     </div>
                                   </div>
                                 ))}
@@ -8479,6 +8900,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         </div>
                         <p className="text-xs text-slate-500 font-medium">{drop.items.map(i => `${i.qty}x ${i.name}`).join(', ')}</p>
                         <p className="text-sm font-black text-primary mt-1">{formatCurrency(drop.total)}</p>
+                        {(() => {
+                          const order = orders.find(o => o.id === drop.orderId);
+                          if (!order) return null;
+                          const writeOff = drop.items.reduce((sum, i) => sum + itemWriteOffAmount(order, i), 0);
+                          if (writeOff <= 0.005) return null;
+                          const collected = drop.items.reduce((sum, i) => sum + itemPaidAmount(order, i), 0);
+                          return (
+                            <p className="text-[11px] text-slate-500 font-bold mt-1 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 inline-block">
+                              {formatCurrency(collected)} collected · {formatCurrency(writeOff)} written off
+                            </p>
+                          );
+                        })()}
                         {drop.items.some(i => i.rating) && (
                           <div className="mt-3 bg-warning/[0.03] border border-warning/10 rounded-2xl p-3 space-y-2 text-[11px] text-slate-600 font-medium">
                             {drop.items.filter(i => i.rating).map((i, idx) => (
@@ -8730,6 +9163,180 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         </Portal>
       )}
 
+      {/* Back office's "Driver Claimed" modal — holds the read-only Driver
+          Cash Reconciliation panel and the actionable Reconcile section,
+          moved out of the main Payments tab flow (explicit decision) to
+          keep that view focused on the summary cards and the itemized
+          unpaid list. Same two blocks, same order, just relocated here. */}
+      {showDriverReconcileModal && (
+        <Portal>
+          <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="bg-white rounded-[32px] w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 max-h-[85vh] flex flex-col">
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between shrink-0">
+                <div>
+                  <h2 className="text-lg font-black text-slate-900">Driver claimed</h2>
+                  <p className="text-[10px] font-bold text-slate-400 mt-0.5">{allDriversClaimedSummary.count} claim{allDriversClaimedSummary.count !== 1 ? 's' : ''} · {formatCurrency(allDriversClaimedSummary.total)} total</p>
+                </div>
+                <button onClick={() => setShowDriverReconcileModal(false)} className="p-2 text-slate-400 hover:text-danger">
+                  <X className="size-5" />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto space-y-6">
+                {/* Delivery Staff Payments §4.4 — cash a driver is still
+                    holding, awaiting back-office confirmation. Doubles as
+                    the claim-review queue: this is exactly the set of
+                    claims a driver made that haven't been Mark Paid yet. */}
+                {driverCashReconciliation.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">
+                      Driver cash reconciliation — awaiting confirmation
+                    </p>
+                    <div className="divide-y divide-slate-100">
+                      {driverCashReconciliation.map(row => (
+                        <div key={`${row.staffId}::${row.date}`} className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs font-black text-slate-900 truncate">{row.driverName}</p>
+                            <p className="text-[10px] font-bold text-slate-400">
+                              {formatDay(row.date)} · {row.count} item{row.count !== 1 ? 's' : ''}
+                              {row.partialCount > 0 && ` (${row.partialCount} partial)`}
+                            </p>
+                          </div>
+                          <p className="text-sm font-black text-warning shrink-0">{formatCurrency(row.amount)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Delivery Staff Payments §9 — Reconcile: the actionable
+                    driver-handover screen. Kept as its own block rather
+                    than folded into the read-only cash panel above
+                    (explicit decision) — covers every payment method a
+                    driver has claimed (not just Cash), with a per-claim
+                    Confirm and a per-method-type bulk Confirm. Always
+                    rendered (not conditioned on reconcileDrivers.length) so
+                    "nothing pending right now" reads as an actual empty
+                    state rather than the feature having vanished. 2026-09:
+                    a Partial claim is included here now (amount-aware
+                    Confirm/Mark Paid only ever books what was actually
+                    claimed) — the collected-vs-face-value note above and
+                    per-claim shows the cashier exactly what a Partial
+                    claim will really book, distinct from the group's full
+                    price. Every action inside is gated purely on
+                    currentPermissions?.payments?.edit, never on isDriver. */}
+                <div>
+                  <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                    <div>
+                      <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Reconcile — driver handover</p>
+                      <p className="text-[10px] font-bold text-slate-400 mt-0.5">Select a driver to confirm what they've collected</p>
+                    </div>
+                    {reconcileDrivers.length > 0 && (
+                      <select
+                        value={reconcileDriverId}
+                        onChange={(e) => { setReconcileDriverId(e.target.value); setConfirmBulkKey(null); }}
+                        className="px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-700 cursor-pointer"
+                      >
+                        <option value="">Select a driver…</option>
+                        {reconcileDrivers.map(d => (
+                          <option key={d.id} value={d.id}>{d.name}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {reconcileDrivers.length === 0 ? (
+                    <p className="text-xs font-bold text-slate-400 py-4 text-center">
+                      No driver has a claimed payment pending right now for this filter.
+                    </p>
+                  ) : !reconcileDriverId ? (
+                    <p className="text-xs font-bold text-slate-400 py-4 text-center">Select a driver to see what they need to hand over.</p>
+                  ) : reconcileByMethod.length === 0 ? (
+                    <p className="text-xs font-bold text-slate-400 py-4 text-center">Nothing pending for this driver right now.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {reconcileByMethod.map(bucket => {
+                        const bulkKey = `bulk-${bucket.groups.map(g => g.key).join(',')}`;
+                        const isBulkPending = pendingPaymentKey === bulkKey;
+                        const isArmed = confirmBulkKey === bulkKey;
+                        return (
+                          <div key={bucket.method} className="border border-slate-100 rounded-2xl p-4">
+                            <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                              <div>
+                                <p className="text-xs font-black text-slate-900">{bucket.method}</p>
+                                <p className="text-[10px] font-bold text-slate-400">{bucket.groups.length} claim{bucket.groups.length !== 1 ? 's' : ''}</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <div className="text-right">
+                                  <p className="text-sm font-black text-slate-900">{formatCurrency(bucket.collected)}</p>
+                                  {bucket.collected < bucket.total - 0.005 && (
+                                    <p className="text-[9px] font-bold text-danger">of {formatCurrency(bucket.total)} face value — partial</p>
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isArmed) {
+                                      markPaidBulk(bucket.groups, bucket.method);
+                                      setConfirmBulkKey(null);
+                                    } else {
+                                      setConfirmBulkKey(bulkKey);
+                                    }
+                                  }}
+                                  disabled={isBulkPending || currentPermissions?.payments?.edit !== true}
+                                  title={currentPermissions?.payments?.edit !== true ? 'Requires Payments — Edit permission' : undefined}
+                                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer transition-all ${
+                                    isArmed ? 'bg-danger text-white animate-pulse' : 'bg-success text-white hover:bg-success/90'
+                                  }`}
+                                >
+                                  {isBulkPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                                  {isBulkPending ? 'Confirming...' : isArmed ? 'Click to confirm' : `Confirm all (${bucket.groups.length})`}
+                                </button>
+                              </div>
+                            </div>
+                            <div className="divide-y divide-slate-100">
+                              {bucket.groups.map(group => {
+                                const collected = groupCollectedAmount(group);
+                                const isPartialGroup = collected < group.total - 0.005;
+                                return (
+                                <div key={group.key} className="py-2 flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-bold text-slate-700 truncate">{group.customerName}</p>
+                                    <p className="text-[10px] font-bold text-slate-400">
+                                      {formatDay(group.earliestDate || '')}{group.claimedReference ? ` · ${group.claimedReference}` : ''}
+                                      {isPartialGroup && <span className="text-danger font-black"> · partial</span>}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <div className="text-right">
+                                      <p className="text-xs font-black text-slate-900">{formatCurrency(collected)}</p>
+                                      {isPartialGroup && <p className="text-[9px] font-bold text-slate-400">of {formatCurrency(group.total)}</p>}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => setPaymentGroup(group)}
+                                      disabled={pendingPaymentKey === group.key || currentPermissions?.payments?.edit !== true}
+                                      title={currentPermissions?.payments?.edit !== true ? 'Requires Payments — Edit permission' : undefined}
+                                      className="px-3 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary/20 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                                    >
+                                      {pendingPaymentKey === group.key ? '...' : 'Confirm'}
+                                    </button>
+                                  </div>
+                                </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </Portal>
+      )}
+
       {/* Collect Payment Modal — portaled to <body>, same clipping issue as
           the Meal Library modals (see Portal.tsx). */}
       {paymentGroup && (
@@ -8751,10 +9358,25 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 )}
                 {paymentGroup.claimedMethod && (
                   <div className="mt-3 inline-block bg-warning/10 text-[#B4703A] rounded-xl px-4 py-2 text-xs font-bold">
-                    Customer says: {paymentGroup.claimedMethod}
+                    {paymentGroup.claimedBy === 'driver' ? 'Driver claimed: ' : 'Customer says: '}{paymentGroup.claimedMethod}
                     {paymentGroup.claimedReference && <><br /><span className="font-mono">{paymentGroup.claimedReference}</span></>}
                   </div>
                 )}
+                {/* 2026-09: Mark Paid is amount-aware now — for a Partial
+                    claim inside this group, confirming below only books
+                    what the driver actually said they collected, never
+                    the full total shown above. Surfaced here too (not just
+                    on the card behind this modal) so the cashier isn't
+                    caught by surprise when the confirmed amount differs. */}
+                {(() => {
+                  const collected = groupCollectedAmount(paymentGroup);
+                  if (collected >= paymentGroup.total - 0.005) return null;
+                  return (
+                    <p className="text-[11px] text-danger font-bold mt-2 bg-danger/5 px-2.5 py-1 rounded-lg border border-danger/20 inline-block">
+                      ⚠ Confirming below only books {formatCurrency(collected)} — {formatCurrency(paymentGroup.total - collected)} re-opens as still owed
+                    </p>
+                  );
+                })()}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 {(() => {
@@ -8825,6 +9447,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               <div className="text-center">
                 <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">{deliverCollectDrop.customerName}</p>
                 <p className="text-4xl font-black text-slate-900 tracking-tight">{formatCurrency(deliverCollectDrop.total)}</p>
+                {deliverCollectDrop.claimedMethod && (
+                  <p className="text-[10px] font-black text-primary uppercase tracking-widest mt-1.5">
+                    Customer said: {deliverCollectDrop.claimedMethod}
+                  </p>
+                )}
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2">
                   This records a claim for back office to confirm — it does not mark the payment as received.
                 </p>
@@ -8937,6 +9564,242 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         </div>
         </Portal>
       )}
+
+      {/* Bulk Deliver & Collect Modal — 2026-09. Same idea as the single-
+          drop modal above, but for a Delivery List multi-select batch: the
+          selection is grouped by shared claimed reference (same rule as
+          the Payments tab's paymentGroups), and each group gets its own
+          outcome/method/note row, prefilled from that group's own claim.
+          One submit confirms every group in one batch. */}
+      {bulkDcGroups && (
+        <Portal>
+        <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-white rounded-[32px] w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 max-h-[90vh] flex flex-col">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between shrink-0">
+              <h2 className="text-lg font-black text-slate-900">Deliver &amp; Collect — {bulkDcGroups.length} group{bulkDcGroups.length !== 1 ? 's' : ''}</h2>
+              <button onClick={closeBulkDeliverCollectModal} className="p-2 text-slate-400 hover:text-danger">
+                <X className="size-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4 overflow-y-auto">
+              {bulkDcGroups.map(g => {
+                const f = bulkDcForms[g.key] || { outcome: 'paid' as const, methodId: '', amount: '', note: '', reference: '' };
+                const activeMethods = paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan'));
+                const currentEntity = entities.find(e => e.id === g.entityId) || (entities.length === 1 ? entities[0] : undefined);
+                const methodsToRender = (currentEntity && currentEntity.acceptedPaymentMethodIds && currentEntity.acceptedPaymentMethodIds.length > 0)
+                  ? activeMethods.filter(m => currentEntity.acceptedPaymentMethodIds!.includes(m.id))
+                  : activeMethods;
+                return (
+                  <div key={g.key} className="rounded-2xl border border-slate-100 bg-[#FAF8F5] p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-black text-slate-900">{g.customerName}</p>
+                        {g.drops.length > 1 && (
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{g.drops.length} drops grouped</p>
+                        )}
+                        {g.claimedMethod && (
+                          <p className="text-[9px] font-black text-primary uppercase tracking-widest">Customer said: {g.claimedMethod}</p>
+                        )}
+                      </div>
+                      <p className="text-lg font-black text-slate-900">{formatCurrency(g.total)}</p>
+                    </div>
+
+                    <div className="flex gap-1.5 rounded-xl bg-white p-1 border border-slate-100">
+                      {([
+                        { key: 'paid', label: 'Paid in full' },
+                        { key: 'partial', label: 'Partial' },
+                        { key: 'issue', label: 'Issue' },
+                      ] as const).map(o => (
+                        <button
+                          key={o.key}
+                          type="button"
+                          onClick={() => setBulkDcForm(g.key, { outcome: o.key })}
+                          className={`flex-1 px-2 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wide transition-all ${
+                            f.outcome === o.key ? 'bg-primary/10 text-primary' : 'text-slate-400 hover:text-slate-600'
+                          }`}
+                        >
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {(f.outcome === 'paid' || f.outcome === 'partial') && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {methodsToRender.map(m => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => setBulkDcForm(g.key, { methodId: m.id })}
+                            className={`px-2.5 py-1.5 rounded-lg border text-[9px] font-black uppercase tracking-wide flex items-center gap-1 ${
+                              f.methodId === m.id
+                                ? 'border-primary text-primary bg-primary/[0.02]'
+                                : 'border-slate-200 bg-white text-slate-500 hover:border-primary hover:text-primary'
+                            }`}
+                          >
+                            <span>{m.icon}</span> {m.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {f.outcome === 'partial' && (
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={f.amount}
+                        onChange={e => setBulkDcForm(g.key, { amount: e.target.value })}
+                        placeholder="Amount actually collected"
+                        className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white transition-all"
+                      />
+                    )}
+
+                    {(f.outcome === 'partial' || f.outcome === 'issue') && (
+                      <textarea
+                        value={f.note}
+                        onChange={e => setBulkDcForm(g.key, { note: e.target.value })}
+                        rows={2}
+                        placeholder={f.outcome === 'issue' ? 'What happened? (required)' : 'Note (optional)'}
+                        className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-white transition-all"
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="p-6 border-t border-slate-100 shrink-0">
+              <button
+                type="button"
+                disabled={
+                  pendingBulkDeliverCollect ||
+                  bulkDcGroups.some(g => {
+                    const f = bulkDcForms[g.key];
+                    if (!f) return true;
+                    return ((f.outcome === 'paid' || f.outcome === 'partial') && !f.methodId) || (f.outcome === 'issue' && !f.note.trim());
+                  })
+                }
+                onClick={handleBulkDeliverAndCollect}
+                className="w-full px-4 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {pendingBulkDeliverCollect ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                {pendingBulkDeliverCollect ? 'Saving...' : `Confirm & Mark Delivered (${bulkDcGroups.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+        </Portal>
+      )}
+
+      {/* Write Off Modal — the "Write Off" action (2026-09, redesigned).
+          Available on any pending drop. Only ever concerns the outstanding
+          remainder: optionally record a bit more as actually collected
+          right now, then write off whatever's left, with a required
+          reason. Never touches an amount already confirmed via Mark Paid/
+          Reconcile — that's itemPaidAmount, already excluded from
+          "outstanding" below. */}
+      {resolveDrop && (() => {
+        const order = orders.find(o => o.id === resolveDrop.orderId);
+        const outstandingTotal = order
+          ? resolveDrop.items.reduce((sum, i) => sum + itemOutstandingAmount(order, i), 0)
+          : resolveDrop.total;
+        const parsedAmount = parseFloat(resolveAmount);
+        const safeAmount = isNaN(parsedAmount) ? 0 : Math.max(0, Math.min(parsedAmount, outstandingTotal));
+        const writtenOff = Math.max(0, outstandingTotal - safeAmount);
+        const activeMethods = paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan'));
+        const currentEntity = entities.find(e => e.id === resolveDrop.entityId) || (entities.length === 1 ? entities[0] : undefined);
+        const methodsToRender = (currentEntity && currentEntity.acceptedPaymentMethodIds && currentEntity.acceptedPaymentMethodIds.length > 0)
+          ? activeMethods.filter(m => currentEntity.acceptedPaymentMethodIds!.includes(m.id))
+          : activeMethods;
+        const isPending = pendingResolveKey === resolveDrop.key;
+        const canSubmit = resolveNote.trim() !== '' && (safeAmount === 0 || !!resolveMethodId);
+        return (
+          <Portal>
+          <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <h2 className="text-lg font-black text-slate-900">Write Off Balance</h2>
+                <button onClick={closeResolveModal} className="p-2 text-slate-400 hover:text-danger">
+                  <X className="size-5" />
+                </button>
+              </div>
+              <div className="p-8 space-y-6">
+                <div className="text-center">
+                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">{resolveDrop.customerName}</p>
+                  <p className="text-4xl font-black text-slate-900 tracking-tight">{formatCurrency(outstandingTotal)}</p>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Still outstanding on this drop</p>
+                  {resolveDrop.paymentIssueNote && (
+                    <p className="text-[11px] text-danger font-bold mt-2 bg-danger/5 px-2.5 py-1 rounded-lg border border-danger/20 inline-block">
+                      ⚠ {resolveDrop.paymentIssueAmount != null ? `Driver claims ${formatCurrency(resolveDrop.paymentIssueAmount)} collected — ` : 'Payment issue — '}
+                      {resolveDrop.paymentIssueNote}
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Amount actually collected now (0 if none)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={resolveAmount}
+                    onChange={e => setResolveAmount(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                  />
+                  <p className="text-[10px] font-bold text-slate-400 pt-0.5">
+                    {formatCurrency(writtenOff)} of {formatCurrency(outstandingTotal)} will be written off
+                  </p>
+                </div>
+
+                {safeAmount > 0 && (
+                  <div className="grid grid-cols-2 gap-3">
+                    {methodsToRender.map(m => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setResolveMethodId(m.id)}
+                        className={`p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-1.5 ${
+                          resolveMethodId === m.id
+                            ? 'border-primary text-primary bg-primary/[0.02]'
+                            : 'border-slate-100 bg-[#FAF8F5] text-slate-500 hover:border-primary hover:text-primary hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="text-xl">{m.icon}</span>
+                        <span className="text-[10px] font-black uppercase tracking-widest">{m.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Reason for write-off (required)</label>
+                  <textarea
+                    value={resolveNote}
+                    onChange={e => setResolveNote(e.target.value)}
+                    rows={2}
+                    placeholder="e.g. Customer unreachable, disputed amount waived, wrote off as a goodwill gesture..."
+                    className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isPending || !canSubmit}
+                  onClick={() => writeOffClaim(
+                    resolveDrop,
+                    safeAmount,
+                    resolveMethodId ? paymentMethods.find(m => m.id === resolveMethodId) || null : null,
+                    resolveNote
+                  )}
+                  className="w-full px-4 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {isPending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                  {isPending ? 'Saving...' : 'Confirm Write-Off'}
+                </button>
+              </div>
+            </div>
+          </div>
+          </Portal>
+        );
+      })()}
 
       {/* Edit Customer Modal */}
       {editCustomer && (
@@ -9275,6 +10138,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           ? Array.from(new Set(activeReceiptDrop.items.map(i => i.invoiceNumber))).join(', ')
           : activeReceiptDrop.orderId;
         const anyReprinted = activeReceiptDrop.items.some(i => (i.invoiceReprintCount || 0) > 0);
+        // 2026-09: a Write Off can leave a Paid item's real collected amount
+        // short of its full price — surface that split here rather than
+        // let the receipt's "Total paid" silently overstate what came in.
+        const amountPaid = order ? activeReceiptDrop.items.reduce((s, i) => s + itemPaidAmount(order, i), 0) : total;
+        const amountWrittenOff = order ? activeReceiptDrop.items.reduce((s, i) => s + itemWriteOffAmount(order, i), 0) : 0;
 
         // Admin's receipt still shows exactly one "drop" (order+date+slot),
         // same scope as before this refactor — see the note at the top of
@@ -9327,6 +10195,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           vatRate: SYSTEM_CONFIG.vatRate,
           total,
           anyReprinted,
+          amountPaid,
+          amountWrittenOff,
         };
 
         return (

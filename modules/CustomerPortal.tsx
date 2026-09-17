@@ -416,14 +416,66 @@ const isPayNowMethod = (name: string) => name.includes('Juice');
 // act; "awaiting" just needs Operations to check their bank/wallet statement.
 const isUnclaimed = (item: OrderItem) => item.paymentStatus !== 'Paid' && !item.paymentMethodName && item.status !== 'Cancelled';
 const isAwaitingConfirmation = (item: OrderItem) => item.paymentStatus !== 'Paid' && !!item.paymentMethodName;
-const paymentStatusInfo = (item: OrderItem): { label: string; tone: 'success' | 'warning' | 'danger' | 'slate' } => {
+// 2026-09 — the Operations Payments tab's amount-aware Mark Paid/Reconcile
+// and Write Off actions can now leave an item in states this badge
+// previously had no way to show: a driver's Partial/Issue claim still
+// awaiting back-office action, a partial Mark Paid/Reconcile that
+// confirmed less than the full balance (paymentPaidAmount > 0 but still
+// Pending — re-opened as a genuine remainder, not "Unpaid" as if nothing
+// had happened), and a deliberate write-off (paymentWrittenOff).
+// `netAmount`, when the caller has it (every call site does — it's the
+// same itemNetAmount/itemPayAmount figure already computed for the Pay
+// button), drives the "Rs X of Rs Y paid" detail text explicitly requested
+// for the customer's own order view; without it the badge still degrades
+// gracefully to a labeled state with no detail line.
+const paymentStatusInfo = (item: OrderItem, netAmount?: number): { label: string; tone: 'success' | 'warning' | 'danger' | 'slate'; detail?: string } => {
   if (item.status === 'Cancelled') {
     if (item.paymentStatus === 'Refunded') return { label: 'Refunded', tone: 'warning' };
     return { label: 'No payment due', tone: 'slate' };
   }
   if (item.paymentStatus === 'Refunded') return { label: 'Refunded', tone: 'warning' };
+  if (item.paymentWrittenOff) {
+    const paid = item.paymentPaidAmount || 0;
+    const writtenOff = netAmount != null ? Math.max(0, netAmount - paid) : undefined;
+    return {
+      label: 'Paid',
+      tone: 'success',
+      detail: writtenOff != null && writtenOff > 0.005
+        ? `${formatCurrency(paid)} paid · ${formatCurrency(writtenOff)} written off`
+        : undefined,
+    };
+  }
   if (item.paymentStatus === 'Paid') return { label: 'Paid', tone: 'success' };
+  if (item.paymentIssueNote) {
+    // A driver's Partial/Issue claim — flagged, still awaiting back
+    // office to Mark Paid/Reconcile it (or Write it off). Not yet
+    // confirmed either way, so this stays distinct from both "Awaiting
+    // confirmation" (a clean claim) and an already-confirmed
+    // Partially-paid state below.
+    if (item.paymentIssueAmount != null && netAmount != null) {
+      const outstanding = Math.max(0, netAmount - item.paymentIssueAmount);
+      return {
+        label: 'Partially paid',
+        tone: 'warning',
+        detail: `${formatCurrency(item.paymentIssueAmount)} of ${formatCurrency(netAmount)} paid · ${formatCurrency(outstanding)} outstanding`,
+      };
+    }
+    return { label: 'Payment issue', tone: 'danger', detail: 'Flagged for review — contact us if you believe this is wrong' };
+  }
   if (item.paymentMethodName) return { label: 'Awaiting confirmation', tone: 'warning' };
+  if ((item.paymentPaidAmount || 0) > 0 && netAmount != null) {
+    // A partial Mark Paid/Reconcile already ran: back office confirmed
+    // part of the balance and re-opened the true remainder as an ordinary
+    // unclaimed balance (paymentMethodName cleared, so isUnclaimed is true
+    // again) — show what's actually left owed, not "Unpaid" as if nothing
+    // had paid.
+    const remaining = Math.max(0, netAmount - (item.paymentPaidAmount || 0));
+    return {
+      label: 'Partially paid',
+      tone: 'warning',
+      detail: `${formatCurrency(item.paymentPaidAmount || 0)} of ${formatCurrency(netAmount)} paid · ${formatCurrency(remaining)} outstanding`,
+    };
+  }
   return { label: 'Unpaid', tone: 'danger' };
 };
 
@@ -1542,7 +1594,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // day owes). Falls back to the previous blended
   // order.total/order.subtotal proration for orders placed before
   // discountShare existed.
-  const itemPayAmount = (order: Order, item: FsOrderItem): number => {
+  const itemNetAmount = (order: Order, item: FsOrderItem): number => {
     const share = item.discountShare;
     if (share) {
       const gross = item.qty * item.price;
@@ -1552,6 +1604,29 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     }
     return round2(item.qty * item.price * orderProrationFactor(order));
   };
+
+  // 2026-09: subtracts paymentPaidAmount — the amount back office has
+  // already confirmed collected against this item, via Mark Paid/
+  // Reconcile or Write Off (see Operations.tsx) — so a partially-settled
+  // item's Pay button, and everything derived from it
+  // (buildPayItemsAndAmount, outstandingTotal), automatically ask for only
+  // the genuine remainder instead of the item's full original price. 0 for
+  // every item this never applies to, so ordinary unpaid items are
+  // unaffected.
+  const itemPayAmount = (order: Order, item: FsOrderItem): number =>
+    round2(Math.max(0, itemNetAmount(order, item) - (item.paymentPaidAmount || 0)));
+
+  // Mirrors Operations.tsx's itemPaidAmount/itemWriteOffAmount exactly —
+  // used by the customer's own receipt to show what was actually
+  // collected vs written off, rather than assuming a Paid item always
+  // means its full price came in.
+  const itemPaidAmount = (order: Order, item: FsOrderItem): number =>
+    item.paymentStatus === 'Paid'
+      ? (item.paymentPaidAmount != null ? item.paymentPaidAmount : itemNetAmount(order, item))
+      : (item.paymentPaidAmount || 0);
+
+  const itemWriteOffAmount = (order: Order, item: FsOrderItem): number =>
+    item.paymentWrittenOff ? Math.max(0, itemNetAmount(order, item) - itemPaidAmount(order, item)) : 0;
 
   // Turns a set of pending (unclaimed) lines into the write targets
   // (payTarget.items) and the one number actually shown/collected
@@ -1584,7 +1659,12 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       const order = orderLines[0].order;
       const activeOrderItemCount = order.items.filter(it => it.status !== 'Cancelled').length;
       const wholeOrderPending = orderLines.length === activeOrderItemCount;
-      amount += wholeOrderPending
+      // The order.total shortcut only holds when nothing in this order has
+      // already been partially settled by back office (a partial Mark
+      // Paid/Reconcile, or a Write Off) — otherwise it would re-charge the
+      // portion paymentPaidAmount already covers.
+      const anyPartiallyPaid = orderLines.some(l => (l.item.paymentPaidAmount || 0) > 0);
+      amount += (wholeOrderPending && !anyPartiallyPaid)
         ? order.total
         : orderLines.reduce((t, l) => t + itemPayAmount(l.order, l.item), 0);
     });
@@ -2899,7 +2979,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                           const isCompleted = line.item.status === 'Completed';
                                           const isActive = line.item.status === 'Active';
                                           const isCancelled = line.item.status === 'Cancelled';
-                                          const payInfo = paymentStatusInfo(line.item);
+                                          const payInfo = paymentStatusInfo(line.item, itemNetAmount(line.order, line.item));
                                           const { detail, person, instructions } = splitNotesTag(line.item.notes);
                                           return (
                                             <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
@@ -2915,6 +2995,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                                 {person && <PersonTag name={person} />}
                                                 {instructions && <InstructionsTag text={instructions} />}
                                               </div>
+                                              {payInfo.detail && <p className="text-[10px] font-bold text-slate-400 mb-2 -mt-1">{payInfo.detail}</p>}
                                               <div className="flex gap-2">
                                                 {line.item.paymentStatus === 'Paid' && <button onClick={() => openReceipt(line)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Receipt className="size-3" /> Receipt</button>}
                                                 {isUnclaimed(line.item) && !isCancelled && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
@@ -3032,7 +3113,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                           const isCompleted = line.item.status === 'Completed';
                                           const isActive = line.item.status === 'Active';
                                           const isCancelled = line.item.status === 'Cancelled';
-                                          const payInfo = paymentStatusInfo(line.item);
+                                          const payInfo = paymentStatusInfo(line.item, itemNetAmount(line.order, line.item));
                                           const { detail, person, instructions } = splitNotesTag(line.item.notes);
                                           return (
                                             <div key={idx} className={idx > 0 ? 'pt-3 border-t border-[#F0EADD]' : ''}>
@@ -3048,6 +3129,7 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                                                 {person && <PersonTag name={person} />}
                                                 {instructions && <InstructionsTag text={instructions} />}
                                               </div>
+                                              {payInfo.detail && <p className="text-[10px] font-bold text-slate-400 mb-2 -mt-1">{payInfo.detail}</p>}
                                               <div className="flex gap-2">
                                                 {line.item.paymentStatus === 'Paid' && <button onClick={() => openReceipt(line)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1"><Receipt className="size-3" /> Receipt</button>}
                                                 {isUnclaimed(line.item) && !isCancelled && <button onClick={() => openPayItem(line)} className="flex-1 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest">Pay</button>}
@@ -3786,6 +3868,12 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         // badge stays admin-only too, not just the counter's write side.
         const anyReprinted = false;
 
+        // 2026-09: a Write Off can leave less actually collected than the
+        // order's full total — surface that split rather than let "Total
+        // paid" overstate it on the customer's own receipt too.
+        const amountPaid = receiptTarget.lines.reduce((s, l) => s + itemPaidAmount(l.order, l.item), 0);
+        const amountWrittenOff = receiptTarget.lines.reduce((s, l) => s + itemWriteOffAmount(l.order, l.item), 0);
+
         const receiptData: ReceiptData = {
           entityName: receiptTarget.order.entityName,
           entityId: receiptTarget.order.entityId,
@@ -3839,6 +3927,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
           vatRate,
           total: displayTotal,
           anyReprinted,
+          amountPaid,
+          amountWrittenOff,
         };
 
         return (

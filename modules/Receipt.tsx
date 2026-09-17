@@ -91,6 +91,13 @@ export interface ReceiptData {
   vatRate: number;
   total: number;
   anyReprinted: boolean;
+  /** 2026-09: set only when part of `total` was written off (Operations
+   *  Payments tab "Write Off" action) — the amount actually collected is
+   *  less than `total`. When present, the money block shows "Amount paid"
+   *  and "Written off" as their own lines instead of one "Total paid"
+   *  figure that would otherwise overstate what really came in. */
+  amountPaid?: number;
+  amountWrittenOff?: number;
 }
 
 // Recovers the real discount label for orders written before
@@ -254,7 +261,15 @@ export function ReceiptModal({
               </div>
             ))}
             {data.vat > 0 && <div className="flex justify-between text-slate-500 font-bold"><span>VAT ({data.vatRate}%)</span><span>{formatCurrency(data.vat)}</span></div>}
-            <div className="flex justify-between text-slate-900 font-black pt-1.5 border-t border-[#E7E0D0] text-xs"><span>Total paid</span><span>{formatCurrency(data.total)}</span></div>
+            {data.amountWrittenOff != null && data.amountWrittenOff > 0.005 ? (
+              <>
+                <div className="flex justify-between text-slate-900 font-black pt-1.5 border-t border-[#E7E0D0] text-xs"><span>Total</span><span>{formatCurrency(data.total)}</span></div>
+                <div className="flex justify-between text-success font-bold"><span>Amount paid</span><span>{formatCurrency(data.amountPaid ?? (data.total - data.amountWrittenOff))}</span></div>
+                <div className="flex justify-between text-slate-400 font-bold"><span>Written off</span><span>{formatCurrency(data.amountWrittenOff)}</span></div>
+              </>
+            ) : (
+              <div className="flex justify-between text-slate-900 font-black pt-1.5 border-t border-[#E7E0D0] text-xs"><span>Total paid</span><span>{formatCurrency(data.total)}</span></div>
+            )}
           </div>
 
           <p className="text-center text-[10px] text-slate-400 mt-4">Thank you for ordering with {data.entityName || SYSTEM_CONFIG.businessName} 🌿</p>
