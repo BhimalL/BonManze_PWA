@@ -1,5 +1,22 @@
 # Agent Coordination: BonManzE Project
 
+## 2026-09-17: Antigravity — Delivery & Payments Security Rules Expression-Cap Fix & Test Suites Complete
+
+**Commit `77d2f94`** — Resolved recurring rules expression-cap regression, added RBAC & apportionment test coverage.
+
+### 1. Delivery & Payments Security Rules Optimization (`firestore.rules`)
+- **Expression Cap Fix**: Rewrote `canUpdateItem()` in `firestore.rules` to derive staff role lookup once via `let` bindings instead of re-evaluating deep role hierarchy queries per permission check. Fixed recurring Firestore `maximum of 1000 expressions to evaluate has been reached` error when non-matching updates were evaluated.
+- **Strict Gating**: Pinned `paymentPaidAmount` and `paymentWrittenOff` in `firestore.rules` across status edit, customer pay claim, and reprint bump clauses using exact CEL `affectedKeys().hasAny(...)` checks, ensuring driver accounts can record payment claims/notes without touching Resolve-only fields.
+
+### 2. Standalone Apportionment Helper & Unit Tests (`utils/apportionment.js`, `scripts/testApportionmentMath.js`)
+- **Extraction**: Extracted pure net-price proportional apportionment math into `utils/apportionment.js`.
+- **Unit Suite**: Created table-driven unit test suite `scripts/testApportionmentMath.js` (16/16 passing) covering 2-item even split, 3-item repeating decimal split, single item, and multi-drop group scenarios (Rs 1030 net total / Rs 518.08 collected).
+
+### 3. Delivery & Payments Security Rules Test Suite (`scripts/testDeliveryPaymentsRBAC.js`)
+- **RBAC Verification Suite**: Created automated client-SDK verification script `scripts/testDeliveryPaymentsRBAC.js` (17/17 passing with genuine PERMISSION_DENIED rejections) asserting driver claim writes, customer self-claim restrictions, cashier Resolve/Write Off, non-cashier rejections, and reprint count bump constraints.
+
+---
+
 ## 2026-09-14: Antigravity — Full Invoicing Roadmap (Steps 0–4) & QA Enhancements Complete
 
 **Commits `0fbb09e`, `77c6dd5`, `bedcb7f`, `ea07f17`, `885d0f9`, `99d9e3a`, `1d81673`, `0e40bea`, `739be09`** — Completed the entire 5-step Invoicing & Payment Methods Roadmap, fixed entity field persistence, added logo previews, pre-filled label hints, pay sheet payment method filtering by entity across all pay targets, discount reason label formatting, and dish batch cooking progression.
