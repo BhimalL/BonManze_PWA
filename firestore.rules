@@ -295,9 +295,38 @@ service cloud.firestore {
       // fixed: the role doc is fetched once per isStaffAllowed call, and
       // the two genuinely-repeated checks below are computed once via
       // `let` and reused, instead of being re-evaluated inline.
+      //
+      // 2026-09-17 fix: that wasn't the whole story. Every DISTINCT
+      // permission check this function needs (payments.edit,
+      // payments.view, ordersByDish.edit, plus isDriverStaff()) each
+      // independently re-derived "is this an active staff member, and
+      // what does their role's permission map say" from scratch via their
+      // own isActiveStaff()/staffAllowedForRole()/staffHasPermission()
+      // call chain. That's fine for a write that matches an early clause
+      // (evaluation short-circuits), but for a write that matches NO
+      // clause — which Firestore must fully evaluate to conclude "deny" —
+      // all four of those independent chains run in full, and once the
+      // driver clause (and this round's extra paymentPaidAmount/
+      // paymentWrittenOff pins) added more of them, that pushed the total
+      // back over the 1000-expression cap. Fixed by fetching the staff
+      // doc and (if any) their role's permission map exactly ONCE here,
+      // and deriving every permission boolean below from that single
+      // already-fetched map via plain property lookups, instead of each
+      // one calling a function that re-walks the whole chain itself.
       function canUpdateItem() {
         let isCust = isCustomer(resource.data.customerId);
-        let canEditDeliveryList = isStaffAllowed('deliveryList', 'edit');
+        let staffActive = isActiveStaff();
+        let staffData = staffActive ? staffDoc().data : null;
+        let roleId = (staffActive && ('roleId' in staffData)) ? staffData.roleId : null;
+        let role = (roleId != null && exists(/databases/$(database)/documents/roles/$(roleId)))
+          ? get(/databases/$(database)/documents/roles/$(roleId)).data
+          : null;
+        let perms = (role != null) ? role.get('permissions', {}) : {};
+        let canEditPayments = staffActive && perms.get('payments', {}).get('edit', false) == true;
+        let canViewPayments = staffActive && perms.get('payments', {}).get('view', false) == true;
+        let canEditOrdersByDish = staffActive && perms.get('ordersByDish', {}).get('edit', false) == true;
+        let canEditDeliveryList = staffActive && perms.get('deliveryList', {}).get('edit', false) == true;
+        let isDriver = staffActive && staffData.get('isDriver', false) == true;
         return (
           // 1. Staff update
           (
@@ -313,19 +342,21 @@ service cloud.firestore {
                || request.resource.data.get('paymentReference', null) != resource.data.get('paymentReference', null)
                || request.resource.data.get('paymentPaidAmount', null) != resource.data.get('paymentPaidAmount', null)
                || request.resource.data.get('paymentWrittenOff', null) != resource.data.get('paymentWrittenOff', null))
-              && isStaffAllowed('payments', 'edit')
+              && canEditPayments
               && request.resource.data.status == resource.data.status
             ) || (
               // Status edit: Cooking/Dispatch/Deliver
               request.resource.data.status != resource.data.status
               && (
                 (request.resource.data.status == 'Preparing' || request.resource.data.status == 'Ready' || request.resource.data.status == 'Active')
-                  ? (isStaffAllowed('ordersByDish', 'edit') || canEditDeliveryList)
+                  ? (canEditOrdersByDish || canEditDeliveryList)
                   : canEditDeliveryList
               )
               && request.resource.data.paymentStatus == resource.data.paymentStatus
               && request.resource.data.get('paymentMethodName', null) == resource.data.get('paymentMethodName', null)
               && request.resource.data.get('paymentReference', null) == resource.data.get('paymentReference', null)
+              && request.resource.data.get('paymentPaidAmount', null) == resource.data.get('paymentPaidAmount', null)
+              && request.resource.data.get('paymentWrittenOff', null) == resource.data.get('paymentWrittenOff', null)
             )
           )
           && request.resource.data.price == resource.data.price
@@ -364,7 +395,7 @@ service cloud.firestore {
           // may change; invoiceNumber/invoiceIssuedAt themselves are set
           // only by issueInvoiceOnPayment's Admin SDK write, never by a
           // client, so both are pinned equal here too.
-          (isStaffAllowed('payments', 'view') || isCust)
+          (canViewPayments || isCust)
           && request.resource.data.get('invoiceReprintCount', null) != resource.data.get('invoiceReprintCount', null)
           && request.resource.data.paymentStatus == resource.data.paymentStatus
           && request.resource.data.get('paymentMethodName', null) == resource.data.get('paymentMethodName', null)
@@ -395,7 +426,7 @@ service cloud.firestore {
           // not payments.edit. A driver's role only ever needs
           // deliveryList.edit — payments.edit (the power to actually Mark
           // Paid) is never granted to a Driver role.
-          isDriverStaff()
+          isDriver
           && resource.data.get('assignedDriverId', null) == request.auth.uid
           && canEditDeliveryList
           && resource.data.status == 'En route'
