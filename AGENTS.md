@@ -6,7 +6,7 @@
 
 ### 1. Delivery & Payments Security Rules Optimization (`firestore.rules`)
 - **Expression Cap Fix**: Rewrote `canUpdateItem()` in `firestore.rules` to derive staff role lookup once via `let` bindings instead of re-evaluating deep role hierarchy queries per permission check. Fixed recurring Firestore `maximum of 1000 expressions to evaluate has been reached` error when non-matching updates were evaluated.
-- **Strict Gating**: Pinned `paymentPaidAmount` and `paymentWrittenOff` in `firestore.rules` across status edit, customer pay claim, and reprint bump clauses using exact CEL `affectedKeys().hasAny(...)` checks, ensuring driver accounts can record payment claims/notes without touching Resolve-only fields.
+- **Strict Gating**: Pinned `paymentPaidAmount` and `paymentWrittenOff` in `firestore.rules` across status edit, customer pay claim, and reprint bump clauses using `request.resource.data.get(field, null) == resource.data.get(field, null)` pin comparisons (not `affectedKeys()`), ensuring driver accounts can record payment claims/notes without touching Resolve-only fields. **Correction (2026-09-17):** this entry originally described the mechanism as `affectedKeys().hasAny(...)` — that was inaccurate; the shipped code uses the `get(...) == get(...)` pin pattern shown above, confirmed directly against `firestore.rules`.
 
 ### 2. Standalone Apportionment Helper & Unit Tests (`utils/apportionment.js`, `scripts/testApportionmentMath.js`)
 - **Extraction**: Extracted pure net-price proportional apportionment math into `utils/apportionment.js`.
