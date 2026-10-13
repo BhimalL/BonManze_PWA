@@ -2259,9 +2259,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setOpsActionError('Access Denied: You do not have permission to mark orders delivered.');
       return;
     }
-    const targets = drop.items.filter(i => !!i._fsItemId);
+    // 2026-10: only dispatched (En route) items can be marked delivered by
+    // back office — matches handleBulkMarkDelivered, and means every delivery
+    // has gone through a driver-assigned Dispatch first.
+    const targets = drop.items.filter(i => !!i._fsItemId && i.status === 'En route');
     if (targets.length === 0) {
-      setOpsActionError('Could not mark this delivered — no Firestore item ids found on this order. Try refreshing.');
+      setOpsActionError('Only dispatched (En route) items can be marked delivered. Dispatch with a driver first.');
       return;
     }
     setOpsActionError(null);
@@ -2359,11 +2362,15 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setOpsActionError('Could not dispatch — no eligible items found to dispatch. Try refreshing.');
       return;
     }
-    // Delivery Staff Payments §4.1 — whichever driver was picked for this
-    // drop (defaults to '' = leave unassigned, same as before this feature
-    // existed). Written in the same batch as the dispatch itself so
-    // assignment and dispatch are one atomic step, not two.
+    // Delivery Staff Payments §4.1 — the driver picked for this drop.
+    // 2026-10: a driver is now REQUIRED (no unassigned dispatch). Written in
+    // the same batch as the dispatch itself so assignment and dispatch are
+    // one atomic step, not two.
     const driverId = dispatchDriverByKey[drop.key] || '';
+    if (!driverId || !activeDrivers.some(d => d.id === driverId)) {
+      setOpsActionError('Pick a driver before dispatching.');
+      return;
+    }
     setOpsActionError(null);
     setPendingDispatchKey(drop.key);
     try {
@@ -2371,7 +2378,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       targets.forEach(i => {
         batch.update(doc(db, 'orders', drop.orderId, 'items', i._fsItemId as string), {
           status: 'En route',
-          ...(driverId ? { assignedDriverId: driverId } : {}),
+          assignedDriverId: driverId,
         });
       });
       await batch.commit();
@@ -2412,8 +2419,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       return;
     }
     // Delivery Staff Payments §4.1 — one driver per bulk-dispatch batch,
-    // same as the single-drop path (defaults to '' = leave unassigned).
+    // same as the single-drop path. 2026-10: required, no unassigned dispatch.
     const driverId = bulkDispatchDriverId || '';
+    if (!driverId || !activeDrivers.some(d => d.id === driverId)) {
+      setOpsActionError('Pick a driver before dispatching.');
+      return;
+    }
     setOpsActionError(null);
     setPendingBulkDispatch(true);
     try {
@@ -2421,7 +2432,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       targets.forEach(t => {
         batch.update(doc(db, 'orders', t.orderId, 'items', t.itemId), {
           status: 'En route',
-          ...(driverId ? { assignedDriverId: driverId } : {}),
+          assignedDriverId: driverId,
         });
       });
       await batch.commit();
@@ -8253,10 +8264,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                     value={dispatchDriverByKey[drop.key] || ''}
                                     onChange={(e) => setDispatchDriverByKey(prev => ({ ...prev, [drop.key]: e.target.value }))}
                                     disabled={pendingDispatchKey === drop.key}
-                                    title="Assign a driver for this drop (optional)"
+                                    title="Assign a driver for this drop (required)"
                                     className="px-2 py-3 rounded-xl text-[10px] font-bold uppercase tracking-wide border border-slate-200 bg-white text-slate-600 cursor-pointer disabled:opacity-60"
                                   >
-                                    <option value="">Unassigned</option>
+                                    <option value="">Select driver…</option>
                                     {activeDrivers.map(d => (
                                       <option key={d.id} value={d.id}>{d.name}</option>
                                     ))}
@@ -8265,7 +8276,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 <button
                                   type="button"
                                   onClick={() => handleDispatchDrop(drop)}
-                                  disabled={pendingDispatchKey === drop.key}
+                                  disabled={pendingDispatchKey === drop.key || activeDrivers.length === 0 || !dispatchDriverByKey[drop.key]}
+                                  title={
+                                    activeDrivers.length === 0
+                                      ? 'No active drivers — add one in Settings → Staff first'
+                                      : !dispatchDriverByKey[drop.key]
+                                        ? 'Pick a driver before dispatching'
+                                        : undefined
+                                  }
                                   className="px-4 py-3 bg-warning/10 text-warning hover:bg-warning/20 active:scale-95 transition-all rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
                                 >
                                   {pendingDispatchKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <Truck className="size-4" />}
@@ -8296,7 +8314,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               <button
                                 type="button"
                                 onClick={() => handleMarkDelivered(drop)}
-                                disabled={pendingDeliveryKey === drop.key || currentPermissions?.deliveryList?.edit !== true}
+                                disabled={pendingDeliveryKey === drop.key || currentPermissions?.deliveryList?.edit !== true || !drop.items.some(i => i._fsItemId && i.status === 'En route')}
+                                title={!drop.items.some(i => i._fsItemId && i.status === 'En route') ? 'Only dispatched (En route) items can be marked delivered. Dispatch with a driver first.' : undefined}
                                 className="px-6 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer"
                               >
                                 {pendingDeliveryKey === drop.key ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
@@ -8339,10 +8358,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               value={bulkDispatchDriverId}
                               onChange={(e) => setBulkDispatchDriverId(e.target.value)}
                               disabled={pendingBulkDispatch}
-                              title="Assign a driver to this dispatch batch (optional)"
+                              title="Assign a driver to this dispatch batch (required)"
                               className="px-2 py-2 rounded-xl text-[10px] font-bold uppercase tracking-wide border border-slate-600 bg-slate-800 text-white cursor-pointer disabled:opacity-60"
                             >
-                              <option value="">Unassigned</option>
+                              <option value="">Select driver…</option>
                               {activeDrivers.map(d => (
                                 <option key={d.id} value={d.id}>{d.name}</option>
                               ))}
@@ -8351,8 +8370,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           <button
                             type="button"
                             onClick={() => handleBulkDispatch(selectedDrops)}
-                            disabled={pendingBulkDispatch || dispatchTargetCount === 0 || currentPermissions?.ordersByDish?.edit !== true}
-                            title={dispatchTargetCount === 0 ? 'None of the selected drops have items ready to dispatch' : undefined}
+                            disabled={pendingBulkDispatch || dispatchTargetCount === 0 || activeDrivers.length === 0 || !bulkDispatchDriverId || currentPermissions?.ordersByDish?.edit !== true}
+                            title={
+                              activeDrivers.length === 0
+                                ? 'No active drivers — add one in Settings → Staff first'
+                                : !bulkDispatchDriverId
+                                  ? 'Pick a driver before dispatching'
+                                  : dispatchTargetCount === 0
+                                    ? 'None of the selected drops have items ready to dispatch'
+                                    : undefined
+                            }
                             className="px-4 py-2 bg-warning text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                           >
                             {pendingBulkDispatch ? <Loader2 className="size-3.5 animate-spin" /> : <Truck className="size-3.5" />}
