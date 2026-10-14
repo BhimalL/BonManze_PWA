@@ -1094,7 +1094,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         };
       });
       setCustomers(list);
-    }, err => console.error('customers listener failed', err));
+    }, err => {
+      // Roles without Customer Directory / Pending Registrations view (e.g. Driver)
+      // are denied by design — same pattern as the staff listener below.
+      if ((err as any)?.code === 'permission-denied') console.warn('customers listener failed (permission-gated):', err);
+      else console.error('customers listener failed', err);
+    });
 
     const ordersQuery = isPartner
       ? (partnerEntityIds.length > 0
@@ -2934,7 +2939,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         // 2-item group get double-counted as Rs 1,030).
         const flat: { drop: DropTask; item: FsOrderItem }[] = [];
         g.drops.forEach(drop => {
-          drop.items.filter(i => !!i._fsItemId).forEach(item => flat.push({ drop, item }));
+          // Only items firestore.rules clause 4 will accept (En route + assigned
+          // to this driver) — one non-qualifying item would reject the whole batch.
+          drop.items
+            .filter(i => !!i._fsItemId && i.status === 'En route' && i.assignedDriverId === staffAuthUser?.uid)
+            .forEach(item => flat.push({ drop, item }));
         });
         const netFor = (entry: { drop: DropTask; item: FsOrderItem }) => {
           const order = orders.find(o => o.id === entry.drop.orderId);
@@ -2959,7 +2968,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         });
       });
       if (itemCount === 0) {
-        setOpsActionError('No deliverable items found in this selection.');
+        setOpsActionError('Nothing to deliver: none of the selected items are En route and assigned to you.');
         setPendingBulkDeliverCollect(false);
         return;
       }
@@ -3010,9 +3019,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       setOpsActionError('A short note is required for an Issue / dispute.');
       return;
     }
-    const targets = drop.items.filter(i => !!i._fsItemId);
-    if (targets.length === 0) {
+    // firestore.rules clause 4 only allows a driver write on an item that is
+    // currently 'En route' AND assigned to this driver; one non-qualifying
+    // item in the batch makes Firestore reject the WHOLE batch. So only
+    // write to items that qualify (already-Completed / Ready / unassigned
+    // siblings in the same drop are left alone).
+    const withIds = drop.items.filter(i => !!i._fsItemId);
+    if (withIds.length === 0) {
       setOpsActionError('Could not mark this delivered — no Firestore item ids found on this order. Try refreshing.');
+      return;
+    }
+    const targets = withIds.filter(i => i.status === 'En route' && i.assignedDriverId === staffAuthUser?.uid);
+    if (targets.length === 0) {
+      setOpsActionError('Nothing to deliver: none of this drop\'s items are En route and assigned to you.');
       return;
     }
     setOpsActionError(null);

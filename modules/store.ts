@@ -2007,13 +2007,25 @@ onSnapshot(doc(db, 'loyaltyTiers', 'current'), snap => {
   loyaltyListeners.forEach(l => l([...LOYALTY_TIERS]));
 });
 
+// 2026-10-14: the seed below used to retry on every snapshot. A session without
+// paymentMethods.edit (Driver, Customer, signed-out) had the write denied, the
+// optimistic local write reverted, the snapshot fired again with the doc missing,
+// and the seed re-ran — an unbounded loop of rejected writes that congested the
+// Firestore write stream. Now: at most one attempt per page load, only from a
+// signed-in session, and never off a snapshot that merely reflects our own
+// pending local write.
+let paymentMethodsSeedAttempted = false;
 onSnapshot(doc(db, 'paymentMethods', 'current'), snap => {
+  const hasPendingWrites = snap.metadata.hasPendingWrites; // read before exists() narrows snap to never
   if (!snap.exists()) {
     // First run in this environment — seed from today's hardcoded six-entry
     // default so nothing currently offered at checkout disappears on
     // cutover. One-time; every subsequent load finds the doc and skips this.
-    setDoc(doc(db, 'paymentMethods', 'current'), { items: dropUndefined(PAYMENT_METHODS), updatedAt: serverTimestamp() })
-      .catch(e => console.error('Failed to seed paymentMethods/current', e));
+    if (!paymentMethodsSeedAttempted && auth.currentUser && !hasPendingWrites) {
+      paymentMethodsSeedAttempted = true;
+      setDoc(doc(db, 'paymentMethods', 'current'), { items: dropUndefined(PAYMENT_METHODS), updatedAt: serverTimestamp() })
+        .catch(e => console.warn('Could not seed paymentMethods/current (needs Payment Methods edit permission):', e));
+    }
     return;
   }
   PAYMENT_METHODS = (snap.data().items || []) as PaymentMethod[];
