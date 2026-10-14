@@ -2067,14 +2067,38 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Bhimal's explicit directive that access to Mark Paid/Reconcile is
   // controlled only through the Roles permission, not a hardcoded role
   // check.
-  const reconcileGroups = useMemo(
-    () => paymentGroups.filter(g =>
-      g.claimedBy === 'driver' &&
-      !!g.claimedByStaffId &&
-      !!g.claimedMethod
-    ),
-    [paymentGroups]
-  );
+  // 2026-10-14 — each driver-claimed group is scoped down to the items that
+  // actually carry the driver's claim (unconfirmed, paymentClaimedBy ===
+  // 'driver', a method recorded — the exact predicate allDriversClaimedSummary
+  // and driverCashReconciliation use). A drop can hold items the driver never
+  // claimed (undelivered, or an Issue/dispute outcome with no method, or
+  // already Paid); before this, the handover rows showed the whole drop's
+  // face value and Confirm / Confirm all booked every item in it as Paid.
+  // Scoping the groups here keeps the amount shown, the Collect Payment
+  // modal and markPaidGroup/markPaidBulk (which write every item in the
+  // group handed to them) all in agreement, and leaves unclaimed items
+  // exactly as they were. The ordinary Payments-card Mark Paid is untouched.
+  const reconcileGroups = useMemo(() => {
+    const isDriverClaimedItem = (item: FsOrderItem) =>
+      item.paymentStatus !== 'Paid' &&
+      item.paymentClaimedBy === 'driver' &&
+      !!item.paymentMethodName;
+    const scoped: PaymentGroup[] = [];
+    paymentGroups.forEach(g => {
+      if (g.claimedBy !== 'driver' || !g.claimedByStaffId || !g.claimedMethod) return;
+      const drops: DropTask[] = [];
+      g.drops.forEach(drop => {
+        const items = drop.items.filter(isDriverClaimedItem);
+        if (items.length === 0) return;
+        const order = orders.find(o => o.id === drop.orderId);
+        const total = order ? items.reduce((sum, it) => sum + itemNetAmount(order, it), 0) : drop.total;
+        drops.push({ ...drop, items, total });
+      });
+      if (drops.length === 0) return;
+      scoped.push({ ...g, drops, total: drops.reduce((sum, d) => sum + d.total, 0) });
+    });
+    return scoped;
+  }, [paymentGroups, orders]);
 
   // A group's "face value" (g.total, the full net price) vs what confirming
   // it will actually book — its constituent items' claimed/partial amounts.
