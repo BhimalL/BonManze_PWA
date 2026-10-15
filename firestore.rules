@@ -480,6 +480,48 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ---- driverHandovers/{id} ----
+    // A driver's "Process handover" (Operations dashboard -> To Hand Over).
+    // The doc is only a MARKER that this driver has handed these claimed
+    // items to the cashier: it never moves money and never touches an item.
+    // Items still change to Paid only through the cashier's own Payments
+    // writes (items rule, clause 1). Nothing the driver writes here is
+    // trusted for amounts either: the cashier screen recomputes every
+    // amount from the live items and ignores any itemId whose claim does
+    // not belong to the handover's driverId.
+    //   create : an active driver, for themselves only, as 'Submitted',
+    //            with exactly the allowed keys and a server timestamp.
+    //   read   : back office with Payments view (not Partner, not a
+    //            driver) or the driver who owns the doc.
+    //   update : Payments edit only, Submitted -> Confirmed | Returned,
+    //            touching only status/resolvedAt/resolvedBy.
+    //   delete : never.
+    match /driverHandovers/{handoverId} {
+      allow read: if (isStaffAllowed('payments', 'view') && !isPartnerStaff() && !isDriverStaff())
+        || (isDriverStaff() && resource.data.driverId == request.auth.uid);
+      allow create: if isDriverStaff()
+        && request.resource.data.keys().hasOnly(['driverId', 'driverName', 'itemIds', 'itemCount', 'total', 'status', 'submittedAt'])
+        && request.resource.data.keys().hasAll(['driverId', 'driverName', 'itemIds', 'itemCount', 'total', 'status', 'submittedAt'])
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.status == 'Submitted'
+        && request.resource.data.submittedAt == request.time
+        && request.resource.data.driverName is string
+        && request.resource.data.itemIds is list
+        && request.resource.data.itemIds.size() >= 1
+        && request.resource.data.itemIds.size() <= 200
+        && request.resource.data.itemCount == request.resource.data.itemIds.size()
+        && request.resource.data.total is number;
+      allow update: if isStaffAllowed('payments', 'edit')
+        && !isPartnerStaff()
+        && !isDriverStaff()
+        && resource.data.status == 'Submitted'
+        && request.resource.data.status in ['Confirmed', 'Returned']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'resolvedAt', 'resolvedBy'])
+        && request.resource.data.resolvedBy == request.auth.uid
+        && request.resource.data.resolvedAt == request.time;
+      allow delete: if false;
+    }
+
     match /orders/{orderId}/invoiceAssignments/{dropDocId} {
       allow read, write: if false;
     }

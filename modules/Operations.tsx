@@ -257,6 +257,24 @@ const formatDay = (dateKey: string) => {
 // undefined for anything not sourced from the live Firestore listeners.
 type FsOrderItem = OrderItem & { _fsItemId?: string };
 
+// A driver's "Process handover" marker (collection driverHandovers; see
+// firestore.rules). itemIds are `${orderId}::${itemDocId}` keys. The doc
+// never moves money or touches items: the cashier confirms in Payments.
+interface DriverHandover {
+  id: string;
+  driverId: string;
+  driverName: string;
+  itemIds: string[];
+  itemCount: number;
+  total: number;
+  status: 'Submitted' | 'Confirmed' | 'Returned';
+  submittedAt?: any;
+}
+const fmtClockTime = (v: any): string => {
+  const d = v && typeof v.toDate === 'function' ? v.toDate() : (v ? new Date(v) : null);
+  return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—';
+};
+
 interface DropTask {
   key: string;
   orderId: string;
@@ -500,6 +518,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // a driver's own dashboard) — whether its handover breakdown modal is
   // open.
   const [showClaimedBreakdown, setShowClaimedBreakdown] = useState(false);
+  // Driver handovers (see DriverHandover above). handoverArmed holds the
+  // two-step confirm state ('submit' for the driver's button, or a handover
+  // id for the cashier's Confirm / Return buttons); handoverBusy the
+  // in-flight action so a double tap can't fire twice.
+  const [driverHandovers, setDriverHandovers] = useState<DriverHandover[]>([]);
+  const [handoverArmed, setHandoverArmed] = useState<string | null>(null);
+  const [handoverBusy, setHandoverBusy] = useState<string | null>(null);
   // Back office's "Driver Claimed" card — whether the modal holding the
   // read-only Driver Cash Reconciliation panel and the actionable
   // Reconcile section is open. Moved out of the main Payments tab flow
@@ -1170,6 +1195,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     return () => { unsubCustomers(); unsubOrders(); unsubItems(); unsubEntities(); unsubRoles(); unsubStaff(); };
   }, [staffAuthUser, staffDocRaw]);
 
+  // driverHandovers: a driver listens to their own open handovers only;
+  // back office (Payments view) to every open one. Partner accounts never
+  // listen (the rules deny them too).
+  useEffect(() => {
+    const canSee = isDriver || currentPermissions?.payments?.view === true;
+    if (!staffAuthUser || !canSee || isPartner) { setDriverHandovers([]); return; }
+    const q = isDriver
+      ? query(collection(db, 'driverHandovers'), where('driverId', '==', staffAuthUser.uid), where('status', '==', 'Submitted'))
+      : query(collection(db, 'driverHandovers'), where('status', '==', 'Submitted'));
+    return onSnapshot(q, snap => {
+      setDriverHandovers(snap.docs.map(d => ({ id: d.id, ...d.data() } as DriverHandover)));
+    }, err => console.warn('driverHandovers listener failed (permission-gated):', err));
+  }, [staffAuthUser, isDriver, isPartner, currentPermissions?.payments?.view]);
+
   // Reshapes the two raw listeners above into Order[] -- every downstream
   // memo (lines, dishesByDay, drops, paymentDrops) only ever needed this
   // shape, so nothing else in this file has to change. Kept as a separate
@@ -1228,6 +1267,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         paymentClaimedByStaffId: it.paymentClaimedByStaffId,
         paymentIssueAmount: it.paymentIssueAmount,
         paymentIssueNote: it.paymentIssueNote,
+        // When the driver recorded the claim (ISO string), shown on the
+        // handover screens. Absent on claims written before this field.
+        paymentClaimedAt: it.paymentClaimedAt,
       }));
       const allPaid = items.length > 0 && items.every(i => i.paymentStatus === 'Paid');
       const createdAtIso = o.createdAt && typeof o.createdAt.toDate === 'function'
@@ -2178,9 +2220,34 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // Same actually-collected-amount handling for Partial claims as
   // driverCashReconciliation above (a driver who only collected part of an
   // item's price never has the full amount to hand over).
+  // The amount a driver claims to have collected for one item: the partial
+  // amount when they entered one (never more than the item's net), else the
+  // item's full net. Same figure confirmUpdateForItem books on confirm.
+  const claimAmountOf = (order: Order, item: FsOrderItem): number => {
+    const net = itemNetAmount(order, item);
+    const isPartial = item.paymentIssueAmount != null && !Number.isNaN(item.paymentIssueAmount);
+    return isPartial ? Math.min(item.paymentIssueAmount as number, net) : net;
+  };
+  const deliveryWindowFor = (slot?: string): string =>
+    String(slot || '').toLowerCase().includes('dinner') ? SYSTEM_CONFIG.dinnerDeliveryWindow : SYSTEM_CONFIG.lunchDeliveryWindow;
+
+  // Items this driver has already put into a Submitted handover that the
+  // cashier has not yet confirmed or returned: locked on the driver's side.
+  const myHandedOverKeys = useMemo(() => {
+    const keys = new Set<string>();
+    driverHandovers.forEach(h => {
+      if (h.status === 'Submitted' && h.driverId === staffAuthUser?.uid) h.itemIds.forEach(k => keys.add(k));
+    });
+    return keys;
+  }, [driverHandovers, staffAuthUser]);
+
   const myClaimedSummary = useMemo(() => {
     const myUid = staffAuthUser?.uid;
-    const breakdown: { key: string; customerName: string; date: string; method: string; reference?: string; amount: number; isPartial: boolean }[] = [];
+    const breakdown: {
+      key: string; fsItemId: string; orderId: string; customerName: string; date: string; slot: string;
+      mealName: string; method: string; reference?: string; claimedAt?: string; note?: string;
+      amount: number; net: number; isPartial: boolean; handedOver: boolean;
+    }[] = [];
     let total = 0;
     if (myUid) {
       paymentsLines.forEach(({ order, item }) => {
@@ -2190,36 +2257,167 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           item.paymentClaimedByStaffId === myUid &&
           !!item.paymentMethodName
         ) {
+          const fsId = (item as FsOrderItem)._fsItemId || '';
           const isPartial = item.paymentIssueAmount != null && !Number.isNaN(item.paymentIssueAmount);
-          const amount = isPartial ? (item.paymentIssueAmount as number) : itemNetAmount(order, item);
+          const amount = claimAmountOf(order, item as FsOrderItem);
           total += amount;
           breakdown.push({
-            key: `${order.id}-${(item as FsOrderItem)._fsItemId || ''}`,
+            key: `${order.id}::${fsId}`,
+            fsItemId: fsId,
+            orderId: order.id,
             customerName: order.customerName,
             date: item.deliveryDate || 'Unscheduled',
+            slot: item.serviceSlot || '',
+            mealName: `${item.qty > 1 ? `${item.qty}× ` : ''}${item.name}`,
             method: item.paymentMethodName as string,
             reference: item.paymentReference,
+            claimedAt: item.paymentClaimedAt,
+            note: item.paymentIssueNote,
             amount,
+            net: itemNetAmount(order, item),
             isPartial,
+            handedOver: myHandedOverKeys.has(`${order.id}::${fsId}`),
           });
         }
       });
-      breakdown.sort((a, b) => a.date.localeCompare(b.date));
+      breakdown.sort((a, b) => a.date.localeCompare(b.date) || a.customerName.localeCompare(b.customerName));
     }
-    // Grouped by payment method with a subtotal each — what a driver
-    // actually needs at handover: count the cash in one pile, and show the
-    // transfer references for digital methods separately.
+    // Only what is still to be handed over is grouped by payment method
+    // with a subtotal each (cash in one pile; digital methods list their
+    // transfer references); rows already handed over are shown separately.
+    const pendingRows = breakdown.filter(r => !r.handedOver);
+    const handedRows = breakdown.filter(r => r.handedOver);
     const cashNames = new Set(paymentMethods.filter(m => m.type === 'Cash').map(m => m.name));
     const methodMap: Record<string, { method: string; isCash: boolean; total: number; count: number; rows: typeof breakdown }> = {};
-    breakdown.forEach(r => {
+    pendingRows.forEach(r => {
       if (!methodMap[r.method]) methodMap[r.method] = { method: r.method, isCash: cashNames.has(r.method), total: 0, count: 0, rows: [] };
       methodMap[r.method].total += r.amount;
       methodMap[r.method].count += 1;
       methodMap[r.method].rows.push(r);
     });
     const byMethod = Object.values(methodMap).sort((a, b) => Number(b.isCash) - Number(a.isCash) || b.total - a.total);
-    return { total, count: breakdown.length, breakdown, byMethod };
-  }, [paymentsLines, staffAuthUser, paymentMethods]);
+    const sum = (rows: typeof breakdown) => Math.round(rows.reduce((t, r) => t + r.amount, 0) * 100) / 100;
+    const myOpenHandovers = driverHandovers.filter(h => h.status === 'Submitted' && h.driverId === myUid);
+    return {
+      total, count: breakdown.length, breakdown, byMethod,
+      pending: { total: sum(pendingRows), count: pendingRows.length, rows: pendingRows },
+      handedOver: { total: sum(handedRows), count: handedRows.length, rows: handedRows, submittedAt: myOpenHandovers[0]?.submittedAt },
+    };
+  }, [paymentsLines, staffAuthUser, paymentMethods, myHandedOverKeys, driverHandovers]);
+
+  // Driver: hand the claims still to be handed over to the cashier. Writes a
+  // marker doc only (see firestore.rules driverHandovers); never an item.
+  const submitHandover = async () => {
+    if (!isDriver || !staffAuthUser) {
+      setOpsActionError('Access Denied: handovers are for driver accounts only.');
+      return;
+    }
+    const rows = myClaimedSummary.pending.rows.filter(r => !!r.fsItemId);
+    if (rows.length === 0) {
+      setOpsActionError('Nothing to hand over right now.');
+      return;
+    }
+    setOpsActionError(null);
+    setHandoverBusy('submit');
+    try {
+      await setDoc(doc(collection(db, 'driverHandovers')), {
+        driverId: staffAuthUser.uid,
+        driverName: staffDocRaw?.name || 'Driver',
+        itemIds: rows.map(r => r.key),
+        itemCount: rows.length,
+        total: Math.round(rows.reduce((t, r) => t + r.amount, 0) * 100) / 100,
+        status: 'Submitted',
+        submittedAt: serverTimestamp(),
+      });
+      setHandoverArmed(null);
+    } catch (e) {
+      console.error('Submit handover failed', e);
+      setOpsActionError('Could not submit the handover — please try again.');
+    } finally {
+      setHandoverBusy(null);
+    }
+  };
+
+  // Back office: open handovers with their LIVE claims. Amounts always come
+  // from the items; a handover's stored total is informational only, and an
+  // itemId whose claim does not belong to the handover's own driver is
+  // ignored, so a forged marker can never pull another driver's claim in.
+  const openHandovers = useMemo(() => {
+    return driverHandovers
+      .filter(h => h.status === 'Submitted')
+      .map(h => {
+        const idSet = new Set(h.itemIds);
+        const claims: { order: Order; item: FsOrderItem }[] = [];
+        orders.forEach(order => order.items.forEach(raw => {
+          const item = raw as FsOrderItem;
+          if (!item._fsItemId || !idSet.has(`${order.id}::${item._fsItemId}`)) return;
+          if (item.paymentStatus === 'Paid' || item.paymentClaimedBy !== 'driver' || item.paymentClaimedByStaffId !== h.driverId || !item.paymentMethodName) return;
+          claims.push({ order, item });
+        }));
+        const total = Math.round(claims.reduce((t, c) => t + claimAmountOf(c.order, c.item), 0) * 100) / 100;
+        return { h, claims, total };
+      })
+      .filter(x => x.claims.length > 0);
+  }, [driverHandovers, orders]);
+  const handedOverClaimKeys = useMemo(() => {
+    const keys = new Set<string>();
+    openHandovers.forEach(({ claims }) => claims.forEach(c => keys.add(`${c.order.id}::${c.item._fsItemId}`)));
+    return keys;
+  }, [openHandovers]);
+
+  // Cashier confirms a whole submitted handover: every claim in it becomes
+  // Paid (same per-item update as Confirm / Confirm all) and the marker is
+  // closed, all in ONE atomic batch.
+  const confirmHandover = async (handoverId: string) => {
+    if (currentPermissions?.payments?.edit !== true || !staffAuthUser) {
+      setOpsActionError('Access Denied: You do not have permission to confirm handovers.');
+      return;
+    }
+    const entry = openHandovers.find(x => x.h.id === handoverId);
+    if (!entry) { setOpsActionError('That handover has nothing left to confirm.'); return; }
+    const batch = writeBatch(db);
+    for (const { order, item } of entry.claims) {
+      const method = paymentMethods.find(m => m.name === item.paymentMethodName);
+      if (!method) {
+        setOpsActionError(`Could not find the "${item.paymentMethodName}" payment method — try refreshing.`);
+        return;
+      }
+      batch.update(doc(db, 'orders', order.id, 'items', item._fsItemId as string), confirmUpdateForItem(order, item, method));
+    }
+    batch.update(doc(db, 'driverHandovers', handoverId), { status: 'Confirmed', resolvedAt: serverTimestamp(), resolvedBy: staffAuthUser.uid });
+    setOpsActionError(null);
+    setHandoverBusy(handoverId);
+    try {
+      await batch.commit();
+      writeAuditLog('PaymentConfirmed', `Confirmed handover from ${entry.h.driverName}: ${entry.claims.length} claim(s), ${formatCurrency(entry.total)}`);
+      setHandoverArmed(null);
+    } catch (e) {
+      console.error('Confirm handover failed', e);
+      setOpsActionError('Confirm handover failed — please try again.');
+    } finally {
+      setHandoverBusy(null);
+    }
+  };
+
+  // Cashier sends a submitted handover back (e.g. the cash does not match):
+  // the claims stay exactly as they are and the driver can hand over again.
+  const returnHandover = async (handoverId: string) => {
+    if (currentPermissions?.payments?.edit !== true || !staffAuthUser) {
+      setOpsActionError('Access Denied: You do not have permission to return handovers.');
+      return;
+    }
+    setOpsActionError(null);
+    setHandoverBusy(handoverId);
+    try {
+      await updateDoc(doc(db, 'driverHandovers', handoverId), { status: 'Returned', resolvedAt: serverTimestamp(), resolvedBy: staffAuthUser.uid });
+      setHandoverArmed(null);
+    } catch (e) {
+      console.error('Return handover failed', e);
+      setOpsActionError('Could not return the handover — please try again.');
+    } finally {
+      setHandoverBusy(null);
+    }
+  };
 
   // 2026-09: Collected/Outstanding now go through itemPaidAmount/
   // itemOutstandingAmount instead of a binary "full price if Paid, else
@@ -2969,6 +3167,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         if (f.outcome === 'paid' || f.outcome === 'partial') {
           baseUpdate.paymentMethodName = method!.name;
           baseUpdate.paymentReference = f.reference.trim() || null;
+          baseUpdate.paymentClaimedAt = new Date().toISOString();
           baseUpdate.paymentClaimedBy = 'driver';
           baseUpdate.paymentClaimedByStaffId = staffAuthUser?.uid || null;
         }
@@ -3088,6 +3287,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       if (dcOutcome === 'paid' || dcOutcome === 'partial') {
         baseUpdate.paymentMethodName = method!.name;
         baseUpdate.paymentReference = dcReference.trim() || null;
+        baseUpdate.paymentClaimedAt = new Date().toISOString();
         baseUpdate.paymentClaimedBy = 'driver';
         baseUpdate.paymentClaimedByStaffId = staffAuthUser?.uid || null;
       }
@@ -3907,11 +4107,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
               <div>
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">To Hand Over</p>
-                <h3 className="text-2xl font-black text-slate-900 mt-2">{formatCurrency(myClaimedSummary.total)}</h3>
+                <h3 className="text-2xl font-black text-slate-900 mt-2">{formatCurrency(myClaimedSummary.pending.total)}</h3>
                 <p className="text-[11px] text-slate-400 font-bold mt-1">
-                  {myClaimedSummary.count > 0
-                    ? `${myClaimedSummary.count} claim${myClaimedSummary.count !== 1 ? 's' : ''} · tap for breakdown`
-                    : 'Nothing collected yet'}
+                  {myClaimedSummary.pending.count > 0
+                    ? `${myClaimedSummary.pending.count} claim${myClaimedSummary.pending.count !== 1 ? 's' : ''} · tap for details & handover`
+                    : myClaimedSummary.handedOver.count > 0
+                      ? `${formatCurrency(myClaimedSummary.handedOver.total)} handed over · awaiting cashier`
+                      : 'Nothing collected yet'}
                 </p>
               </div>
             </button>
@@ -8766,7 +8968,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Driver Claimed</p>
                     <p className="text-2xl font-black text-warning">{formatCurrency(allDriversClaimedSummary.total)}</p>
                     <p className="text-[10px] font-bold text-slate-400 mt-1">
-                      {allDriversClaimedSummary.count > 0 ? `${allDriversClaimedSummary.count} claim${allDriversClaimedSummary.count !== 1 ? 's' : ''} · tap to reconcile` : 'Nothing pending'}
+                      {allDriversClaimedSummary.count > 0
+                        ? `${allDriversClaimedSummary.count} claim${allDriversClaimedSummary.count !== 1 ? 's' : ''} · tap to reconcile${openHandovers.length > 0 ? ` · ${openHandovers.length} handover${openHandovers.length !== 1 ? 's' : ''} submitted` : ''}`
+                        : 'Nothing pending'}
                     </p>
                   </button>
                 )}
@@ -9311,27 +9515,34 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         </div>
       )}
 
-      {/* Driver's own "Claimed" breakdown — what they need to hand over to
-          the cashier. Read-only: a driver never confirms their own
-          payments (that stays back office's job via Reconcile/Mark Paid),
-          this is purely the checklist for the handover conversation. */}
+      {/* Driver's "Hand over to cashier" popup — the checklist for the
+          handover conversation (what to count, per payment method, with
+          the meal, order, delivery slot, when it was collected, the
+          reference and any partial/issue note) plus the Process handover
+          button. Processing only records that the driver has handed these
+          claims over (a driverHandovers marker); nothing is marked paid
+          until the cashier confirms it in Payments -> Driver Claimed ->
+          Reconcile. A driver never confirms their own payments. */}
       {showClaimedBreakdown && (
         <Portal>
           <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 max-h-[85vh] flex flex-col">
+            <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 max-h-[88vh] flex flex-col">
               <div className="p-6 border-b border-slate-100 flex items-center justify-between shrink-0">
                 <div>
                   <h2 className="text-lg font-black text-slate-900">Hand over to cashier</h2>
-                  <p className="text-[10px] font-bold text-slate-400 mt-0.5">{myClaimedSummary.count} claim{myClaimedSummary.count !== 1 ? 's' : ''} · {formatCurrency(myClaimedSummary.total)} total</p>
+                  <p className="text-[10px] font-bold text-slate-400 mt-0.5">
+                    {myClaimedSummary.pending.count} claim{myClaimedSummary.pending.count !== 1 ? 's' : ''} to hand over · {formatCurrency(myClaimedSummary.pending.total)}
+                  </p>
                 </div>
-                <button onClick={() => setShowClaimedBreakdown(false)} className="p-2 text-slate-400 hover:text-danger">
+                <button onClick={() => { setShowClaimedBreakdown(false); setHandoverArmed(null); }} className="p-2 text-slate-400 hover:text-danger">
                   <X className="size-5" />
                 </button>
               </div>
-              <div className="p-6 overflow-y-auto space-y-5">
-                {myClaimedSummary.breakdown.length === 0 ? (
+              <div className="p-6 overflow-y-auto space-y-6">
+                {myClaimedSummary.count === 0 && (
                   <p className="text-xs font-bold text-slate-400 text-center py-6">Nothing claimed yet.</p>
-                ) : myClaimedSummary.byMethod.map(g => (
+                )}
+                {myClaimedSummary.byMethod.map(g => (
                   <div key={g.method}>
                     <div className="flex items-center justify-between gap-3 pb-2 border-b border-slate-200">
                       <div className="min-w-0">
@@ -9344,20 +9555,77 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     </div>
                     <div className="divide-y divide-slate-100">
                       {g.rows.map(row => (
-                        <div key={row.key} className="py-3 flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-xs font-black text-slate-900 truncate">{row.customerName}</p>
-                            <p className="text-[10px] font-bold text-slate-400">
-                              {formatDay(row.date)}{row.reference ? ` · ${row.reference}` : ''}{row.isPartial ? ' · Partial' : ''}
-                            </p>
+                        <div key={row.key} className="py-3 space-y-0.5">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-xs font-black text-slate-900 truncate">{row.customerName}</p>
+                              <p className="text-[11px] font-bold text-slate-600">{row.mealName}</p>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <p className="text-sm font-black text-slate-700">{formatCurrency(row.amount)}</p>
+                              {row.isPartial && <p className="text-[9px] font-bold text-danger">partial, of {formatCurrency(row.net)}</p>}
+                            </div>
                           </div>
-                          <p className="text-sm font-black text-slate-700 shrink-0">{formatCurrency(row.amount)}</p>
+                          <p className="text-[10px] font-bold text-slate-400">
+                            Order #{row.orderId.slice(0, 8)} · {formatDay(row.date)}{row.slot ? ` · ${row.slot} (${deliveryWindowFor(row.slot)})` : ''}
+                          </p>
+                          <p className="text-[10px] font-bold text-slate-400">
+                            Collected {fmtClockTime(row.claimedAt)} · Ref {row.reference || '—'}
+                          </p>
+                          {row.note && <p className="text-[10px] font-bold text-danger">Note: {row.note}</p>}
                         </div>
                       ))}
                     </div>
                   </div>
                 ))}
+                {myClaimedSummary.handedOver.count > 0 && (
+                  <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-black text-slate-700">Handed over — awaiting cashier</p>
+                        <p className="text-[10px] font-bold text-slate-400">
+                          {myClaimedSummary.handedOver.count} claim{myClaimedSummary.handedOver.count !== 1 ? 's' : ''} · submitted {fmtClockTime(myClaimedSummary.handedOver.submittedAt)}
+                        </p>
+                      </div>
+                      <p className="text-sm font-black text-slate-500 shrink-0">{formatCurrency(myClaimedSummary.handedOver.total)}</p>
+                    </div>
+                    <div className="mt-2 divide-y divide-slate-100">
+                      {myClaimedSummary.handedOver.rows.map(row => (
+                        <div key={row.key} className="py-1.5 flex items-center justify-between gap-3">
+                          <p className="text-[10px] font-bold text-slate-500 truncate">{row.customerName} · {row.mealName} · {row.method}</p>
+                          <p className="text-[10px] font-black text-slate-500 shrink-0">{formatCurrency(row.amount)}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[10px] font-bold text-slate-400 mt-2">Locked until the cashier confirms it in Payments (or returns it to you).</p>
+                  </div>
+                )}
               </div>
+              {myClaimedSummary.pending.count > 0 && (
+                <div className="p-5 border-t border-slate-100 shrink-0 space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (handoverArmed === 'submit') submitHandover();
+                      else setHandoverArmed('submit');
+                    }}
+                    disabled={handoverBusy === 'submit'}
+                    className={`w-full py-3 rounded-2xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait cursor-pointer transition-all ${
+                      handoverArmed === 'submit' ? 'bg-danger text-white animate-pulse' : 'bg-primary text-white hover:bg-primary/90'
+                    }`}
+                  >
+                    {handoverBusy === 'submit' ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                    {handoverBusy === 'submit'
+                      ? 'Submitting...'
+                      : handoverArmed === 'submit'
+                        ? `Tap again to confirm — ${formatCurrency(myClaimedSummary.pending.total)}`
+                        : `Process handover · ${formatCurrency(myClaimedSummary.pending.total)} (${myClaimedSummary.pending.count})`}
+                  </button>
+                  <p className="text-[10px] font-bold text-slate-400 text-center">
+                    The cashier confirms receipt in Payments. Nothing is marked paid until they do.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </Portal>
@@ -9438,11 +9706,61 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       >
                         <option value="">Select a driver…</option>
                         {reconcileDrivers.map(d => (
-                          <option key={d.id} value={d.id}>{d.name}</option>
+                          <option key={d.id} value={d.id}>{d.name}{openHandovers.some(x => x.h.driverId === d.id) ? ' · handover submitted' : ''}</option>
                         ))}
                       </select>
                     )}
                   </div>
+
+                  {reconcileDriverId && openHandovers.filter(x => x.h.driverId === reconcileDriverId).map(({ h, claims, total }) => {
+                    const methodTotals: Record<string, number> = {};
+                    claims.forEach(c => {
+                      const m = c.item.paymentMethodName as string;
+                      methodTotals[m] = (methodTotals[m] || 0) + claimAmountOf(c.order, c.item);
+                    });
+                    const byMethodLabel = Object.keys(methodTotals).map(m => `${m} ${formatCurrency(methodTotals[m])}`).join(' · ');
+                    const canEditPayments = currentPermissions?.payments?.edit === true;
+                    return (
+                      <div key={h.id} className="mb-4 rounded-2xl border border-primary/30 bg-primary/5 p-4">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-primary">Handover submitted</p>
+                        <p className="text-sm font-black text-slate-900 mt-1">
+                          {h.driverName} · {formatCurrency(total)} · {claims.length} claim{claims.length !== 1 ? 's' : ''}
+                        </p>
+                        <p className="text-[10px] font-bold text-slate-500 mt-0.5">Submitted {fmtClockTime(h.submittedAt)} · {byMethodLabel}</p>
+                        <div className="flex items-center gap-2 mt-3 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (handoverArmed === `c:${h.id}`) confirmHandover(h.id);
+                              else setHandoverArmed(`c:${h.id}`);
+                            }}
+                            disabled={handoverBusy === h.id || !canEditPayments}
+                            title={!canEditPayments ? 'Requires Payments — Edit permission' : undefined}
+                            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer transition-all ${
+                              handoverArmed === `c:${h.id}` ? 'bg-danger text-white animate-pulse' : 'bg-success text-white hover:bg-success/90'
+                            }`}
+                          >
+                            {handoverBusy === h.id ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                            {handoverBusy === h.id ? 'Confirming...' : handoverArmed === `c:${h.id}` ? 'Click to confirm' : `Confirm handover (${claims.length})`}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (handoverArmed === `r:${h.id}`) returnHandover(h.id);
+                              else setHandoverArmed(`r:${h.id}`);
+                            }}
+                            disabled={handoverBusy === h.id || !canEditPayments}
+                            title={!canEditPayments ? 'Requires Payments — Edit permission' : 'Send back to the driver (claims stay as they are)'}
+                            className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-60 cursor-pointer transition-all ${
+                              handoverArmed === `r:${h.id}` ? 'bg-danger text-white animate-pulse' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                          >
+                            {handoverArmed === `r:${h.id}` ? 'Click to return' : 'Return to driver'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
 
                   {reconcileDrivers.length === 0 ? (
                     <p className="text-xs font-bold text-slate-400 py-4 text-center">
@@ -9500,7 +9818,12 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 return (
                                 <div key={group.key} className="py-2 flex items-center justify-between gap-3">
                                   <div className="min-w-0">
-                                    <p className="text-xs font-bold text-slate-700 truncate">{group.customerName}</p>
+                                    <p className="text-xs font-bold text-slate-700 truncate">
+                                      {group.customerName}
+                                      {group.drops.some(d => d.items.some(i => handedOverClaimKeys.has(`${d.orderId}::${i._fsItemId}`))) && (
+                                        <span className="ml-2 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[8px] font-black uppercase tracking-wide">Handed over</span>
+                                      )}
+                                    </p>
                                     <p className="text-[10px] font-bold text-slate-400">
                                       {formatDay(group.earliestDate || '')}{group.claimedReference ? ` · ${group.claimedReference}` : ''}
                                       {isPartialGroup && <span className="text-danger font-black"> · partial</span>}

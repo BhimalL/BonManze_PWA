@@ -235,6 +235,10 @@ export interface OrderItem {
   // claim at all, optional context for a partial.
   paymentIssueAmount?: number;
   paymentIssueNote?: string;
+  // ISO time the driver recorded their claim (written with the Deliver &
+  // Collect action). Shown on the driver handover screens; absent on claims
+  // written before this field existed.
+  paymentClaimedAt?: string;
   // Resolution of a Partial/Issue claim (Payments tab "Resolve" action,
   // 2026-09) — the automated resolution flow explicitly deferred when
   // paymentIssueAmount/paymentIssueNote were introduced above. Tracks how
