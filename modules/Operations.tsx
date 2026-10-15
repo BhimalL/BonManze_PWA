@@ -3893,8 +3893,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           {isDriver ? (
             <button
               type="button"
-              onClick={() => { if (hasTabPermission('payments')) setTab('payments'); }}
-              disabled={!hasTabPermission('payments')}
+              // Opens the handover breakdown modal directly. A driver's role
+              // normally has no Payments tab, so this must not depend on
+              // hasTabPermission('payments'); the modal is read-only and
+              // built only from the driver's own already-loaded claims.
+              onClick={() => setShowClaimedBreakdown(true)}
+              disabled={myClaimedSummary.count === 0}
+              title={myClaimedSummary.count === 0 ? 'Nothing collected yet' : 'See what to hand over to the cashier, by payment method'}
               className="text-left bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all cursor-pointer disabled:cursor-default"
             >
               <div className="size-12 rounded-2xl bg-yellow-500/10 flex items-center justify-center text-yellow-600">
@@ -3905,7 +3910,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 <h3 className="text-2xl font-black text-slate-900 mt-2">{formatCurrency(myClaimedSummary.total)}</h3>
                 <p className="text-[11px] text-slate-400 font-bold mt-1">
                   {myClaimedSummary.count > 0
-                    ? `${myClaimedSummary.count} claim${myClaimedSummary.count !== 1 ? 's' : ''} · by method in Payments`
+                    ? `${myClaimedSummary.count} claim${myClaimedSummary.count !== 1 ? 's' : ''} · tap for breakdown`
                     : 'Nothing collected yet'}
                 </p>
               </div>
