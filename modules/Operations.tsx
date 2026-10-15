@@ -270,6 +270,12 @@ interface DriverHandover {
   status: 'Submitted' | 'Confirmed' | 'Returned';
   submittedAt?: any;
 }
+const fmtShortDateTime = (v: any): string => {
+  const d = v && typeof v.toDate === 'function' ? v.toDate() : (v ? new Date(v) : null);
+  return d && !Number.isNaN(d.getTime())
+    ? `${d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} · ${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
+    : '—';
+};
 const fmtClockTime = (v: any): string => {
   const d = v && typeof v.toDate === 'function' ? v.toDate() : (v ? new Date(v) : null);
   return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—';
@@ -524,6 +530,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // in-flight action so a double tap can't fire twice.
   const [driverHandovers, setDriverHandovers] = useState<DriverHandover[]>([]);
   const [handoverArmed, setHandoverArmed] = useState<string | null>(null);
+  // Driver Claimed screen (cashier): which tab is open (null = automatic:
+  // Handovers when the driver has any submitted, else All claims), which
+  // handover cards are expanded (undefined = the first one only), and the
+  // driver-rail search text.
+  const [reconcileTab, setReconcileTab] = useState<'handovers' | 'claims' | 'cash' | null>(null);
+  const [handoverOpen, setHandoverOpen] = useState<Record<string, boolean>>({});
+  const [reconcileSearch, setReconcileSearch] = useState('');
   const [handoverBusy, setHandoverBusy] = useState<string | null>(null);
   // Back office's "Driver Claimed" card — whether the modal holding the
   // read-only Driver Cash Reconciliation panel and the actionable
@@ -2364,6 +2377,29 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     openHandovers.forEach(({ claims }) => claims.forEach(c => keys.add(`${c.order.id}::${c.item._fsItemId}`)));
     return keys;
   }, [openHandovers]);
+
+  // Driver rail of the Driver Claimed screen: every driver with something
+  // unconfirmed, drivers with a submitted handover first.
+  const reconcileRail = useMemo(() => {
+    return reconcileDrivers
+      .map(d => {
+        const groups = reconcileGroups.filter(g => g.claimedByStaffId === d.id);
+        return {
+          d,
+          amount: groups.reduce((t, g) => t + groupCollectedAmount(g), 0),
+          claimCount: groups.reduce((n, g) => n + g.drops.reduce((m, dr) => m + dr.items.length, 0), 0),
+          handovers: openHandovers.filter(x => x.h.driverId === d.id).length,
+        };
+      })
+      .sort((a, b) => b.handovers - a.handovers || a.d.name.localeCompare(b.d.name));
+  }, [reconcileDrivers, reconcileGroups, openHandovers, orders]);
+
+  // Opening the screen selects a driver straight away (one with a submitted
+  // handover first) instead of making the cashier pick from a dropdown.
+  useEffect(() => {
+    if (!showDriverReconcileModal || reconcileDriverId || reconcileRail.length === 0) return;
+    setReconcileDriverId(reconcileRail[0].d.id);
+  }, [showDriverReconcileModal, reconcileDriverId, reconcileRail]);
 
   // Cashier confirms a whole submitted handover: every claim in it becomes
   // Paid (same per-item update as Confirm / Confirm all) and the marker is
@@ -9631,234 +9667,354 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         </Portal>
       )}
 
-      {/* Back office's "Driver Claimed" modal — holds the read-only Driver
-          Cash Reconciliation panel and the actionable Reconcile section,
-          moved out of the main Payments tab flow (explicit decision) to
-          keep that view focused on the summary cards and the itemized
-          unpaid list. Same two blocks, same order, just relocated here. */}
-      {showDriverReconcileModal && (
+      {/* Back office's "Driver Claimed" screen. Built to stay usable with
+          several drivers and many handovers: a driver rail on the left,
+          and for the selected driver three tabs on the right —
+            Handovers : each submitted handover as a collapsible card with
+                        a table of every meal/order it covers, and the
+                        Confirm handover / Return to driver buttons in the
+                        card header (so they never scroll out of sight);
+            All claims: the per-method Confirm / Confirm all list (every
+                        unconfirmed driver claim, handed over or not);
+            Cash by day: the read-only "what should the driver be holding"
+                        figures.
+          Both panes scroll on their own. Every action is gated purely on
+          currentPermissions?.payments?.edit, never on isDriver. */}
+      {showDriverReconcileModal && (() => {
+        const canEditPayments = currentPermissions?.payments?.edit === true;
+        const closeReconcile = () => { setShowDriverReconcileModal(false); setHandoverArmed(null); setConfirmBulkKey(null); setReconcileTab(null); };
+        const selectedRail = reconcileRail.find(r => r.d.id === reconcileDriverId);
+        const driverHandoverList = openHandovers
+          .filter(x => x.h.driverId === reconcileDriverId)
+          .slice()
+          .sort((a, b) => (a.h.submittedAt?.toMillis?.() ?? 0) - (b.h.submittedAt?.toMillis?.() ?? 0));
+        const tab = reconcileTab ?? (driverHandoverList.length > 0 ? 'handovers' : 'claims');
+        const q = reconcileSearch.trim().toLowerCase();
+        const railShown = reconcileRail.filter(r => !q || r.d.name.toLowerCase().includes(q));
+        const cashRows = driverCashReconciliation.filter(r => r.staffId === reconcileDriverId);
+        const TabBtn = ({ id, label, count }: { id: 'handovers' | 'claims' | 'cash'; label: string; count?: number }) => (
+          <button
+            type="button"
+            onClick={() => setReconcileTab(id)}
+            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-pointer transition-all ${
+              tab === id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+            }`}
+          >
+            {label}{count !== undefined ? ` (${count})` : ''}
+          </button>
+        );
+        return (
         <Portal>
-          <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-white rounded-[32px] w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 max-h-[85vh] flex flex-col">
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between shrink-0">
+          <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
+            <div className="bg-white rounded-[28px] w-full max-w-6xl h-[90vh] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col">
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between shrink-0">
                 <div>
                   <h2 className="text-lg font-black text-slate-900">Driver claimed</h2>
-                  <p className="text-[10px] font-bold text-slate-400 mt-0.5">{allDriversClaimedSummary.count} claim{allDriversClaimedSummary.count !== 1 ? 's' : ''} · {formatCurrency(allDriversClaimedSummary.total)} total</p>
+                  <p className="text-[10px] font-bold text-slate-400 mt-0.5">
+                    {allDriversClaimedSummary.count} claim{allDriversClaimedSummary.count !== 1 ? 's' : ''} · {formatCurrency(allDriversClaimedSummary.total)} total
+                    {openHandovers.length > 0 ? ` · ${openHandovers.length} handover${openHandovers.length !== 1 ? 's' : ''} submitted` : ''}
+                  </p>
                 </div>
-                <button onClick={() => setShowDriverReconcileModal(false)} className="p-2 text-slate-400 hover:text-danger">
+                <button onClick={closeReconcile} className="p-2 text-slate-400 hover:text-danger">
                   <X className="size-5" />
                 </button>
               </div>
-              <div className="p-6 overflow-y-auto space-y-6">
-                {/* Delivery Staff Payments §4.4 — cash a driver is still
-                    holding, awaiting back-office confirmation. Doubles as
-                    the claim-review queue: this is exactly the set of
-                    claims a driver made that haven't been Mark Paid yet. */}
-                {driverCashReconciliation.length > 0 && (
-                  <div>
-                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">
-                      Driver cash reconciliation — awaiting confirmation
-                    </p>
-                    <div className="divide-y divide-slate-100">
-                      {driverCashReconciliation.map(row => (
-                        <div key={`${row.staffId}::${row.date}`} className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-xs font-black text-slate-900 truncate">{row.driverName}</p>
+
+              <div className="flex-1 min-h-0 flex flex-col md:flex-row">
+                {/* Driver rail */}
+                <div className="md:w-72 shrink-0 border-b md:border-b-0 md:border-r border-slate-100 flex flex-col min-h-0 max-h-56 md:max-h-none">
+                  <div className="p-3 shrink-0">
+                    <input
+                      type="text"
+                      value={reconcileSearch}
+                      onChange={e => setReconcileSearch(e.target.value)}
+                      placeholder="Search drivers…"
+                      className="w-full px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-700 outline-none focus:border-primary"
+                    />
+                  </div>
+                  <div className="flex-1 min-h-0 overflow-y-auto px-3 pb-3 space-y-2">
+                    {reconcileRail.length === 0 ? (
+                      <p className="text-xs font-bold text-slate-400 py-6 text-center">No driver has a claimed payment pending right now for this filter.</p>
+                    ) : railShown.length === 0 ? (
+                      <p className="text-xs font-bold text-slate-400 py-6 text-center">No driver matches “{reconcileSearch}”.</p>
+                    ) : railShown.map(r => (
+                      <button
+                        key={r.d.id}
+                        type="button"
+                        onClick={() => { setReconcileDriverId(r.d.id); setReconcileTab(null); setConfirmBulkKey(null); setHandoverArmed(null); }}
+                        className={`w-full text-left rounded-2xl border p-3 cursor-pointer transition-all ${
+                          r.d.id === reconcileDriverId ? 'border-primary bg-primary/5' : 'border-slate-100 hover:border-slate-300 bg-white'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-black text-slate-900 truncate">{r.d.name}</p>
+                          <p className="text-xs font-black text-warning shrink-0">{formatCurrency(r.amount)}</p>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1">
+                          <p className="text-[10px] font-bold text-slate-400">{r.claimCount} claim{r.claimCount !== 1 ? 's' : ''}</p>
+                          {r.handovers > 0 && (
+                            <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[8px] font-black uppercase tracking-wide">
+                              {r.handovers} handover{r.handovers !== 1 ? 's' : ''} submitted
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Selected driver */}
+                <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+                  {!selectedRail ? (
+                    <div className="flex-1 flex items-center justify-center p-8">
+                      <p className="text-xs font-bold text-slate-400 text-center">
+                        {reconcileRail.length === 0 ? 'Nothing pending — no driver is holding unconfirmed payments.' : 'Select a driver to see what they have collected.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="p-5 pb-3 border-b border-slate-100 shrink-0">
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <div>
+                            <p className="text-base font-black text-slate-900">{selectedRail.d.name}</p>
                             <p className="text-[10px] font-bold text-slate-400">
-                              {formatDay(row.date)} · {row.count} item{row.count !== 1 ? 's' : ''}
-                              {row.partialCount > 0 && ` (${row.partialCount} partial)`}
+                              {selectedRail.claimCount} unconfirmed claim{selectedRail.claimCount !== 1 ? 's' : ''} · {formatCurrency(selectedRail.amount)}
                             </p>
                           </div>
-                          <p className="text-sm font-black text-warning shrink-0">{formatCurrency(row.amount)}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Delivery Staff Payments §9 — Reconcile: the actionable
-                    driver-handover screen. Kept as its own block rather
-                    than folded into the read-only cash panel above
-                    (explicit decision) — covers every payment method a
-                    driver has claimed (not just Cash), with a per-claim
-                    Confirm and a per-method-type bulk Confirm. Always
-                    rendered (not conditioned on reconcileDrivers.length) so
-                    "nothing pending right now" reads as an actual empty
-                    state rather than the feature having vanished. 2026-09:
-                    a Partial claim is included here now (amount-aware
-                    Confirm/Mark Paid only ever books what was actually
-                    claimed) — the collected-vs-face-value note above and
-                    per-claim shows the cashier exactly what a Partial
-                    claim will really book, distinct from the group's full
-                    price. Every action inside is gated purely on
-                    currentPermissions?.payments?.edit, never on isDriver. */}
-                <div>
-                  <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-                    <div>
-                      <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Reconcile — driver handover</p>
-                      <p className="text-[10px] font-bold text-slate-400 mt-0.5">Select a driver to confirm what they've collected</p>
-                    </div>
-                    {reconcileDrivers.length > 0 && (
-                      <select
-                        value={reconcileDriverId}
-                        onChange={(e) => { setReconcileDriverId(e.target.value); setConfirmBulkKey(null); }}
-                        className="px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-700 cursor-pointer"
-                      >
-                        <option value="">Select a driver…</option>
-                        {reconcileDrivers.map(d => (
-                          <option key={d.id} value={d.id}>{d.name}{openHandovers.some(x => x.h.driverId === d.id) ? ' · handover submitted' : ''}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-
-                  {reconcileDriverId && openHandovers.filter(x => x.h.driverId === reconcileDriverId).map(({ h, claims, total }) => {
-                    const methodTotals: Record<string, number> = {};
-                    claims.forEach(c => {
-                      const m = c.item.paymentMethodName as string;
-                      methodTotals[m] = (methodTotals[m] || 0) + claimAmountOf(c.order, c.item);
-                    });
-                    const byMethodLabel = Object.keys(methodTotals).map(m => `${m} ${formatCurrency(methodTotals[m])}`).join(' · ');
-                    const canEditPayments = currentPermissions?.payments?.edit === true;
-                    return (
-                      <div key={h.id} className="mb-4 rounded-2xl border border-primary/30 bg-primary/5 p-4">
-                        <p className="text-[10px] font-black uppercase tracking-widest text-primary">Handover submitted</p>
-                        <p className="text-sm font-black text-slate-900 mt-1">
-                          {h.driverName} · {formatCurrency(total)} · {claims.length} claim{claims.length !== 1 ? 's' : ''}
-                        </p>
-                        <p className="text-[10px] font-bold text-slate-500 mt-0.5">Submitted {fmtClockTime(h.submittedAt)} · {byMethodLabel}</p>
-                        <div className="flex items-center gap-2 mt-3 flex-wrap">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (handoverArmed === `c:${h.id}`) confirmHandover(h.id);
-                              else setHandoverArmed(`c:${h.id}`);
-                            }}
-                            disabled={handoverBusy === h.id || !canEditPayments}
-                            title={!canEditPayments ? 'Requires Payments — Edit permission' : undefined}
-                            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer transition-all ${
-                              handoverArmed === `c:${h.id}` ? 'bg-danger text-white animate-pulse' : 'bg-success text-white hover:bg-success/90'
-                            }`}
-                          >
-                            {handoverBusy === h.id ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
-                            {handoverBusy === h.id ? 'Confirming...' : handoverArmed === `c:${h.id}` ? 'Click to confirm' : `Confirm handover (${claims.length})`}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (handoverArmed === `r:${h.id}`) returnHandover(h.id);
-                              else setHandoverArmed(`r:${h.id}`);
-                            }}
-                            disabled={handoverBusy === h.id || !canEditPayments}
-                            title={!canEditPayments ? 'Requires Payments — Edit permission' : 'Send back to the driver (claims stay as they are)'}
-                            className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-60 cursor-pointer transition-all ${
-                              handoverArmed === `r:${h.id}` ? 'bg-danger text-white animate-pulse' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
-                          >
-                            {handoverArmed === `r:${h.id}` ? 'Click to return' : 'Return to driver'}
-                          </button>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <TabBtn id="handovers" label="Handovers" count={driverHandoverList.length} />
+                            <TabBtn id="claims" label="All claims" count={selectedRail.claimCount} />
+                            <TabBtn id="cash" label="Cash by day" />
+                          </div>
                         </div>
                       </div>
-                    );
-                  })}
 
-                  {reconcileDrivers.length === 0 ? (
-                    <p className="text-xs font-bold text-slate-400 py-4 text-center">
-                      No driver has a claimed payment pending right now for this filter.
-                    </p>
-                  ) : !reconcileDriverId ? (
-                    <p className="text-xs font-bold text-slate-400 py-4 text-center">Select a driver to see what they need to hand over.</p>
-                  ) : reconcileByMethod.length === 0 ? (
-                    <p className="text-xs font-bold text-slate-400 py-4 text-center">Nothing pending for this driver right now.</p>
-                  ) : (
-                    <div className="space-y-4">
-                      {reconcileByMethod.map(bucket => {
-                        const bulkKey = `bulk-${bucket.groups.map(g => g.key).join(',')}`;
-                        const isBulkPending = pendingPaymentKey === bulkKey;
-                        const isArmed = confirmBulkKey === bulkKey;
-                        return (
-                          <div key={bucket.method} className="border border-slate-100 rounded-2xl p-4">
-                            <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-                              <div>
-                                <p className="text-xs font-black text-slate-900">{bucket.method}</p>
-                                <p className="text-[10px] font-bold text-slate-400">{bucket.groups.length} claim{bucket.groups.length !== 1 ? 's' : ''}</p>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <div className="text-right">
-                                  <p className="text-sm font-black text-slate-900">{formatCurrency(bucket.collected)}</p>
-                                  {bucket.collected < bucket.total - 0.005 && (
-                                    <p className="text-[9px] font-bold text-danger">of {formatCurrency(bucket.total)} face value — partial</p>
-                                  )}
-                                </div>
+                      <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4">
+                        {tab === 'handovers' && (driverHandoverList.length === 0 ? (
+                          <p className="text-xs font-bold text-slate-400 py-8 text-center">
+                            No submitted handover from this driver. Their claims are under “All claims”.
+                          </p>
+                        ) : driverHandoverList.map(({ h, claims, total }, idx) => {
+                          const open = handoverOpen[h.id] ?? idx === 0;
+                          const methodTotals: Record<string, number> = {};
+                          claims.forEach(c => {
+                            const m = c.item.paymentMethodName as string;
+                            methodTotals[m] = (methodTotals[m] || 0) + claimAmountOf(c.order, c.item);
+                          });
+                          const byMethodLabel = Object.keys(methodTotals).map(m => `${m} ${formatCurrency(methodTotals[m])}`).join(' · ');
+                          const sortedClaims = claims.slice().sort((a, b) =>
+                            (a.item.deliveryDate || '').localeCompare(b.item.deliveryDate || '') || a.order.customerName.localeCompare(b.order.customerName));
+                          return (
+                            <div key={h.id} className="rounded-2xl border border-primary/30 overflow-hidden">
+                              <div className="flex items-center gap-3 p-4 bg-primary/5 flex-wrap">
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    if (isArmed) {
-                                      markPaidBulk(bucket.groups, bucket.method);
-                                      setConfirmBulkKey(null);
-                                    } else {
-                                      setConfirmBulkKey(bulkKey);
-                                    }
-                                  }}
-                                  disabled={isBulkPending || currentPermissions?.payments?.edit !== true}
-                                  title={currentPermissions?.payments?.edit !== true ? 'Requires Payments — Edit permission' : undefined}
-                                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer transition-all ${
-                                    isArmed ? 'bg-danger text-white animate-pulse' : 'bg-success text-white hover:bg-success/90'
-                                  }`}
+                                  onClick={() => setHandoverOpen(prev => ({ ...prev, [h.id]: !open }))}
+                                  className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer"
+                                  aria-expanded={open}
                                 >
-                                  {isBulkPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
-                                  {isBulkPending ? 'Confirming...' : isArmed ? 'Click to confirm' : `Confirm all (${bucket.groups.length})`}
+                                  <ChevronDown className={`size-4 shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+                                  <div className="min-w-0">
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-primary">Handover submitted · {fmtShortDateTime(h.submittedAt)}</p>
+                                    <p className="text-xs font-bold text-slate-600 mt-0.5 truncate">{claims.length} claim{claims.length !== 1 ? 's' : ''} · {byMethodLabel}</p>
+                                  </div>
                                 </button>
+                                <p className="text-base font-black text-slate-900 shrink-0">{formatCurrency(total)}</p>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (handoverArmed === `c:${h.id}`) confirmHandover(h.id);
+                                      else setHandoverArmed(`c:${h.id}`);
+                                    }}
+                                    disabled={handoverBusy === h.id || !canEditPayments}
+                                    title={!canEditPayments ? 'Requires Payments — Edit permission' : undefined}
+                                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer transition-all ${
+                                      handoverArmed === `c:${h.id}` ? 'bg-danger text-white animate-pulse' : 'bg-success text-white hover:bg-success/90'
+                                    }`}
+                                  >
+                                    {handoverBusy === h.id ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                                    {handoverBusy === h.id ? 'Confirming...' : handoverArmed === `c:${h.id}` ? 'Click to confirm' : `Confirm handover (${claims.length})`}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (handoverArmed === `r:${h.id}`) returnHandover(h.id);
+                                      else setHandoverArmed(`r:${h.id}`);
+                                    }}
+                                    disabled={handoverBusy === h.id || !canEditPayments}
+                                    title={!canEditPayments ? 'Requires Payments — Edit permission' : 'Send back to the driver (claims stay as they are)'}
+                                    className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-60 cursor-pointer transition-all ${
+                                      handoverArmed === `r:${h.id}` ? 'bg-danger text-white animate-pulse' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                    }`}
+                                  >
+                                    {handoverArmed === `r:${h.id}` ? 'Click to return' : 'Return to driver'}
+                                  </button>
+                                </div>
+                              </div>
+                              {open && (
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-left min-w-[760px]">
+                                    <thead>
+                                      <tr className="text-[9px] font-black uppercase tracking-widest text-slate-400 border-b border-slate-100">
+                                        <th className="px-4 py-2">Customer</th>
+                                        <th className="px-2 py-2">Meal</th>
+                                        <th className="px-2 py-2">Order</th>
+                                        <th className="px-2 py-2">Delivery</th>
+                                        <th className="px-2 py-2">Collected</th>
+                                        <th className="px-2 py-2">Method · Ref</th>
+                                        <th className="px-4 py-2 text-right">Amount</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {sortedClaims.map(({ order, item }) => {
+                                        const amt = claimAmountOf(order, item);
+                                        const net = itemNetAmount(order, item);
+                                        return (
+                                          <tr key={`${order.id}::${item._fsItemId}`} className="align-top">
+                                            <td className="px-4 py-2.5">
+                                              <p className="text-xs font-black text-slate-900">{order.customerName}</p>
+                                              {item.paymentIssueNote && <p className="text-[10px] font-bold text-danger mt-0.5">Note: {item.paymentIssueNote}</p>}
+                                            </td>
+                                            <td className="px-2 py-2.5 text-xs font-bold text-slate-700">{item.qty > 1 ? `${item.qty}× ` : ''}{item.name}</td>
+                                            <td className="px-2 py-2.5 text-[11px] font-bold text-slate-500">#{order.id.slice(0, 8)}</td>
+                                            <td className="px-2 py-2.5 text-[11px] font-bold text-slate-500">
+                                              {formatDay(item.deliveryDate || '')}
+                                              {item.serviceSlot ? <span className="block text-[10px] text-slate-400">{item.serviceSlot} ({deliveryWindowFor(item.serviceSlot)})</span> : null}
+                                            </td>
+                                            <td className="px-2 py-2.5 text-[11px] font-bold text-slate-500">{fmtClockTime(item.paymentClaimedAt)}</td>
+                                            <td className="px-2 py-2.5 text-[11px] font-bold text-slate-500">
+                                              {item.paymentMethodName}
+                                              <span className="block text-[10px] text-slate-400">{item.paymentReference || '—'}</span>
+                                            </td>
+                                            <td className="px-4 py-2.5 text-right">
+                                              <p className="text-sm font-black text-slate-800">{formatCurrency(amt)}</p>
+                                              {amt < net - 0.005 && <p className="text-[9px] font-bold text-danger">partial, of {formatCurrency(net)}</p>}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }))}
+
+                        {tab === 'claims' && (reconcileByMethod.length === 0 ? (
+                          <p className="text-xs font-bold text-slate-400 py-8 text-center">Nothing pending for this driver right now.</p>
+                        ) : reconcileByMethod.map(bucket => {
+                          const bulkKey = `bulk-${bucket.groups.map(g => g.key).join(',')}`;
+                          const isBulkPending = pendingPaymentKey === bulkKey;
+                          const isArmed = confirmBulkKey === bulkKey;
+                          return (
+                            <div key={bucket.method} className="border border-slate-100 rounded-2xl p-4">
+                              <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                                <div>
+                                  <p className="text-xs font-black text-slate-900">{bucket.method}</p>
+                                  <p className="text-[10px] font-bold text-slate-400">{bucket.groups.length} claim{bucket.groups.length !== 1 ? 's' : ''}</p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <div className="text-right">
+                                    <p className="text-sm font-black text-slate-900">{formatCurrency(bucket.collected)}</p>
+                                    {bucket.collected < bucket.total - 0.005 && (
+                                      <p className="text-[9px] font-bold text-danger">of {formatCurrency(bucket.total)} face value — partial</p>
+                                    )}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (isArmed) {
+                                        markPaidBulk(bucket.groups, bucket.method);
+                                        setConfirmBulkKey(null);
+                                      } else {
+                                        setConfirmBulkKey(bulkKey);
+                                      }
+                                    }}
+                                    disabled={isBulkPending || !canEditPayments}
+                                    title={!canEditPayments ? 'Requires Payments — Edit permission' : undefined}
+                                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait cursor-pointer transition-all ${
+                                      isArmed ? 'bg-danger text-white animate-pulse' : 'bg-success text-white hover:bg-success/90'
+                                    }`}
+                                  >
+                                    {isBulkPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                                    {isBulkPending ? 'Confirming...' : isArmed ? 'Click to confirm' : `Confirm all (${bucket.groups.length})`}
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="divide-y divide-slate-100">
+                                {bucket.groups.map(group => {
+                                  const collected = groupCollectedAmount(group);
+                                  const isPartialGroup = collected < group.total - 0.005;
+                                  const meals = group.drops.flatMap(d => d.items.map(i => `${i.qty > 1 ? `${i.qty}× ` : ''}${i.name}`)).join(', ');
+                                  const isHandedOver = group.drops.some(d => d.items.some(i => handedOverClaimKeys.has(`${d.orderId}::${i._fsItemId}`)));
+                                  return (
+                                    <div key={group.key} className="py-2 flex items-center justify-between gap-3">
+                                      <div className="min-w-0">
+                                        <p className="text-xs font-bold text-slate-700 truncate">
+                                          {group.customerName}
+                                          {isHandedOver && (
+                                            <span className="ml-2 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[8px] font-black uppercase tracking-wide">Handed over</span>
+                                          )}
+                                        </p>
+                                        <p className="text-[11px] font-bold text-slate-600 truncate">{meals}</p>
+                                        <p className="text-[10px] font-bold text-slate-400">
+                                          {formatDay(group.earliestDate || '')}{group.claimedReference ? ` · ${group.claimedReference}` : ''}
+                                          {isPartialGroup && <span className="text-danger font-black"> · partial</span>}
+                                        </p>
+                                      </div>
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        <div className="text-right">
+                                          <p className="text-xs font-black text-slate-900">{formatCurrency(collected)}</p>
+                                          {isPartialGroup && <p className="text-[9px] font-bold text-slate-400">of {formatCurrency(group.total)}</p>}
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => setPaymentGroup(group)}
+                                          disabled={pendingPaymentKey === group.key || !canEditPayments}
+                                          title={!canEditPayments ? 'Requires Payments — Edit permission' : undefined}
+                                          className="px-3 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary/20 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-wait cursor-pointer"
+                                        >
+                                          {pendingPaymentKey === group.key ? '...' : 'Confirm'}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </div>
+                          );
+                        }))}
+
+                        {tab === 'cash' && (cashRows.length === 0 ? (
+                          <p className="text-xs font-bold text-slate-400 py-8 text-center">No cash claims pending for this driver.</p>
+                        ) : (
+                          <div>
+                            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3">Cash this driver should be holding, by delivery day</p>
                             <div className="divide-y divide-slate-100">
-                              {bucket.groups.map(group => {
-                                const collected = groupCollectedAmount(group);
-                                const isPartialGroup = collected < group.total - 0.005;
-                                return (
-                                <div key={group.key} className="py-2 flex items-center justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <p className="text-xs font-bold text-slate-700 truncate">
-                                      {group.customerName}
-                                      {group.drops.some(d => d.items.some(i => handedOverClaimKeys.has(`${d.orderId}::${i._fsItemId}`))) && (
-                                        <span className="ml-2 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[8px] font-black uppercase tracking-wide">Handed over</span>
-                                      )}
-                                    </p>
-                                    <p className="text-[10px] font-bold text-slate-400">
-                                      {formatDay(group.earliestDate || '')}{group.claimedReference ? ` · ${group.claimedReference}` : ''}
-                                      {isPartialGroup && <span className="text-danger font-black"> · partial</span>}
-                                    </p>
-                                  </div>
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    <div className="text-right">
-                                      <p className="text-xs font-black text-slate-900">{formatCurrency(collected)}</p>
-                                      {isPartialGroup && <p className="text-[9px] font-bold text-slate-400">of {formatCurrency(group.total)}</p>}
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => setPaymentGroup(group)}
-                                      disabled={pendingPaymentKey === group.key || currentPermissions?.payments?.edit !== true}
-                                      title={currentPermissions?.payments?.edit !== true ? 'Requires Payments — Edit permission' : undefined}
-                                      className="px-3 py-2 bg-primary/10 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary/20 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-wait cursor-pointer"
-                                    >
-                                      {pendingPaymentKey === group.key ? '...' : 'Confirm'}
-                                    </button>
-                                  </div>
+                              {cashRows.map(row => (
+                                <div key={`${row.staffId}::${row.date}`} className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3">
+                                  <p className="text-xs font-bold text-slate-600">
+                                    {formatDay(row.date)} · {row.count} item{row.count !== 1 ? 's' : ''}
+                                    {row.partialCount > 0 && ` (${row.partialCount} partial)`}
+                                  </p>
+                                  <p className="text-sm font-black text-warning shrink-0">{formatCurrency(row.amount)}</p>
                                 </div>
-                                );
-                              })}
+                              ))}
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
               </div>
             </div>
           </div>
         </Portal>
-      )}
+        );
+      })()}
 
       {/* Collect Payment Modal — portaled to <body>, same clipping issue as
           the Meal Library modals (see Portal.tsx). */}
