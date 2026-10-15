@@ -238,7 +238,16 @@ service cloud.firestore {
       allow write: if isStaffAllowed('customerGroups', 'edit');
     }
     match /entities/{entityId} {
-      allow read: if isActiveStaff();
+      // Staff can read and list. A signed-in customer can GET a single entity
+      // by id (not list the collection): the Pay sheet needs that entity's
+      // accepted payment methods and payment instructions (account / Juice
+      // number etc.), the same reasoning that makes paymentMethods readable
+      // below. Nothing on an entity doc is private from its own customers —
+      // the same name, BRN, VAT number and bank reference print on every
+      // invoice they receive.
+      allow get: if isActiveStaff()
+        || (isSignedIn() && exists(/databases/$(database)/documents/customers/$(request.auth.uid)));
+      allow list: if isActiveStaff();
       allow write: if isStaffAllowed('tradingEntities', 'edit');
     }
     match /paymentMethods/{docId} {

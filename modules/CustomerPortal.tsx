@@ -608,6 +608,32 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // inline in onAuthStateChanged, so the tier/group name lookups never run
   // against a stale loyaltyTiers/customerGroups closure.
   const [customerDocRaw, setCustomerDocRaw] = useState<any | null>(null);
+
+  // Load only the entities this customer actually deals with — their own
+  // entityId plus the entityId on each of their orders — one document
+  // listener each. Replaces the old collection-wide listener, which the
+  // rules (correctly) refuse for customers; that refusal left `entities`
+  // empty, so the Pay sheet never applied the entity's accepted payment
+  // methods or showed its payment instructions (account/Juice number etc.).
+  const entityIdsKey = useMemo(() => {
+    const ids = new Set<string>();
+    if (currentUser?.entityId) ids.add(currentUser.entityId);
+    if (customerDocRaw?.entityId) ids.add(customerDocRaw.entityId);
+    orders.forEach(o => { if (o.entityId) ids.add(o.entityId); });
+    return Array.from(ids).sort().join('|');
+  }, [currentUser?.entityId, customerDocRaw?.entityId, orders]);
+
+  useEffect(() => {
+    const ids = entityIdsKey ? entityIdsKey.split('|') : [];
+    if (ids.length === 0) { setEntities([]); return; }
+    const unsubs = ids.map(id => onSnapshot(doc(db, 'entities', id), snap => {
+      setEntities(prev => {
+        const rest = prev.filter(e => e.id !== id);
+        return snap.exists() ? [...rest, { id, ...snap.data() } as Entity] : rest;
+      });
+    }, err => console.error(`entity ${id} listener failed in CustomerPortal`, err)));
+    return () => unsubs.forEach(u => u());
+  }, [entityIdsKey]);
   // True only until Firebase Auth's persisted-session check resolves once,
   // on first mount — avoids flashing the login screen for an already
   // signed-in customer before their session is restored.
@@ -737,10 +763,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
     const u7 = subscribeToLunchMenu(() => setMenuTick(t => t + 1));
     const u8 = subscribeToConfig(() => setConfigTick(t => t + 1));
     const u9 = subscribeToDinnerMenu(() => setMenuTick(t => t + 1));
-    const u10 = onSnapshot(collection(db, 'entities'), snap => {
-      setEntities(snap.docs.map(d => ({ id: d.id, ...d.data() } as Entity)));
-    }, err => console.error('entities listener failed in CustomerPortal', err));
-    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); u9(); u10(); };
+    // Entities are loaded per-document in the effect further down (a customer
+    // may read an entity by id but not list the collection — see the
+    // entities match in firestore.rules).
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); u9(); };
   }, []);
 
   // If Operations turns Dinner off while it's the active tab, fall back to
