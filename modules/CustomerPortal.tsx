@@ -518,6 +518,9 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   const [customerGroups, setCustomerGroups] = useState(CUSTOMER_GROUPS);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
+  // My Order: orders are collapsed to a one-line summary by default; this
+  // holds which ones the customer has tapped open (keyed by order id).
+  const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
   const [orders, setOrders] = useState<Order[]>([]);
   const [systemDate, setSystemDate] = useState(MOCK_TODAY);
   const [view, setView] = useState<'home' | 'menu' | 'order' | 'contact'>('home');
@@ -1061,6 +1064,21 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
   const toast = (msg: string) => setToastMsg(msg);
 
+  const toggleOrderExpanded = (id: string) => setExpandedOrders(prev => ({ ...prev, [id]: !prev[id] }));
+  // One-line summaries shown on a collapsed order in My Order.
+  const orderMealNames = (orderLines: Line[]) => {
+    const names = orderLines.filter(l => l.item.status !== 'Cancelled').map(l => l.item.name);
+    return names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')} +${names.length - 3} more`;
+  };
+  const orderStatusSummary = (orderLines: Line[]) => {
+    const counts: Record<string, number> = {};
+    orderLines.filter(l => l.item.status !== 'Cancelled').forEach(l => {
+      const k = l.item.status || 'Active';
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    return Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(' · ');
+  };
+
   const weekDays = useMemo(() => getThisWeekDays(systemDate), [systemDate]);
   // Customers can now browse and order a week ahead too — same menu
   // mechanics, just a second set of days, one calendar week later.
@@ -1081,11 +1099,24 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
   // --- CART / BUILDER ---
   const openBuilder = (day: WeekDay, service: Service, weekStart: string, presetCurryId?: string, editIndex: number | null = null) => {
     const existing = editIndex !== null ? cartFor(service)[day.date]?.[editIndex] : null;
+    // A curry already chosen on the menu card means Step 1 is done: open
+    // Step 2 (base) straight away — or Step 3 if this dish has no base to
+    // choose. Step 1 stays as a tappable summary row so the customer can
+    // still change the curry. Editing an existing meal keeps starting at 1.
+    let startSection: 1 | 2 | 3 = 1;
+    if (presetCurryId && editIndex === null) {
+      const presetRaw = menuFor(service, weekStart)[day.key].find(c => c.id === presetCurryId);
+      const presetDish = presetRaw ? resolveDish(presetRaw) : undefined;
+      if (presetDish) {
+        const presetBases = filterAddOnOptions(MEAL_BASES, dishBaseOptionIds(presetDish, MEAL_BASES));
+        startSection = dishBaseApplicable(presetDish) && presetBases.length > 0 ? 2 : 3;
+      }
+    }
     setBuilder({
       day,
       service,
       weekStart,
-      openSection: 1,
+      openSection: startSection,
       editIndex,
       editingConfirmed: null,
       // A brand-new meal defaults "who's this for" to whoever's signed in —
@@ -1376,21 +1407,32 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
       });
     }
 
-    const totalDiscount = standardDiscount + birthdayDiscount + bulkDiscount;
-    const netTotal = Math.max(0, subtotal - totalDiscount);
+    // Same rounding chain as the confirmCheckout Cloud Function (round each
+    // discount to 2dp, then net, then VAT on the rounded net, then total) so
+    // the preview matches the confirmed order to the cent. Previously this
+    // kept full float precision, so e.g. VAT on 598.50 @ 15% (89.775) showed
+    // 89.77 here but 89.78 once confirmed.
+    // Local helper: the component-level round2 is declared further down, after
+    // this memo runs (temporal dead zone), so it cannot be used here.
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const standardDiscountR = r2(standardDiscount);
+    const birthdayDiscountR = r2(birthdayDiscount);
+    const bulkDiscountR = r2(bulkDiscount);
+    const totalDiscount = r2(standardDiscountR + birthdayDiscountR + bulkDiscountR);
+    const netTotal = r2(Math.max(0, r2(subtotal) - totalDiscount));
     const vatRate = SYSTEM_CONFIG.vatEnabled ? SYSTEM_CONFIG.vatRate / 100 : 0;
-    const vat = netTotal * vatRate;
-    const total = netTotal + vat;
+    const vat = r2(netTotal * vatRate);
+    const total = r2(netTotal + vat);
 
     return {
-      subtotal,
+      subtotal: r2(subtotal),
       discount: totalDiscount,
-      standardDiscount,
-      birthdayDiscount,
+      standardDiscount: standardDiscountR,
+      birthdayDiscount: birthdayDiscountR,
       standardLabel,
       standardRate: effectiveStandardRate,
       birthdayRate: birthdayTierRate,
-      bulkDiscount,
+      bulkDiscount: bulkDiscountR,
       vat,
       total
     };
@@ -2500,22 +2542,27 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               <p className="relative z-10 text-sm font-black italic leading-snug mt-4">"{isBirthday ? (SYSTEM_CONFIG.birthdayHeaderCreole || 'Zwaye Laniverser! 🎂🎉') : culturePhrase.cr}"</p>
               <p className="relative z-10 text-xs opacity-80 mt-1">{isBirthday ? (SYSTEM_CONFIG.birthdayHeaderEnglish || 'Wishing you a wonderful day filled with delicious curries! 🎂🎈') : culturePhrase.en}</p>
               {todaysArrivingLines.length > 0 && (
-                <div className="relative z-10 mt-4 flex items-center gap-3 bg-white/10 backdrop-blur-md border border-white/15 rounded-2xl p-3">
-                  <img src={dishPhotoFor(todaysArrivingLines[0].item.itemId)} className="size-11 rounded-xl object-cover shrink-0 border-2 border-white/25" alt={todaysArrivingLines[0].item.name} />
-                  <div className="min-w-0">
-                    <p className="text-[9px] font-black uppercase tracking-widest opacity-70 flex items-center gap-1.5 flex-wrap">
-                      <span>Arriving today · {serviceOf(todaysArrivingLines[0].item) === 'Dinner' ? SYSTEM_CONFIG.dinnerDeliveryWindow : SYSTEM_CONFIG.lunchDeliveryWindow}</span>
-                      {todaysArrivingLines[0].item.status && todaysArrivingLines[0].item.status !== 'Active' && (
-                        <span className="px-1 py-0.5 rounded bg-white/20 text-white font-extrabold normal-case leading-none">
-                          {todaysArrivingLines[0].item.status}
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-xs font-bold truncate">
-                      {todaysArrivingLines[0].item.name}
-                      {todaysArrivingLines.length > 1 && ` +${todaysArrivingLines.length - 1} more`}
-                    </p>
-                  </div>
+                <div className="relative z-10 mt-4 bg-white/10 backdrop-blur-md border border-white/15 rounded-2xl p-3 space-y-2.5">
+                  <p className="text-[9px] font-black uppercase tracking-widest opacity-70">Arriving today</p>
+                  {todaysArrivingLines.slice(0, 4).map((l, i) => {
+                    const st = l.item.status;
+                    const stLabel = !st || st === 'Active' ? 'Confirmed' : st === 'Preparing' ? 'Being prepared' : st;
+                    return (
+                      <div key={`${l.order.id}-${l.item._fsItemId || i}`} className="flex items-center gap-3">
+                        <img src={dishPhotoFor(l.item.itemId)} className="size-9 rounded-lg object-cover shrink-0 border-2 border-white/25" alt={l.item.name} />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-bold truncate">{l.item.name}</p>
+                          <p className="text-[9px] font-bold uppercase tracking-widest opacity-70">
+                            {serviceOf(l.item) === 'Dinner' ? SYSTEM_CONFIG.dinnerDeliveryWindow : SYSTEM_CONFIG.lunchDeliveryWindow}
+                          </p>
+                        </div>
+                        <span className="px-1.5 py-0.5 rounded bg-white/20 text-white text-[10px] font-extrabold leading-none shrink-0">{stLabel}</span>
+                      </div>
+                    );
+                  })}
+                  {todaysArrivingLines.length > 4 && (
+                    <p className="text-[10px] font-bold opacity-70">+{todaysArrivingLines.length - 4} more</p>
+                  )}
                 </div>
               )}
             </div>
@@ -2932,21 +2979,44 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
 
                     return (
                       <div key={order.id} className="bg-white rounded-2xl border border-[#E7E0D0] overflow-hidden">
-                        <div className="px-4 py-3 bg-[#F4EFE4] flex items-center justify-between gap-3">
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          aria-expanded={!!expandedOrders[order.id]}
+                          onClick={() => toggleOrderExpanded(order.id)}
+                          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleOrderExpanded(order.id); } }}
+                          className="px-4 py-3 bg-[#F4EFE4] flex items-center justify-between gap-3 cursor-pointer select-none"
+                        >
                           <div className="min-w-0">
                             <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">{gi === 0 ? 'Your order' : `Additional order ${gi + 1}`} · {lines.length} meal{lines.length !== 1 ? 's' : ''}</p>
                             <p className="text-[10px] text-slate-400 mt-0.5">Placed {new Date(order.timestamp).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</p>
+                            {!expandedOrders[order.id] && (
+                              <>
+                                <p className="text-[11px] font-bold text-slate-600 mt-1 truncate">{orderMealNames(lines)}</p>
+                                <p className="text-[10px] font-bold text-slate-400">{orderStatusSummary(lines)}</p>
+                              </>
+                            )}
                           </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex flex-col items-end gap-1">
                           {orderPaid ? (
                             <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success">Paid</span>
                           ) : orderUnclaimed.length > 0 ? (
-                            <button onClick={() => openPayOrder(lines)} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger">
+                            <button onClick={e => { e.stopPropagation(); openPayOrder(lines); }} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger">
                               Pay order · {formatCurrency(orderUnclaimedTotal)}
                             </button>
                           ) : (
                             <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-warning/10 text-warning">Awaiting confirmation</span>
                           )}
+                          <span className="text-xs font-black text-slate-900">
+                            {formatCurrency(typeof order.total === 'number' ? order.total : lines.filter(l => l.item.status !== 'Cancelled').reduce((t, l) => t + l.item.price, 0))}
+                          </span>
+                          </div>
+                          <ChevronDown className={`size-4 text-slate-400 transition-transform ${expandedOrders[order.id] ? 'rotate-180' : ''}`} />
+                          </div>
                         </div>
+                        {expandedOrders[order.id] && (
+                        <>
                         <div className="p-4 space-y-4 bg-[#FDFAF4]">
                           {serviceGroups.map(sg => (
                             <div key={sg.service}>
@@ -3046,6 +3116,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             </div>
                           );
                         })()}
+                        </>
+                        )}
                       </div>
                     );
                   })}
@@ -3068,19 +3140,42 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                     const serviceGroups = groupByOrderServiceDay(lines)[0]?.services || [];
                     return (
                       <div key={order.id} className="bg-white rounded-2xl border border-[#E7E0D0] overflow-hidden">
-                        <div className="px-4 py-3 bg-[#F4EFE4] flex items-center justify-between gap-3">
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          aria-expanded={!!expandedOrders[order.id]}
+                          onClick={() => toggleOrderExpanded(order.id)}
+                          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleOrderExpanded(order.id); } }}
+                          className="px-4 py-3 bg-[#F4EFE4] flex items-center justify-between gap-3 cursor-pointer select-none"
+                        >
                           <div className="min-w-0">
                             <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">{gi === 0 ? 'Your order' : `Additional order ${gi + 1}`} · {lines.length} meal{lines.length !== 1 ? 's' : ''}</p>
                             <p className="text-[10px] text-slate-400 mt-0.5">Placed {new Date(order.timestamp).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</p>
+                            {!expandedOrders[order.id] && (
+                              <>
+                                <p className="text-[11px] font-bold text-slate-600 mt-1 truncate">{orderMealNames(lines)}</p>
+                                <p className="text-[10px] font-bold text-slate-400">{orderStatusSummary(lines)}</p>
+                              </>
+                            )}
                           </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex flex-col items-end gap-1">
                           {orderPaid ? (
                             <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-success/10 text-success">Paid</span>
                           ) : orderUnclaimed.length > 0 ? (
-                            <button onClick={() => openPayOrder(lines)} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger">Pay order · {formatCurrency(orderUnclaimedTotal)}</button>
+                            <button onClick={e => { e.stopPropagation(); openPayOrder(lines); }} className="px-2.5 py-1 rounded text-[10px] font-black uppercase shrink-0 bg-danger/10 text-danger">Pay order · {formatCurrency(orderUnclaimedTotal)}</button>
                           ) : (
                             <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase shrink-0 bg-warning/10 text-warning">Awaiting confirmation</span>
                           )}
+                          <span className="text-xs font-black text-slate-900">
+                            {formatCurrency(typeof order.total === 'number' ? order.total : lines.filter(l => l.item.status !== 'Cancelled').reduce((t, l) => t + l.item.price, 0))}
+                          </span>
+                          </div>
+                          <ChevronDown className={`size-4 text-slate-400 transition-transform ${expandedOrders[order.id] ? 'rotate-180' : ''}`} />
+                          </div>
                         </div>
+                        {expandedOrders[order.id] && (
+                        <>
                         <div className="p-4 space-y-4 bg-[#FDFAF4]">
                           {serviceGroups.map(sg => (
                             <div key={sg.service}>
@@ -3180,6 +3275,8 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                             </div>
                           );
                         })()}
+                        </>
+                        )}
                       </div>
                     );
                   })}
@@ -3483,10 +3580,13 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
                       <button
                         key={c.id}
                         onClick={() => selectCurry(c.id)}
-                        className={`relative rounded-2xl overflow-hidden text-left h-28 border-2 transition-all active:scale-[0.98] ${builder.sel.curryId === c.id ? 'border-primary ring-4 ring-primary/10 shadow-[0_0_20px_rgba(62,125,34,0.08)]' : 'border-transparent'}`}
+                        className={`relative rounded-2xl overflow-hidden text-left h-28 border-2 transition-all active:scale-[0.98] ${builder.sel.curryId === c.id ? 'border-primary shadow-[0_0_22px_rgba(62,125,34,0.35)]' : 'border-transparent'}`}
                       >
                         <img src={dishPhotoFor(c)} className="absolute inset-0 w-full h-full object-cover" alt={c.name} />
                         <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
+                        {builder.sel.curryId === c.id && (
+                          <span className="absolute inset-0 rounded-2xl ring-4 ring-inset ring-primary animate-pulse pointer-events-none" />
+                        )}
                         {special && (
                           <span className="absolute top-1.5 right-1.5 bg-emerald-500 text-white text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full shadow-sm">Special</span>
                         )}
@@ -3512,7 +3612,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
               >
                 <div className="grid grid-cols-2 gap-2">
                   {baseOptions.map(b => (
-                    <button key={b.id} onClick={() => selectBase(b.id)} className={`p-4 rounded-2xl border-2 transition-all active:scale-[0.98] ${builder.sel.baseId === b.id ? 'border-primary bg-primary/[0.04] ring-4 ring-primary/10 shadow-[0_0_20px_rgba(62,125,34,0.08)]' : 'border-transparent bg-[#F4EFE4]'}`}>
+                    <button key={b.id} onClick={() => selectBase(b.id)} className={`relative p-4 rounded-2xl border-2 transition-all active:scale-[0.98] ${builder.sel.baseId === b.id ? 'border-primary bg-primary/[0.04] shadow-[0_0_22px_rgba(62,125,34,0.35)]' : 'border-transparent bg-[#F4EFE4]'}`}>
+                      {builder.sel.baseId === b.id && (
+                        <span className="absolute inset-0 rounded-2xl ring-4 ring-inset ring-primary animate-pulse pointer-events-none" />
+                      )}
                       <p className="text-2xl mb-1">{b.emoji}</p>
                       <p className="text-xs font-bold text-slate-900">{b.name}</p>
                       <p className="text-[10px] text-slate-400 font-bold">{b.up ? `+Rs ${b.up}` : 'included'}</p>

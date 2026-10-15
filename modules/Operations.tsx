@@ -1723,6 +1723,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       itemId: string;
       name: string;
       service: Service;
+      // Of `qty`: how many are already delivered/completed, and how many
+      // are still waiting to be cooked (Active). Lets the kitchen see that
+      // a late add-on order only needs N more cooked, not the whole total.
+      deliveredQty: number;
+      toCookQty: number;
       requests: { qty: number; person: string | null; instructions: string | null }[];
     }>> = {};
     lines.forEach(({ item }) => {
@@ -1744,9 +1749,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       const key = `${service}::${item.name}`;
       if (!days[day]) days[day] = {};
       if (!days[day][key]) {
-        days[day][key] = { qty: 0, revenue: 0, itemId: item.itemId, name: item.name, service, requests: [] };
+        days[day][key] = { qty: 0, revenue: 0, itemId: item.itemId, name: item.name, service, deliveredQty: 0, toCookQty: 0, requests: [] };
       }
       days[day][key].qty += item.qty;
+      if (item.status === 'Delivered' || item.status === 'Completed') days[day][key].deliveredQty += item.qty;
+      else if (item.status === 'Active' || !item.status) days[day][key].toCookQty += item.qty;
       days[day][key].revenue += item.qty * item.price;
 
       const { person, instructions } = splitNotesTag(item.notes);
@@ -2199,8 +2206,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       });
       breakdown.sort((a, b) => a.date.localeCompare(b.date));
     }
-    return { total, count: breakdown.length, breakdown };
-  }, [paymentsLines, staffAuthUser]);
+    // Grouped by payment method with a subtotal each — what a driver
+    // actually needs at handover: count the cash in one pile, and show the
+    // transfer references for digital methods separately.
+    const cashNames = new Set(paymentMethods.filter(m => m.type === 'Cash').map(m => m.name));
+    const methodMap: Record<string, { method: string; isCash: boolean; total: number; count: number; rows: typeof breakdown }> = {};
+    breakdown.forEach(r => {
+      if (!methodMap[r.method]) methodMap[r.method] = { method: r.method, isCash: cashNames.has(r.method), total: 0, count: 0, rows: [] };
+      methodMap[r.method].total += r.amount;
+      methodMap[r.method].count += 1;
+      methodMap[r.method].rows.push(r);
+    });
+    const byMethod = Object.values(methodMap).sort((a, b) => Number(b.isCash) - Number(a.isCash) || b.total - a.total);
+    return { total, count: breakdown.length, breakdown, byMethod };
+  }, [paymentsLines, staffAuthUser, paymentMethods]);
 
   // 2026-09: Collected/Outstanding now go through itemPaidAmount/
   // itemOutstandingAmount instead of a binary "full price if Paid, else
@@ -2856,6 +2875,32 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     });
     return order.map(k => map[k]);
   };
+
+  // Meals a Deliver & Collect action actually covers: only the En route
+  // items of a drop are written (see handleDeliverAndCollect), so that's
+  // what the popups list and count.
+  const dcMeals = (drop: DropTask) => drop.items.filter(i => i.status === 'En route');
+  const dcMealCount = (groups: PaymentGroup[]) =>
+    groups.reduce((n, g) => n + g.drops.reduce((m, d) => m + dcMeals(d).length, 0), 0);
+  const renderDcMeals = (drops: DropTask[]) => (
+    <div className="rounded-xl bg-white border border-slate-100 divide-y divide-slate-100 text-left">
+      {drops.map(d => {
+        const meals = dcMeals(d);
+        const people = Array.from(new Set(meals.map(m => splitNotesTag(m.notes).person).filter(Boolean)));
+        const label = meals.map(m => `${m.qty > 1 ? `${m.qty}× ` : ''}${m.name}`).join(', ') || 'Meal';
+        const sub = [d.date ? formatDay(d.date) : '', people.length > 0 ? `for ${people.join(', ')}` : ''].filter(Boolean).join(' · ');
+        return (
+          <div key={d.key} className="px-3 py-2 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-slate-800 truncate">{label}</p>
+              {sub && <p className="text-[9px] font-bold text-slate-400 truncate">{sub}</p>}
+            </div>
+            <p className="text-xs font-black text-slate-700 shrink-0">{formatCurrency(d.total)}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
 
   const openBulkDeliverCollectModal = (list: DropTask[]) => {
     const groups = groupDropsByReference(list);
@@ -3720,14 +3765,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     reader.readAsText(file);
   };
 
-  const todayCookCount = useMemo(() => {
-    let count = 0;
+  // Today's meals, split so a late add-on order doesn't make already
+  // delivered meals look like they still need cooking: `total` is everything
+  // for today, `toCook` is what is still Active (not yet started), and
+  // `delivered` is what has already gone out (Delivered/Completed).
+  const todayCook = useMemo(() => {
+    let total = 0, toCook = 0, delivered = 0;
     lines.forEach(({ item }) => {
       if (item.deliveryDate === systemDate) {
-        count += item.qty;
+        total += item.qty;
+        if (item.status === 'Delivered' || item.status === 'Completed') delivered += item.qty;
+        else if (item.status === 'Active' || !item.status) toCook += item.qty;
       }
     });
-    return count;
+    return { total, toCook, delivered };
   }, [lines, systemDate]);
 
   const todayDeliveriesPending = useMemo(() => {
@@ -3790,12 +3841,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
           </div>
           {!isPartner && (
             <div className="flex items-center gap-3 shrink-0">
-              <button
-                onClick={() => setTab('menu')}
-                className="px-4 py-2.5 bg-primary text-white hover:bg-primary/95 rounded-xl text-xs font-bold shadow-md transition-colors"
-              >
-                Manage Curries
-              </button>
+              {!isDriver && (
+                <button
+                  onClick={() => setTab('menu')}
+                  className="px-4 py-2.5 bg-primary text-white hover:bg-primary/95 rounded-xl text-xs font-bold shadow-md transition-colors"
+                >
+                  Manage Curries
+                </button>
+              )}
               <button
                 onClick={() => setTab('delivery')}
                 className="px-4 py-2.5 bg-white border border-[#E7E0D0] hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold shadow-sm transition-colors"
@@ -3807,18 +3860,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         </div>
 
         {/* KPI Grid */}
-        <div className={`grid grid-cols-1 md:grid-cols-2 ${isPartner ? 'lg:grid-cols-3' : 'lg:grid-cols-4'} gap-6`}>
-          {/* Today's Cook Count */}
-          <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all">
-            <div className="size-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
-              <BookOpen className="size-6" />
+        <div className={`grid grid-cols-1 md:grid-cols-2 ${isDriver ? 'lg:grid-cols-2' : isPartner ? 'lg:grid-cols-3' : 'lg:grid-cols-4'} gap-6`}>
+          {/* Today's Cook Count — kitchen information; not shown to drivers */}
+          {!isDriver && (
+            <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all">
+              <div className="size-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
+                <BookOpen className="size-6" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Today's Cook Count</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-2">{todayCook.total} meals</h3>
+                <p className="text-[11px] text-slate-400 font-bold mt-1">{todayCook.toCook} to cook · {todayCook.delivered} delivered</p>
+              </div>
             </div>
-            <div>
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Today's Cook Count</p>
-              <h3 className="text-2xl font-black text-slate-900 mt-2">{todayCookCount} meals</h3>
-              <p className="text-[11px] text-slate-400 font-bold mt-1">Lunch + Dinner preps</p>
-            </div>
-          </div>
+          )}
 
           {/* Deliveries Pending */}
           <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all">
@@ -3832,20 +3887,44 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </div>
           </div>
 
-          {/* Awaiting Payment */}
-          <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all">
-            <div className="size-12 rounded-2xl bg-yellow-500/10 flex items-center justify-center text-yellow-600">
-              <Wallet className="size-6" />
+          {/* Awaiting Payment — a driver sees only what they themselves have
+              collected and still have to hand over (their own claims), not
+              the company-wide claim count. */}
+          {isDriver ? (
+            <button
+              type="button"
+              onClick={() => { if (hasTabPermission('payments')) setTab('payments'); }}
+              disabled={!hasTabPermission('payments')}
+              className="text-left bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all cursor-pointer disabled:cursor-default"
+            >
+              <div className="size-12 rounded-2xl bg-yellow-500/10 flex items-center justify-center text-yellow-600">
+                <Wallet className="size-6" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">To Hand Over</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-2">{formatCurrency(myClaimedSummary.total)}</h3>
+                <p className="text-[11px] text-slate-400 font-bold mt-1">
+                  {myClaimedSummary.count > 0
+                    ? `${myClaimedSummary.count} claim${myClaimedSummary.count !== 1 ? 's' : ''} · by method in Payments`
+                    : 'Nothing collected yet'}
+                </p>
+              </div>
+            </button>
+          ) : (
+            <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all">
+              <div className="size-12 rounded-2xl bg-yellow-500/10 flex items-center justify-center text-yellow-600">
+                <Wallet className="size-6" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Awaiting Confirmation</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-2">{pendingPaymentClaimsCount} claims</h3>
+                <p className="text-[11px] text-slate-400 font-bold mt-1">Customer &amp; driver payment claims</p>
+              </div>
             </div>
-            <div>
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Awaiting Confirmation</p>
-              <h3 className="text-2xl font-black text-slate-900 mt-2">{pendingPaymentClaimsCount} claims</h3>
-              <p className="text-[11px] text-slate-400 font-bold mt-1">Juice/MauCAS transfers</p>
-            </div>
-          </div>
+          )}
 
-          {/* Revenue & Outstanding */}
-          {!isPartner && (
+          {/* Revenue & Outstanding — company-wide; not for partners or drivers */}
+          {!isPartner && !isDriver && (
             <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all">
               <div className="size-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-600">
                 <Banknote className="size-6" />
@@ -7933,24 +8012,33 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   {renderEntityFilterToggle()}
                   {!isPartner && (
                     <div className="flex items-center gap-3">
-                      <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer">
+                      <label
+                        className="flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer"
+                        title="Only orders for entities that have an active partner account — i.e. a partner's own kitchen."
+                      >
                         <input
                           type="checkbox"
                           checked={ordersPartnerFilter === 'partnerOnly'}
                           onChange={e => setOrdersPartnerFilter(e.target.checked ? 'partnerOnly' : 'all')}
                           className="accent-primary size-3.5"
                         />
-                        Partner-assigned only
+                        Partner kitchens only ({entitiesWithActivePartner.size} {entitiesWithActivePartner.size === 1 ? 'entity' : 'entities'})
                       </label>
-                      <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer">
+                      <label
+                        className="flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer"
+                        title="Only orders for entities without a partner — our own in-house kitchen. This is the default view."
+                      >
                         <input
                           type="checkbox"
                           checked={ordersPartnerFilter === 'noPartner'}
                           onChange={e => setOrdersPartnerFilter(e.target.checked ? 'noPartner' : 'all')}
                           className="accent-primary size-3.5"
                         />
-                        No partner assigned
+                        In-house kitchen (no partner)
                       </label>
+                      {ordersPartnerFilter === 'all' && (
+                        <span className="text-[10px] font-bold text-slate-400">showing all kitchens</span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -7999,10 +8087,15 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         {showLunch && (
                           <div className="bg-primary/5 rounded-2xl p-4">
                             <div className="flex items-center justify-between gap-4 mb-3 border-b border-primary/10 pb-2">
-                              <p className="text-[10px] font-black uppercase text-primary tracking-widest">☀️ Lunch</p>
+                              <div className="flex items-baseline gap-2 min-w-0">
+                                <p className="text-[10px] font-black uppercase text-primary tracking-widest">☀️ Lunch</p>
+                                {deliveredLunchCount > 0 && deliveredLunchCount < totalLunchCount && (
+                                  <span className="text-[9px] font-bold text-slate-400">{deliveredLunchCount} of {totalLunchCount} delivered</span>
+                                )}
+                              </div>
                               {totalLunchCount > 0 && deliveredLunchCount === totalLunchCount ? (
                                 <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
-                                  <Check className="size-3" /> ✓ Delivered
+                                  <Check className="size-3" /> Delivered
                                 </span>
                               ) : activeLunchCount > 0 ? (
                                 <button
@@ -8026,18 +8119,23 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 </button>
                               ) : (
                                 <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-md text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
-                                  <CheckCircle2 className="size-2.5" /> ✓ Cooked
+                                  <CheckCircle2 className="size-2.5" /> Cooked
                                 </span>
                               )}
                             </div>
                             <div className="divide-y divide-primary/10">
                               {lunchDishes.map(([key, agg]) => {
-                                const { qty, revenue, itemId, name, requests } = agg as { qty: number; revenue: number; itemId: string; name: string; service: string; requests: any[] };
+                                const { qty, revenue, itemId, name, requests, deliveredQty, toCookQty } = agg as { qty: number; revenue: number; itemId: string; name: string; service: string; deliveredQty: number; toCookQty: number; requests: any[] };
                                 return (
                                   <div key={key} className="py-2.5 space-y-1">
                                     <div className="flex items-center gap-3">
                                       <img src={dishPhotoFor(itemId)} alt={name} className="size-9 rounded-lg object-cover shrink-0" />
                                       <span className="text-sm font-bold text-slate-700 flex-1 min-w-0 truncate">{name}</span>
+                                      {deliveredQty > 0 && (
+                                        <span className="text-[9px] font-black uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 shrink-0">
+                                          {deliveredQty} delivered{toCookQty > 0 ? ` · ${toCookQty} to cook` : ''}
+                                        </span>
+                                      )}
                                       <span className="text-xs font-black text-slate-900 shrink-0">{qty}x</span>
                                       <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
                                     </div>
@@ -8061,10 +8159,15 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         {showDinner && (
                           <div className="bg-accent/5 rounded-2xl p-4">
                             <div className="flex items-center justify-between gap-4 mb-3 border-b border-accent/10 pb-2">
-                              <p className="text-[10px] font-black uppercase text-accent tracking-widest">🌙 Dinner</p>
+                              <div className="flex items-baseline gap-2 min-w-0">
+                                <p className="text-[10px] font-black uppercase text-accent tracking-widest">🌙 Dinner</p>
+                                {deliveredDinnerCount > 0 && deliveredDinnerCount < totalDinnerCount && (
+                                  <span className="text-[9px] font-bold text-slate-400">{deliveredDinnerCount} of {totalDinnerCount} delivered</span>
+                                )}
+                              </div>
                               {totalDinnerCount > 0 && deliveredDinnerCount === totalDinnerCount ? (
                                 <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
-                                  <Check className="size-3" /> ✓ Delivered
+                                  <Check className="size-3" /> Delivered
                                 </span>
                               ) : activeDinnerCount > 0 ? (
                                 <button
@@ -8088,18 +8191,23 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 </button>
                               ) : (
                                 <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-md text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
-                                  <CheckCircle2 className="size-2.5" /> ✓ Cooked
+                                  <CheckCircle2 className="size-2.5" /> Cooked
                                 </span>
                               )}
                             </div>
                             <div className="divide-y divide-accent/10">
                               {dinnerDishes.map(([key, agg]) => {
-                                const { qty, revenue, itemId, name, requests } = agg as { qty: number; revenue: number; itemId: string; name: string; service: string; requests: any[] };
+                                const { qty, revenue, itemId, name, requests, deliveredQty, toCookQty } = agg as { qty: number; revenue: number; itemId: string; name: string; service: string; deliveredQty: number; toCookQty: number; requests: any[] };
                                 return (
                                   <div key={key} className="py-2.5 space-y-1">
                                     <div className="flex items-center gap-3">
                                       <img src={dishPhotoFor(itemId)} alt={name} className="size-9 rounded-lg object-cover shrink-0" />
                                       <span className="text-sm font-bold text-slate-700 flex-1 min-w-0 truncate">{name}</span>
+                                      {deliveredQty > 0 && (
+                                        <span className="text-[9px] font-black uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 shrink-0">
+                                          {deliveredQty} delivered{toCookQty > 0 ? ` · ${toCookQty} to cook` : ''}
+                                        </span>
+                                      )}
                                       <span className="text-xs font-black text-slate-900 shrink-0">{qty}x</span>
                                       <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
                                     </div>
@@ -8396,7 +8504,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           </button>
                         </div>
                         <div className="flex items-center gap-2">
-                          {activeDrivers.length > 0 && currentPermissions?.ordersByDish?.edit === true && (
+                          {!isDriver && activeDrivers.length > 0 && currentPermissions?.ordersByDish?.edit === true && (
                             <select
                               value={bulkDispatchDriverId}
                               onChange={(e) => setBulkDispatchDriverId(e.target.value)}
@@ -8410,6 +8518,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               ))}
                             </select>
                           )}
+                          {!isDriver && (
                           <button
                             type="button"
                             onClick={() => handleBulkDispatch(selectedDrops)}
@@ -8428,6 +8537,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             {pendingBulkDispatch ? <Loader2 className="size-3.5 animate-spin" /> : <Truck className="size-3.5" />}
                             {pendingBulkDispatch ? 'Dispatching...' : `Dispatch (${dispatchTargetCount})`}
                           </button>
+                          )}
                           {isDriver ? (
                             // 2026-09 — a driver's bulk action needs to claim
                             // payment too, not just flip status (Bhimal: "no
@@ -9213,18 +9323,33 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <X className="size-5" />
                 </button>
               </div>
-              <div className="p-6 overflow-y-auto divide-y divide-slate-100">
+              <div className="p-6 overflow-y-auto space-y-5">
                 {myClaimedSummary.breakdown.length === 0 ? (
                   <p className="text-xs font-bold text-slate-400 text-center py-6">Nothing claimed yet.</p>
-                ) : myClaimedSummary.breakdown.map(row => (
-                  <div key={row.key} className="py-3 flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-xs font-black text-slate-900 truncate">{row.customerName}</p>
-                      <p className="text-[10px] font-bold text-slate-400">
-                        {formatDay(row.date)} · {row.method}{row.reference ? ` · ${row.reference}` : ''}{row.isPartial ? ' · Partial' : ''}
-                      </p>
+                ) : myClaimedSummary.byMethod.map(g => (
+                  <div key={g.method}>
+                    <div className="flex items-center justify-between gap-3 pb-2 border-b border-slate-200">
+                      <div className="min-w-0">
+                        <p className="text-xs font-black text-slate-900">{g.isCash ? '💵 ' : ''}{g.method}</p>
+                        <p className="text-[10px] font-bold text-slate-400">
+                          {g.count} claim{g.count !== 1 ? 's' : ''} · {g.isCash ? 'cash to hand over' : 'transfer — show the reference'}
+                        </p>
+                      </div>
+                      <p className="text-base font-black text-warning shrink-0">{formatCurrency(g.total)}</p>
                     </div>
-                    <p className="text-sm font-black text-warning shrink-0">{formatCurrency(row.amount)}</p>
+                    <div className="divide-y divide-slate-100">
+                      {g.rows.map(row => (
+                        <div key={row.key} className="py-3 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs font-black text-slate-900 truncate">{row.customerName}</p>
+                            <p className="text-[10px] font-bold text-slate-400">
+                              {formatDay(row.date)}{row.reference ? ` · ${row.reference}` : ''}{row.isPartial ? ' · Partial' : ''}
+                            </p>
+                          </div>
+                          <p className="text-sm font-black text-slate-700 shrink-0">{formatCurrency(row.amount)}</p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -9527,6 +9652,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 </p>
               </div>
 
+              {renderDcMeals([deliverCollectDrop])}
+
               <div className="flex gap-2 rounded-2xl bg-slate-100 p-1">
                 {([
                   { key: 'paid', label: 'Paid in full' },
@@ -9646,7 +9773,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-white rounded-[32px] w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 max-h-[90vh] flex flex-col">
             <div className="p-6 border-b border-slate-100 flex items-center justify-between shrink-0">
-              <h2 className="text-lg font-black text-slate-900">Deliver &amp; Collect — {bulkDcGroups.length} group{bulkDcGroups.length !== 1 ? 's' : ''}</h2>
+              <h2 className="text-lg font-black text-slate-900">Deliver &amp; Collect — {dcMealCount(bulkDcGroups)} meal{dcMealCount(bulkDcGroups) !== 1 ? 's' : ''}</h2>
               <button onClick={closeBulkDeliverCollectModal} className="p-2 text-slate-400 hover:text-danger">
                 <X className="size-5" />
               </button>
@@ -9673,6 +9800,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       </div>
                       <p className="text-lg font-black text-slate-900">{formatCurrency(g.total)}</p>
                     </div>
+
+                    {renderDcMeals(g.drops)}
 
                     <div className="flex gap-1.5 rounded-xl bg-white p-1 border border-slate-100">
                       {([
@@ -9751,7 +9880,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 className="w-full px-4 py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-primary/95 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
               >
                 {pendingBulkDeliverCollect ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                {pendingBulkDeliverCollect ? 'Saving...' : `Confirm & Mark Delivered (${bulkDcGroups.length})`}
+                {pendingBulkDeliverCollect ? 'Saving...' : `Confirm & Mark Delivered (${dcMealCount(bulkDcGroups)} meal${dcMealCount(bulkDcGroups) !== 1 ? 's' : ''})`}
               </button>
             </div>
           </div>
