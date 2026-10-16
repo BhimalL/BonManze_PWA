@@ -4052,9 +4052,20 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     return count;
   }, [lines, systemDate]);
 
+  // One claim = one payment group (drops sharing a claimed reference are one
+  // payment), not one drop: Eleanor's single 9-meal payment is 1 claim.
   const pendingPaymentClaimsCount = useMemo(() => {
-    return paymentDrops.filter(d => d.paymentStatus === 'Pending' && d.claimedMethod).length;
-  }, [paymentDrops]);
+    return paymentGroups.filter(g => g.claimedMethod).length;
+  }, [paymentGroups]);
+
+  // Dashboard "Awaiting Confirmation" card -> Payments tab, reset to this
+  // week / all days / all services so the listing matches the card.
+  const openClaimsListing = () => {
+    setPaymentsWeekFilter('this');
+    setPaymentsDayFilter('all');
+    setPaymentsServiceFilter('all');
+    setTab('payments');
+  };
 
   const activeWeekFinancials = useMemo(() => {
     let collected = 0;
@@ -4074,6 +4085,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const renderDashboard = () => {
     const formattedDate = formatDay(systemDate);
     const hasOverride = systemDate !== getRealTodayISO();
+    const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+    const canReviewClaims = hasTabPermission('payments');
     return (
       <div className="space-y-8 animate-fade-in">
         {/* Banner if testing override date is active */}
@@ -4129,7 +4142,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
               <div>
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Today's Cook Count</p>
-                <h3 className="text-2xl font-black text-slate-900 mt-2">{todayCook.total} meals</h3>
+                <h3 className="text-2xl font-black text-slate-900 mt-2">{plural(todayCook.total, 'meal')}</h3>
                 <p className="text-[11px] text-slate-400 font-bold mt-1">{todayCook.toCook} to cook · {todayCook.delivered} delivered</p>
               </div>
             </div>
@@ -4142,7 +4155,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             </div>
             <div>
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Deliveries Pending</p>
-              <h3 className="text-2xl font-black text-slate-900 mt-2">{todayDeliveriesPending} items</h3>
+              <h3 className="text-2xl font-black text-slate-900 mt-2">{plural(todayDeliveriesPending, 'item')}</h3>
               <p className="text-[11px] text-slate-400 font-bold mt-1">Remaining for today</p>
             </div>
           </div>
@@ -4177,6 +4190,22 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 </p>
               </div>
             </button>
+          ) : canReviewClaims ? (
+            <button
+              type="button"
+              onClick={openClaimsListing}
+              title="Open the Payments tab to review these claims"
+              className="text-left bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all cursor-pointer"
+            >
+              <div className="size-12 rounded-2xl bg-yellow-500/10 flex items-center justify-center text-yellow-600">
+                <Wallet className="size-6" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Awaiting Confirmation</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-2">{plural(pendingPaymentClaimsCount, 'claim')}</h3>
+                <p className="text-[11px] text-slate-400 font-bold mt-1">Customer &amp; driver payment claims · tap to review</p>
+              </div>
+            </button>
           ) : (
             <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all">
               <div className="size-12 rounded-2xl bg-yellow-500/10 flex items-center justify-center text-yellow-600">
@@ -4184,7 +4213,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
               <div>
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Awaiting Confirmation</p>
-                <h3 className="text-2xl font-black text-slate-900 mt-2">{pendingPaymentClaimsCount} claims</h3>
+                <h3 className="text-2xl font-black text-slate-900 mt-2">{plural(pendingPaymentClaimsCount, 'claim')}</h3>
                 <p className="text-[11px] text-slate-400 font-bold mt-1">Customer &amp; driver payment claims</p>
               </div>
             </div>
@@ -4203,12 +4232,6 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
             </div>
           )}
-        </div>
-
-        {/* Informative Guidance Banner */}
-        <div className="bg-slate-50 border border-[#E7E0D0] rounded-2xl p-4 text-xs font-bold text-slate-500 flex items-center gap-2">
-          <span className="inline-block size-1.5 rounded-full bg-slate-400" />
-          <span>Note: System is configured to run entirely in local storage. All changes are saved on your local device.</span>
         </div>
       </div>
     );
@@ -8404,7 +8427,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                         </span>
                                       )}
                                       <span className="text-xs font-black text-slate-900 shrink-0">{qty}x</span>
-                                      <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
+                                      {!isPartner && (
+                                        <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
+                                      )}
                                     </div>
                                     {requests.length > 0 && (
                                       <div className="pl-12 flex flex-col gap-1">
@@ -8476,7 +8501,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                         </span>
                                       )}
                                       <span className="text-xs font-black text-slate-900 shrink-0">{qty}x</span>
-                                      <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
+                                      {!isPartner && (
+                                        <span className="text-xs font-bold text-slate-400 w-24 text-right shrink-0">{formatCurrency(revenue)}</span>
+                                      )}
                                     </div>
                                     {requests.length > 0 && (
                                       <div className="pl-12 flex flex-col gap-1">
