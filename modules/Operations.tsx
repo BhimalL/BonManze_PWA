@@ -900,6 +900,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const [paymentsWeekFilter, setPaymentsWeekFilter] = useState<'this' | 'next'>('this');
   const [paymentsDayFilter, setPaymentsDayFilter] = useState<string | 'all'>('all');
   const [paymentsServiceFilter, setPaymentsServiceFilter] = useState<'all' | 'Lunch' | 'Dinner'>('all');
+  // Payment-status filter for the unpaid list: 'claimed' = payment groups the
+  // customer/driver has already claimed (awaiting cashier confirmation),
+  // 'unclaimed' = still nothing claimed. Narrows the list only; the summary
+  // cards keep showing the full week/day/service totals.
+  const [paymentsStatusFilter, setPaymentsStatusFilter] = useState<'all' | 'claimed' | 'unclaimed'>('all');
 
   // VAT can only legally be charged once BonManzE is actually VAT-registered
   // with the MRA (Mauritius's registration threshold is MUR 3M/yr turnover,
@@ -2052,12 +2057,14 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   const unpaidByDate = useMemo(() => {
     const map: Record<string, PaymentGroup[]> = {};
     paymentGroups.forEach(g => {
+      if (paymentsStatusFilter === 'claimed' && !g.claimedMethod) return;
+      if (paymentsStatusFilter === 'unclaimed' && g.claimedMethod) return;
       const key = g.earliestDate || 'Unscheduled';
       if (!map[key]) map[key] = [];
       map[key].push(g);
     });
     return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [paymentGroups]);
+  }, [paymentGroups, paymentsStatusFilter]);
 
   const paidDrops = useMemo(() => paymentDrops.filter(d => d.paymentStatus === 'Paid'), [paymentDrops]);
 
@@ -4064,6 +4071,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     setPaymentsWeekFilter('this');
     setPaymentsDayFilter('all');
     setPaymentsServiceFilter('all');
+    setPaymentsStatusFilter('claimed');
     setTab('payments');
   };
 
@@ -8995,6 +9003,23 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     ))}
                   </div>
                 )}
+                <div className="flex gap-1 bg-slate-100 rounded-xl p-1">
+                  {([
+                    { key: 'all', label: 'All unpaid', count: paymentGroups.length },
+                    { key: 'claimed', label: 'Claims to confirm', count: pendingPaymentClaimsCount },
+                    { key: 'unclaimed', label: 'Not yet claimed', count: paymentGroups.length - pendingPaymentClaimsCount },
+                  ] as const).map(opt => (
+                    <button
+                      key={opt.key}
+                      onClick={() => setPaymentsStatusFilter(opt.key)}
+                      className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        paymentsStatusFilter === opt.key ? 'bg-warning text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      {opt.label} ({opt.count})
+                    </button>
+                  ))}
+                </div>
                 <div className="pt-2 border-t border-slate-100 mt-2">
                   {renderEntityFilterToggle()}
                 </div>
@@ -9074,7 +9099,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               </div>
 
               {unpaidByDate.length === 0 ? (
-                <EmptyState icon={<Wallet className="size-10" />} label="Nothing outstanding" />
+                <EmptyState
+                  icon={<Wallet className="size-10" />}
+                  label={paymentsStatusFilter === 'claimed' ? 'No claims awaiting confirmation' : paymentsStatusFilter === 'unclaimed' ? 'Nothing unclaimed' : 'Nothing outstanding'}
+                />
               ) : (
                 <div className="space-y-5">
                   {unpaidByDate.map(([date, dateGroups]) => (
