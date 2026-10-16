@@ -2489,6 +2489,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         collected += itemPaidAmount(order, item);
         writtenOff += itemWriteOffAmount(order, item);
       } else {
+        // A still-Pending item can already have a confirmed partial
+        // payment (e.g. a driver's Rs 320 of 322.29 confirmed at handover).
+        // That money is banked, so it counts as Collected; only the
+        // remainder stays Outstanding.
+        collected += itemPaidAmount(order, item);
         outstanding += itemOutstandingAmount(order, item);
       }
     });
@@ -4056,12 +4061,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     let outstanding = 0;
     lines.forEach(({ order, item }) => {
       if (item.deliveryDate && weekDateKeys.has(item.deliveryDate)) {
-        const amt = itemNetAmount(order, item);
-        if (item.paymentStatus === 'Paid') {
-          collected += amt;
-        } else {
-          outstanding += amt;
-        }
+        // Same actually-collected / still-owed split as the Payments tab, so
+        // a partly-paid item and a written-off balance are not counted at
+        // their full price here.
+        collected += itemPaidAmount(order, item);
+        outstanding += itemOutstandingAmount(order, item);
       }
     });
     return { collected, outstanding };
