@@ -1283,6 +1283,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         // When the driver recorded the claim (ISO string), shown on the
         // handover screens. Absent on claims written before this field.
         paymentClaimedAt: it.paymentClaimedAt,
+        // Delivery contact stamped at order time; the only source a driver's
+        // role can see (drivers cannot read `customers`).
+        deliveryAddress: it.deliveryAddress,
+        customerPhone: it.customerPhone,
       }));
       const allPaid = items.length > 0 && items.every(i => i.paymentStatus === 'Paid');
       const createdAtIso = o.createdAt && typeof o.createdAt.toDate === 'function'
@@ -1310,6 +1314,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         entityBrn: o.entityBrn || '',
         entityVatNumber: o.entityVatNumber || '',
         entityBankReference: o.entityBankReference || '',
+        // Without these three the receipt's entity block silently dropped
+        // the entity's address / phone / email even when the order had them.
+        entityAddress: o.entityAddress || '',
+        entityEmail: o.entityEmail || '',
+        entityPhone: o.entityPhone || '',
         entityLogoStoragePath: o.entityLogoStoragePath || '',
       } as Order;
     });
@@ -2241,6 +2250,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     const isPartial = item.paymentIssueAmount != null && !Number.isNaN(item.paymentIssueAmount);
     return isPartial ? Math.min(item.paymentIssueAmount as number, net) : net;
   };
+  // 'Lunch-2' / 'Lunch-3' are the 2nd/3rd meal of the same service and share
+  // one delivery window, so staff see just 'Lunch' / 'Dinner'.
+  const slotLabel = (slot?: string): string => String(slot || '').replace(/-\d+$/, '');
   const deliveryWindowFor = (slot?: string): string =>
     String(slot || '').toLowerCase().includes('dinner') ? SYSTEM_CONFIG.dinnerDeliveryWindow : SYSTEM_CONFIG.lunchDeliveryWindow;
 
@@ -2259,6 +2271,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     const breakdown: {
       key: string; fsItemId: string; orderId: string; customerName: string; date: string; slot: string;
       mealName: string; method: string; reference?: string; claimedAt?: string; note?: string;
+      address?: string; phone?: string;
       amount: number; net: number; isPartial: boolean; handedOver: boolean;
     }[] = [];
     let total = 0;
@@ -2286,6 +2299,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
             reference: item.paymentReference,
             claimedAt: item.paymentClaimedAt,
             note: item.paymentIssueNote,
+            address: (item as FsOrderItem).deliveryAddress,
+            phone: (item as FsOrderItem).customerPhone,
             amount,
             net: itemNetAmount(order, item),
             isPartial,
@@ -8566,6 +8581,10 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 const renderDropCard = (drop: DropTask) => {
                   const cust = getCustomer(drop.customerName);
                   const addr = cust?.addresses[0];
+                  // Drivers cannot read `customers`; fall back to the contact
+                  // stamped on the order's items at checkout.
+                  const itemAddr = drop.items.find(i => i.deliveryAddress)?.deliveryAddress;
+                  const itemPhone = cust?.phone || drop.items.find(i => i.customerPhone)?.customerPhone;
                   const allCompleted = drop.items.every(i => i.status === 'Completed');
                   const allEnRoute = drop.items.every(i => i.status === 'En route');
                   const canDispatch = drop.items.some(i => i.status === 'Ready');
@@ -8631,7 +8650,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         ) : (
                           <p className="text-[11px] text-slate-400 font-bold flex items-center gap-1.5 leading-tight">
                             <MapPin className="size-3.5 shrink-0 text-slate-300" />
-                            <span>No address specified</span>
+                            <span>{itemAddr || 'No address specified'}</span>
+                          </p>
+                        )}
+                        {itemPhone && (
+                          <p className="text-[11px] text-slate-400 font-bold flex items-center gap-1.5 leading-tight">
+                            <Phone className="size-3.5 shrink-0 text-slate-300" />
+                            <a href={`tel:${itemPhone.replace(/\s+/g, '')}`} className="hover:underline">{itemPhone}</a>
                           </p>
                         )}
                       </div>
@@ -9038,7 +9063,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                         {group.entityName || (entities.find(e => e.id === group.entityId)?.name) || group.entityId}
                                       </span>
                                     )}
-                                    {drop.slot && <span className="text-[10px] font-bold text-slate-400">{drop.slot}</span>}
+                                    {drop.slot && <span className="text-[10px] font-bold text-slate-400" title={drop.slot}>{slotLabel(drop.slot)}</span>}
                                   </div>
                                   <div className="space-y-1.5 pt-1">
                                     {drop.items.map((item, idx) => {
@@ -9198,7 +9223,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                 {group.drops.map(drop => (
                                   <div key={drop.key} className="py-3 first:pt-0 last:pb-0">
                                     <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1.5">
-                                      {formatDay(drop.date)}{drop.slot ? ` · ${drop.slot}` : ''}
+                                      {formatDay(drop.date)}{drop.slot ? ` · ${slotLabel(drop.slot)}` : ''}
                                     </p>
                                     <div className="space-y-1.5">
                                       {drop.items.map((item, idx) => {
@@ -9321,7 +9346,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           <h3 className="text-base font-black text-slate-900">{drop.customerName}</h3>
-                          {drop.date && <span className="text-[10px] font-bold text-slate-400">{formatDay(drop.date)}{drop.slot ? ` · ${drop.slot}` : ''}</span>}
+                          {drop.date && <span className="text-[10px] font-bold text-slate-400">{formatDay(drop.date)}{drop.slot ? ` · ${slotLabel(drop.slot)}` : ''}</span>}
                         </div>
                         <p className="text-xs text-slate-500 font-medium">{drop.items.map(i => `${i.qty}x ${i.name}`).join(', ')}</p>
                         <p className="text-sm font-black text-primary mt-1">{formatCurrency(drop.total)}</p>
@@ -9603,11 +9628,16 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                             </div>
                           </div>
                           <p className="text-[10px] font-bold text-slate-400">
-                            Order #{row.orderId.slice(0, 8)} · {formatDay(row.date)}{row.slot ? ` · ${row.slot} (${deliveryWindowFor(row.slot)})` : ''}
+                            Order #{row.orderId.slice(0, 8)} · {formatDay(row.date)}{row.slot ? ` · ${slotLabel(row.slot)} (${deliveryWindowFor(row.slot)})` : ''}
                           </p>
                           <p className="text-[10px] font-bold text-slate-400">
                             Collected {fmtClockTime(row.claimedAt)} · Ref {row.reference || '—'}
                           </p>
+                          {(row.address || row.phone) && (
+                            <p className="text-[10px] font-bold text-slate-400">
+                              {row.address || 'No address on file'}{row.phone ? ` · ${row.phone}` : ''}
+                            </p>
+                          )}
                           {row.note && <p className="text-[10px] font-bold text-danger">Note: {row.note}</p>}
                         </div>
                       ))}
@@ -10727,7 +10757,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   ) : null;
                 })()}
                 <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Date:</span><span className="font-bold text-slate-900">{new Date(activePrintDrop.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span></div>
-                <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Service:</span><span className="font-black text-accent uppercase">{activePrintDrop.slot}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Service:</span><span className="font-black text-accent uppercase">{slotLabel(activePrintDrop.slot)}</span></div>
                 <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Payment:</span><span className={`font-black uppercase ${activePrintDrop.paymentStatus === 'Paid' ? 'text-success' : 'text-danger'}`}>{activePrintDrop.paymentStatus === 'Paid' ? 'Paid' : 'Unpaid'}</span></div>
               </div>
 
@@ -10763,7 +10793,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                       <p>{addr.city}</p>
                     </div>
                   ) : (
-                    <p className="text-slate-400 italic">No address specified</p>
+                    (activePrintDrop.items.find(i => i.deliveryAddress)?.deliveryAddress
+                      ? <p className="font-bold text-slate-950 leading-snug">{activePrintDrop.items.find(i => i.deliveryAddress)?.deliveryAddress}</p>
+                      : <p className="text-slate-400 italic">No address specified</p>)
                   );
                 })()}
               </div>
@@ -11000,7 +11032,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                         <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Phone:</span><span className="font-bold text-slate-900">{cust.phone}</span></div>
                       )}
                       <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Date:</span><span className="font-bold text-slate-900">{new Date(drop.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span></div>
-                      <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Service:</span><span className="font-black text-accent uppercase">{drop.slot}</span></div>
+                      <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Service:</span><span className="font-black text-accent uppercase">{slotLabel(drop.slot)}</span></div>
                       <div className="flex justify-between gap-2"><span className="text-slate-400 uppercase tracking-widest font-bold text-[9px]">Payment:</span><span className={`font-black uppercase ${drop.paymentStatus === 'Paid' ? 'text-success' : 'text-danger'}`}>{drop.paymentStatus === 'Paid' ? 'Paid' : 'Unpaid'}</span></div>
                     </div>
 
@@ -11031,6 +11063,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                           <p>{addr.street}</p>
                           <p>{addr.city}</p>
                         </div>
+                      ) : drop.items.find(i => i.deliveryAddress)?.deliveryAddress ? (
+                        <p className="font-bold text-slate-950 leading-snug">{drop.items.find(i => i.deliveryAddress)?.deliveryAddress}</p>
                       ) : (
                         <p className="text-slate-400 italic">No address specified</p>
                       )}

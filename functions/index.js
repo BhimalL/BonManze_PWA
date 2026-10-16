@@ -271,6 +271,10 @@ export const confirmCheckout = onCall(async (request) => {
   if (!customer.entityId) {
     throw new HttpsError('failed-precondition', 'Your account has not been assigned to a trading entity.');
   }
+  const firstAddress = Array.isArray(customer.addresses) ? customer.addresses[0] : null;
+  const deliveryAddress = firstAddress
+    ? [firstAddress.street, firstAddress.city].filter(Boolean).join(', ')
+    : '';
 
   // ---- Load current catalogs/config in parallel ----
   const [configSnap, tiersSnap, groupsSnap, basesSnap, dhalsSnap, saladsSnap, bevSnap, desSnap, defaultsSnap, entitySnap] = await Promise.all([
@@ -591,6 +595,9 @@ export const confirmCheckout = onCall(async (request) => {
         customerId: uid,
         customerName: customer.name || '',
         entityId: customer.entityId,
+        // Delivery contact, copied at order time (see OrderItem in types.ts).
+        deliveryAddress,
+        customerPhone: typeof customer.phone === 'string' ? customer.phone : '',
         discountShare: {
           standard: round2(_itemStandardDiscount),
           birthday: round2(_itemBirthdayDiscount),

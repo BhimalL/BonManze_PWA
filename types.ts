@@ -191,6 +191,12 @@ export interface OrderItem {
   instructions?: string;
   tierAtOrder?: string;
   entityId?: string;
+  // Stamped by confirmCheckout at order time so staff roles that cannot read
+  // the `customers` collection (drivers) still see where to deliver and whom
+  // to call. Absent on orders placed before this field existed (the
+  // refreshOrderSnapshots script backfills them).
+  deliveryAddress?: string;
+  customerPhone?: string;
   invoiceNumber?: string;
   invoiceIssuedAt?: any;
   invoiceReprintCount?: number;

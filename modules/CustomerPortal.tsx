@@ -996,6 +996,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         entityBrn: o.entityBrn || '',
         entityVatNumber: o.entityVatNumber || '',
         entityBankReference: o.entityBankReference || '',
+        // Receipt entity block: address / phone / email were being dropped here.
+        entityAddress: o.entityAddress || '',
+        entityEmail: o.entityEmail || '',
+        entityPhone: o.entityPhone || '',
         entityLogoStoragePath: o.entityLogoStoragePath || '',
       } as Order;
     });

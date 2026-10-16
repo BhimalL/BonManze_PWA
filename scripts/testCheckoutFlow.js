@@ -149,6 +149,21 @@ async function main() {
   check('every item price matches server-computed pricing, not something the client submitted',
     JSON.stringify(pricesWritten) === JSON.stringify([...expectedPrices].sort((a, b) => a - b)), JSON.stringify(pricesWritten));
 
+  // Delivery contact + full entity snapshot (so receipts and driver screens
+  // never need to read `customers` / `entities` live).
+  const custDoc = (await adb.collection('customers').doc(auth.currentUser.uid).get()).data() || {};
+  const entDoc = (await adb.collection('entities').doc('entity-a').get()).data() || {};
+  const firstAddr = Array.isArray(custDoc.addresses) ? custDoc.addresses[0] : null;
+  const expectedAddr = firstAddr ? [firstAddr.street, firstAddr.city].filter(Boolean).join(', ') : '';
+  check('every item carries the customer delivery address snapshot',
+    itemsSnap.docs.every((d) => (d.data().deliveryAddress || '') === expectedAddr), expectedAddr);
+  check('every item carries the customer phone snapshot',
+    itemsSnap.docs.every((d) => (d.data().customerPhone || '') === (custDoc.phone || '')));
+  check('order snapshots entity address / phone / email',
+    (orderData.entityAddress || '') === (entDoc.address || '') &&
+    (orderData.entityPhone || '') === (entDoc.phone || '') &&
+    (orderData.entityEmail || '') === (entDoc.email || ''));
+
   console.log('\n[2a] Confirm that checkout fails if the customer is not approved —');
   await adb.collection('customers').doc(auth.currentUser.uid).update({
     registrationStatus: 'Pending'
