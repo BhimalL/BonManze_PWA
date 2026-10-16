@@ -4038,15 +4038,19 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
   // for today, `toCook` is what is still Active (not yet started), and
   // `delivered` is what has already gone out (Delivered/Completed).
   const todayCook = useMemo(() => {
-    let total = 0, toCook = 0, delivered = 0;
+    let total = 0, toCook = 0, delivered = 0, preparing = 0, cooked = 0;
     lines.forEach(({ item }) => {
       if (item.deliveryDate === systemDate) {
         total += item.qty;
         if (item.status === 'Delivered' || item.status === 'Completed') delivered += item.qty;
         else if (item.status === 'Active' || !item.status) toCook += item.qty;
+        // Kitchen progress for Partner kitchens: Preparing = Start Cooking
+        // pressed; cooked = Mark Ready pressed or anything past that.
+        if (item.status === 'Preparing') preparing += item.qty;
+        if (item.status === 'Ready' || item.status === 'En route' || item.status === 'Delivered' || item.status === 'Completed') cooked += item.qty;
       }
     });
-    return { total, toCook, delivered };
+    return { total, toCook, delivered, preparing, cooked };
   }, [lines, systemDate]);
 
   const todayDeliveriesPending = useMemo(() => {
@@ -4151,12 +4155,17 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               <div>
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Today's Cook Count</p>
                 <h3 className="text-2xl font-black text-slate-900 mt-2">{plural(todayCook.total, 'meal')}</h3>
-                <p className="text-[11px] text-slate-400 font-bold mt-1">{todayCook.toCook} to cook · {todayCook.delivered} delivered</p>
+                <p className="text-[11px] text-slate-400 font-bold mt-1">
+                  {isPartner
+                    ? `${todayCook.toCook} to cook · ${todayCook.preparing} cooking · ${todayCook.cooked} cooked`
+                    : `${todayCook.toCook} to cook · ${todayCook.delivered} delivered`}
+                </p>
               </div>
             </div>
           )}
 
-          {/* Deliveries Pending */}
+          {/* Deliveries Pending — delivery status is not a Partner kitchen's business */}
+          {!isPartner && (
           <div className="bg-white rounded-3xl border border-[#E7E0D0] p-6 shadow-sm flex items-center gap-4 hover:shadow-md transition-all">
             <div className="size-12 rounded-2xl bg-accent/10 flex items-center justify-center text-accent">
               <Truck className="size-6" />
@@ -4167,11 +4176,13 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
               <p className="text-[11px] text-slate-400 font-bold mt-1">Remaining for today</p>
             </div>
           </div>
+          )}
 
           {/* Awaiting Payment — a driver sees only what they themselves have
               collected and still have to hand over (their own claims), not
-              the company-wide claim count. */}
-          {isDriver ? (
+              the company-wide claim count. Partner kitchens see neither: payment
+              claims are not their business. */}
+          {!isPartner && (isDriver ? (
             <button
               type="button"
               // Opens the handover breakdown modal directly. A driver's role
@@ -4225,7 +4236,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 <p className="text-[11px] text-slate-400 font-bold mt-1">Customer &amp; driver payment claims</p>
               </div>
             </div>
-          )}
+          ))}
 
           {/* Revenue & Outstanding — company-wide; not for partners or drivers */}
           {!isPartner && !isDriver && (
