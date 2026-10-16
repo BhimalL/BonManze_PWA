@@ -9284,7 +9284,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               </div>
 
                               <div className="divide-y divide-slate-100">
-                                {group.drops.map(drop => (
+                                {[...group.drops].sort(compareDropsChronologically).map(drop => (
                                   <div key={drop.key} className="py-3 first:pt-0 last:pb-0">
                                     <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1.5">
                                       {formatDay(drop.date)}{drop.slot ? ` · ${slotLabel(drop.slot)}` : ''}
@@ -11229,6 +11229,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
       )}
     </div>
   );
+};
+
+// Chronological order for the meals inside one multi-meal payment group:
+// delivery date, then Lunch before Dinner, then the exact slot label. (The
+// raw order follows the order's item array, which is not date-sorted.)
+const compareDropsChronologically = (a: DropTask, b: DropTask): number => {
+  const dateCmp = (a.date || '').localeCompare(b.date || '');
+  if (dateCmp !== 0) return dateCmp;
+  const rank = (slot?: string) => ((slot || '').startsWith('Dinner') ? 1 : 0);
+  const serviceCmp = rank(a.slot) - rank(b.slot);
+  if (serviceCmp !== 0) return serviceCmp;
+  return (a.slot || '').localeCompare(b.slot || '');
 };
 
 const EmptyState = ({ icon, label }: { icon: React.ReactNode; label: string }) => (
