@@ -1688,6 +1688,18 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     return set;
   }, [staffListRaw]);
 
+  // The Partner / In-house tick boxes on Orders by Dish, as one predicate, so
+  // the dish list, each service header's button state (Start Cooking / Mark
+  // Ready / Cooked) and the Start Cooking / Mark Ready actions all agree on
+  // which meals are 'in view'. Never applies to a Partner's own session.
+  const matchesOrdersPartnerFilter = (item: FsOrderItem): boolean => {
+    if (isPartner) return true;
+    const inPartnerEntity = entitiesWithActivePartner.has(item.entityId || '');
+    if (ordersPartnerFilter === 'partnerOnly') return inPartnerEntity;
+    if (ordersPartnerFilter === 'noPartner') return !inPartnerEntity;
+    return true;
+  };
+
   // Active drivers, for the Dispatch driver-picker and for resolving a
   // drop's assignedDriverId to a display name in the Delivery List/Payments
   // tabs. Delivery Staff Payments (BonManzE_DeliveryPayments_Scope.md).
@@ -2607,7 +2619,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     lines.forEach(({ order, item }) => {
       if (item.deliveryDate === dateStr) {
         const itemService = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
-        if (itemService === serviceSlot && (item.status === 'Active' || !item.status) && item._fsItemId) {
+        if (itemService === serviceSlot && matchesOrdersPartnerFilter(item) && (item.status === 'Active' || !item.status) && item._fsItemId) {
           targets.push({ orderId: order.id, itemId: item._fsItemId });
         }
       }
@@ -2641,7 +2653,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
     lines.forEach(({ order, item }) => {
       if (item.deliveryDate === dateStr && item.status !== 'Cancelled') {
         const itemService = (item.serviceSlot || '').startsWith('Dinner') ? 'Dinner' : 'Lunch';
-        if (itemService === serviceSlot && (item.status === 'Preparing' || item.status === 'Active' || !item.status) && item._fsItemId) {
+        if (itemService === serviceSlot && matchesOrdersPartnerFilter(item) && (item.status === 'Preparing' || item.status === 'Active' || !item.status) && item._fsItemId) {
           targets.push({ orderId: order.id, itemId: item._fsItemId });
         }
       }
@@ -8363,7 +8375,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 const showLunch = ordersServiceFilter !== 'Dinner' && lunchDishes.length > 0;
                 const showDinner = ordersServiceFilter !== 'Lunch' && dinnerDishes.length > 0;
                 const hasAny = showLunch || showDinner;
-                const dayLines = lines.filter(l => l.item.deliveryDate === d.date && l.item.status !== 'Cancelled');
+                const dayLines = lines.filter(l => l.item.deliveryDate === d.date && l.item.status !== 'Cancelled' && matchesOrdersPartnerFilter(l.item));
                 const lunchLines = dayLines.filter(l => !(l.item.serviceSlot || '').startsWith('Dinner'));
                 const dinnerLines = dayLines.filter(l => (l.item.serviceSlot || '').startsWith('Dinner'));
 
