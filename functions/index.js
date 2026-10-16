@@ -838,10 +838,22 @@ export const mintPaymentReference = onCall(async (request) => {
   return { ref: minted || randomFallback() };
 });
 
-// Helper: Calculate net order total for a list of items, replicating confirmCheckout pricing rules
+// Helper: Calculate net order total for a list of items, replicating confirmCheckout pricing rules.
+// Rounding mirrors confirmCheckout step by step (subtotal, each discount, net, VAT, total), so an
+// edit or cancel lands on exactly the figures a fresh checkout of the same items would produce.
+// It also returns the per-item discount shares and the order-level breakdown fields, so callers can
+// keep orders/{id}.{subtotal,discount,vat,discountBreakdown,discountReason} and every item's
+// discountShare consistent with the new total (not just `total`).
 function calculateItemsTotal(items, customer, tiersArr, groupsArr, config) {
+  const round2 = (n) => Math.round(n * 100) / 100;
   if (items.length === 0) {
-    return { subtotal: 0, total: 0 };
+    return {
+      subtotal: 0, standardDiscount: 0, birthdayDiscount: 0, bulkDiscount: 0, vat: 0, total: 0,
+      totalDiscount: 0,
+      discountBreakdown: { standard: 0, standardRate: 0, standardLabel: 'Standard', birthday: 0, birthdayRate: 0, bulk: 0, bulkRate: 0 },
+      discountReason: '',
+      itemShares: [],
+    };
   }
 
   const mappedItems = items.map(item => {
@@ -871,16 +883,23 @@ function calculateItemsTotal(items, customer, tiersArr, groupsArr, config) {
     bDay = bd;
   }
 
+  const itemShares = mappedItems.map(() => ({ standard: 0, birthday: 0, bulk: 0 }));
+
   let standardDiscount = 0, birthdayDiscount = 0;
-  mappedItems.forEach((p) => {
-    standardDiscount += p.price * (effectiveStandardRate / 100);
+  mappedItems.forEach((p, i) => {
+    const itemStandard = p.price * (effectiveStandardRate / 100);
+    standardDiscount += itemStandard;
+    itemShares[i].standard = round2(itemStandard);
     const [, fm, fd] = p.deliveryDate.split('-').map(Number);
     if (fm === bMonth && fd === bDay && birthdayTierRate > 0) {
-      birthdayDiscount += p.price * (birthdayTierRate / 100);
+      const itemBirthday = p.price * (birthdayTierRate / 100);
+      birthdayDiscount += itemBirthday;
+      itemShares[i].birthday = round2(itemBirthday);
     }
   });
 
   let bulkDiscount = 0;
+  const bulkQualifyingWeekStarts = new Set();
   if (config.bulkDiscountEnabled) {
     const weekStarts = new Set(mappedItems.map((p) => p._weekStart));
     weekStarts.forEach((ws) => {
@@ -890,18 +909,87 @@ function calculateItemsTotal(items, customer, tiersArr, groupsArr, config) {
       if (lunchDaysCovered.size >= WEEKDAY_KEYS.length) {
         const weekSubtotal = mappedItems.filter((p) => p._weekStart === ws).reduce((t, p) => t + p.price, 0);
         bulkDiscount += weekSubtotal * ((config.bulkDiscountRate || 0) / 100);
+        bulkQualifyingWeekStarts.add(ws);
       }
     });
   }
+  mappedItems.forEach((p, i) => {
+    if (bulkQualifyingWeekStarts.has(p._weekStart)) {
+      itemShares[i].bulk = round2(p.price * ((config.bulkDiscountRate || 0) / 100));
+    }
+  });
 
-  const subtotal = mappedItems.reduce((t, p) => t + p.price, 0);
-  const totalDiscount = standardDiscount + birthdayDiscount + bulkDiscount;
-  const netTotal = Math.max(0, subtotal - totalDiscount);
+  const subtotal = round2(mappedItems.reduce((t, p) => t + p.price, 0));
+  const standardDiscountRounded = round2(standardDiscount);
+  const birthdayDiscountRounded = round2(birthdayDiscount);
+  const bulkDiscountRounded = round2(bulkDiscount);
+  const totalDiscount = round2(standardDiscountRounded + birthdayDiscountRounded + bulkDiscountRounded);
+  const netTotal = round2(Math.max(0, subtotal - totalDiscount));
   const vatRate = config.vatEnabled ? (config.vatRate || 0) / 100 : 0;
-  const vat = netTotal * vatRate;
-  const total = Math.round((netTotal + vat) * 100) / 100;
+  const vat = round2(netTotal * vatRate);
+  const total = round2(netTotal + vat);
 
-  return { subtotal, standardDiscount, birthdayDiscount, bulkDiscount, vat, total };
+  const standardLabel = (groupObj && groupRate > standardTierRate)
+    ? `${groupObj.name} Group`
+    : (tierObj?.name ? `${tierObj.name} Tier` : 'Standard');
+  const discountBreakdown = {
+    standard: standardDiscountRounded,
+    standardRate: effectiveStandardRate,
+    standardLabel,
+    birthday: birthdayDiscountRounded,
+    birthdayRate: birthdayTierRate,
+    bulk: bulkDiscountRounded,
+    bulkRate: bulkDiscountRounded > 0 ? (config.bulkDiscountRate || 0) : 0,
+  };
+  const reasonParts = [];
+  if (standardDiscountRounded > 0) reasonParts.push(`${standardLabel} (${effectiveStandardRate}%)`);
+  if (birthdayDiscountRounded > 0) reasonParts.push(`Birthday (${birthdayTierRate}%)`);
+  if (bulkDiscountRounded > 0) reasonParts.push(`Full-week (${config.bulkDiscountRate}%)`);
+
+  return {
+    subtotal,
+    standardDiscount: standardDiscountRounded,
+    birthdayDiscount: birthdayDiscountRounded,
+    bulkDiscount: bulkDiscountRounded,
+    totalDiscount,
+    vat,
+    total,
+    discountBreakdown,
+    discountReason: reasonParts.join(', '),
+    itemShares,
+  };
+}
+
+// The order-level fields an edit/cancel must keep in step with the new total.
+// Before this, both callables only wrote `total`, leaving subtotal / discount /
+// vat / discountBreakdown / discountReason at their checkout values, so the
+// customer's order summary no longer added up.
+function orderPricingFields(pricing) {
+  return {
+    total: pricing.total,
+    subtotal: pricing.subtotal,
+    discount: pricing.totalDiscount,
+    vat: pricing.vat,
+    discountBreakdown: pricing.discountBreakdown,
+    discountReason: pricing.discountReason,
+  };
+}
+
+// Writes recomputed per-item discount shares back onto the items whose share
+// changed (an item's payable is derived from price - discountShare, so a stale
+// share makes the per-day / per-slot Pay amounts disagree with the order total).
+// Items already Paid keep the share they were paid at (receipts and refunds
+// reference it). `skipId` is an item the caller writes itself.
+function syncItemDiscountShares(tx, activeItems, activeRefs, itemShares, skipId) {
+  activeItems.forEach((it, i) => {
+    const ref = activeRefs[i];
+    if (ref.id === skipId) return;
+    if (it.paymentStatus === 'Paid') return;
+    const prev = it.discountShare || {};
+    const next = itemShares[i];
+    if ((prev.standard || 0) === next.standard && (prev.birthday || 0) === next.birthday && (prev.bulk || 0) === next.bulk) return;
+    tx.update(ref, { discountShare: next });
+  });
 }
 
 // cancelOrderItem — Callable. Sets an item status to Cancelled and recalculates the order.
@@ -980,23 +1068,27 @@ export const cancelOrderItem = onCall(async (request) => {
 
     // 2. Recalculate parent order total from remaining active items
     const activeItems = [];
+    const activeRefs = [];
     itemsSnap.forEach(doc => {
       const it = doc.data();
       if (doc.id === itemId) {
         // Exclude the cancelled item
       } else if (it.status !== 'Cancelled') {
         activeItems.push(it);
+        activeRefs.push(doc.ref);
       }
     });
 
     const pricing = calculateItemsTotal(activeItems, customer, tiersArr, groupsArr, config);
     newTotal = pricing.total;
 
-    // 3. Update order document with new total
+    // 3. Update order document: total AND the breakdown fields that sum to it,
+    //    and refresh the remaining items' discount shares.
     tx.update(orderRef, {
-      total: newTotal,
+      ...orderPricingFields(pricing),
       updatedAt: Timestamp.now()
     });
+    syncItemDiscountShares(tx, activeItems, activeRefs, pricing.itemShares, null);
 
     // 4. If paid, refund customer via storeCredit
     if (isPaid) {
@@ -1162,8 +1254,32 @@ export const editOrderItemSelection = onCall(async (request) => {
 
     const isPaid = item.paymentStatus === 'Paid';
 
-    // 1. Update the item
-    tx.update(itemRef, {
+    // 1. Re-price the order with the edited item swapped in. Done BEFORE the
+    //    item write so the edited item's own discountShare can go in the same update.
+    const activeItems = [];
+    const activeRefs = [];
+    let editedIdx = -1;
+    itemsSnap.forEach(doc => {
+      const it = doc.data();
+      if (doc.id === itemId) {
+        editedIdx = activeItems.length;
+        activeItems.push({
+          ...it,
+          price: newPrice,
+          notes: newNotes
+        });
+        activeRefs.push(doc.ref);
+      } else if (it.status !== 'Cancelled') {
+        activeItems.push(it);
+        activeRefs.push(doc.ref);
+      }
+    });
+
+    const pricing = calculateItemsTotal(activeItems, customer, tiersArr, groupsArr, config);
+    newTotal = pricing.total;
+
+    // 2. Update the item (price, selection AND its discount share at the new price)
+    const itemUpdate = {
       price: newPrice,
       cost: newCost,
       notes: newNotes,
@@ -1175,31 +1291,17 @@ export const editOrderItemSelection = onCall(async (request) => {
       dessertId: dessertId || 'none',
       instructions: finalInstructions,
       updatedAt: Timestamp.now()
-    });
+    };
+    if (editedIdx >= 0) itemUpdate.discountShare = pricing.itemShares[editedIdx];
+    tx.update(itemRef, itemUpdate);
 
-    // 2. Recalculate parent order total
-    const activeItems = [];
-    itemsSnap.forEach(doc => {
-      const it = doc.data();
-      if (doc.id === itemId) {
-        activeItems.push({
-          ...it,
-          price: newPrice,
-          notes: newNotes
-        });
-      } else if (it.status !== 'Cancelled') {
-        activeItems.push(it);
-      }
-    });
-
-    const pricing = calculateItemsTotal(activeItems, customer, tiersArr, groupsArr, config);
-    newTotal = pricing.total;
-
-    // 3. Update order document with new total
+    // 3. Update order document: total AND the breakdown fields that sum to it,
+    //    and refresh the other items' discount shares (e.g. a full-week bonus).
     tx.update(orderRef, {
-      total: newTotal,
+      ...orderPricingFields(pricing),
       updatedAt: Timestamp.now()
     });
+    syncItemDiscountShares(tx, activeItems, activeRefs, pricing.itemShares, itemId);
 
     // 4. If paid, adjust customer store credit
     if (isPaid) {
