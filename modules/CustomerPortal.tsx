@@ -969,6 +969,10 @@ const CustomerPortal: React.FC<CustomerPortalProps> = ({ onLogout }) => {
         invoiceNumber: it.invoiceNumber,
         invoiceIssuedAt: it.invoiceIssuedAt,
         invoiceReprintCount: it.invoiceReprintCount,
+        // Partly-paid / written-off balance, so the customer's order view and
+        // receipt show what was actually collected.
+        paymentPaidAmount: it.paymentPaidAmount,
+        paymentWrittenOff: it.paymentWrittenOff,
       }));
       const allPaid = items.length > 0 && items.every(i => i.paymentStatus === 'Paid');
       const createdAtIso = o.createdAt && typeof o.createdAt.toDate === 'function'

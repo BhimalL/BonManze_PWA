@@ -1280,6 +1280,11 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         paymentClaimedByStaffId: it.paymentClaimedByStaffId,
         paymentIssueAmount: it.paymentIssueAmount,
         paymentIssueNote: it.paymentIssueNote,
+        // Amount the cashier has confirmed collected so far, and the
+        // write-off flag. Without these the Payments tab reads 0 collected
+        // for a partly-confirmed item and never shows a written-off balance.
+        paymentPaidAmount: it.paymentPaidAmount,
+        paymentWrittenOff: it.paymentWrittenOff,
         // When the driver recorded the claim (ISO string), shown on the
         // handover screens. Absent on claims written before this field.
         paymentClaimedAt: it.paymentClaimedAt,
@@ -9910,7 +9915,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                                             <td className="px-2 py-2.5 text-[11px] font-bold text-slate-500">#{order.id.slice(0, 8)}</td>
                                             <td className="px-2 py-2.5 text-[11px] font-bold text-slate-500">
                                               {formatDay(item.deliveryDate || '')}
-                                              {item.serviceSlot ? <span className="block text-[10px] text-slate-400">{item.serviceSlot} ({deliveryWindowFor(item.serviceSlot)})</span> : null}
+                                              {item.serviceSlot ? <span className="block text-[10px] text-slate-400">{slotLabel(item.serviceSlot)} ({deliveryWindowFor(item.serviceSlot)})</span> : null}
                                             </td>
                                             <td className="px-2 py-2.5 text-[11px] font-bold text-slate-500">{fmtClockTime(item.paymentClaimedAt)}</td>
                                             <td className="px-2 py-2.5 text-[11px] font-bold text-slate-500">
@@ -10417,6 +10422,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
         const parsedAmount = parseFloat(resolveAmount);
         const safeAmount = isNaN(parsedAmount) ? 0 : Math.max(0, Math.min(parsedAmount, outstandingTotal));
         const writtenOff = Math.max(0, outstandingTotal - safeAmount);
+        const alreadyCollectedTotal = order
+          ? resolveDrop.items.reduce((sum, i) => sum + itemPaidAmount(order, i), 0)
+          : 0;
         const activeMethods = paymentMethods.filter(m => m.isActive && m.applicableTo.includes('Meal Plan'));
         const currentEntity = entities.find(e => e.id === resolveDrop.entityId) || (entities.length === 1 ? entities[0] : undefined);
         const methodsToRender = (currentEntity && currentEntity.acceptedPaymentMethodIds && currentEntity.acceptedPaymentMethodIds.length > 0)
@@ -10439,6 +10447,9 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">{resolveDrop.customerName}</p>
                   <p className="text-4xl font-black text-slate-900 tracking-tight">{formatCurrency(outstandingTotal)}</p>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Still outstanding on this drop</p>
+                  {alreadyCollectedTotal > 0 && (
+                    <p className="text-[10px] font-bold text-slate-400 mt-1">{formatCurrency(alreadyCollectedTotal)} already collected and confirmed</p>
+                  )}
                   {resolveDrop.paymentIssueNote && (
                     <p className="text-[11px] text-danger font-bold mt-2 bg-danger/5 px-2.5 py-1 rounded-lg border border-danger/20 inline-block">
                       ⚠ {resolveDrop.paymentIssueAmount != null ? `Driver claims ${formatCurrency(resolveDrop.paymentIssueAmount)} collected — ` : 'Payment issue — '}
@@ -10448,7 +10459,7 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Amount actually collected now (0 if none)</label>
+                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Collect a bit more right now? (leave 0 to write off the whole balance)</label>
                   <input
                     type="number"
                     step="0.01"
@@ -10457,8 +10468,8 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                     placeholder="0.00"
                     className="w-full text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-primary/20 bg-slate-50 focus:bg-white transition-all"
                   />
-                  <p className="text-[10px] font-bold text-slate-400 pt-0.5">
-                    {formatCurrency(writtenOff)} of {formatCurrency(outstandingTotal)} will be written off
+                  <p className="text-[11px] font-black text-slate-600 pt-0.5">
+                    Will be written off: {formatCurrency(writtenOff)} of {formatCurrency(outstandingTotal)}
                   </p>
                 </div>
 
