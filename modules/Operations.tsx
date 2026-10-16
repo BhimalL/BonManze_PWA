@@ -9284,11 +9284,22 @@ const Operations: React.FC<OperationsProps> = ({ onExit }) => {
                               </div>
 
                               <div className="divide-y divide-slate-100">
-                                {[...group.drops].sort(compareDropsChronologically).map(drop => (
+                                {[...group.drops].sort(compareDropsChronologically).map((drop, dropIdx, sortedDrops) => (
                                   <div key={drop.key} className="py-3 first:pt-0 last:pb-0">
-                                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1.5">
-                                      {formatDay(drop.date)}{drop.slot ? ` · ${slotLabel(drop.slot)}` : ''}
-                                    </p>
+                                    {/* One date heading per day, like the customer's My Order:
+                                        a 2nd/3rd meal of the same service ('Lunch-2') is its
+                                        own drop underneath, so it must not repeat the date.
+                                        The service stays visible as a small tag per meal. */}
+                                    {(dropIdx === 0 || sortedDrops[dropIdx - 1].date !== drop.date) && (
+                                      <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1.5">
+                                        {formatDay(drop.date)}
+                                      </p>
+                                    )}
+                                    {drop.slot && (
+                                      <span className="inline-block mb-1.5 px-2 py-0.5 rounded bg-slate-100 text-slate-500 text-[9px] font-black uppercase tracking-widest">
+                                        {slotLabel(drop.slot)}
+                                      </span>
+                                    )}
                                     <div className="space-y-1.5">
                                       {drop.items.map((item, idx) => {
                                         const { detail, person, instructions } = splitNotesTag(item.notes);
